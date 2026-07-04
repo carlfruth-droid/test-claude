@@ -1,0 +1,11 @@
+# Weiterleitung von HTTP auf HTTPS
+# (funktioniert, sobald das Let's-Encrypt-Zertifikat in konsoleH aktiviert ist)
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Sinnvolle Sicherheits-Header
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

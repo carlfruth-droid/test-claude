@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Private Website von Carl">
+  <title>Carl – Private Website</title>
+  <style>
+    :root {
+      --bg: #faf9f7;
+      --text: #2a2a28;
+      --muted: #6b6b66;
+      --accent: #b4532a;
+      --card: #ffffff;
+      --border: #e8e6e1;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1b19;
+        --text: #ece9e4;
+        --muted: #a3a09a;
+        --accent: #e08050;
+        --card: #262421;
+        --border: #3a3833;
+      }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Georgia, 'Times New Roman', serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 5rem 1.5rem 3rem;
+      text-align: center;
+    }
+    header h1 {
+      font-size: clamp(2rem, 6vw, 3.2rem);
+      font-weight: normal;
+      letter-spacing: 0.02em;
+    }
+    header p {
+      margin-top: 0.8rem;
+      color: var(--muted);
+      font-size: 1.1rem;
+      font-style: italic;
+    }
+    main {
+      flex: 1;
+      width: 100%;
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 0 1.5rem 4rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 2rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 {
+      font-size: 1.25rem;
+      font-weight: normal;
+      color: var(--accent);
+      margin-bottom: 0.8rem;
+    }
+    a { color: var(--accent); }
+    footer {
+      text-align: center;
+      padding: 2rem 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Hallo, ich bin Carl.</h1>
+    <p>Willkommen auf meiner privaten Website.</p>
+  </header>
+  <main>
+    <div class="card">
+      <h2>Über diese Seite</h2>
+      <p>
+        Diese Seite ist gerade frisch eingezogen – gehostet bei Hetzner in Deutschland.
+        Hier entsteht nach und nach mehr. Schau gern wieder vorbei.
+      </p>
+    </div>
+    <div class="card">
+      <h2>Kontakt</h2>
+      <p>
+        Du erreichst mich per E-Mail unter
+        <a href="mailto:post@example.de">post@example.de</a>.
+        <!-- TODO: Nach der Domain-Einrichtung durch die echte Adresse ersetzen -->
+      </p>
+    </div>
+  </main>
+  <footer>
+    <p>&copy; 2026 Carl &middot; Privat &amp; nicht-kommerziell</p>
+  </footer>
+</body>
+</html>
