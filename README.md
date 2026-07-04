@@ -1,6 +1,6 @@
-# Meine Website – Hetzner Webhosting S
+# fruthzeug.de – Hetzner Webhosting S
 
-Startklare private Website inkl. Deploy-Script für Hetzner Webhosting.
+Private Website inkl. automatischem Deployment zu Hetzner.
 
 ## Was hier drin ist
 
@@ -8,8 +8,19 @@ Startklare private Website inkl. Deploy-Script für Hetzner Webhosting.
 |---|---|
 | `website/index.html` | Die Startseite (eine Datei, kein Build nötig) |
 | `website/.htaccess` | Leitet automatisch auf HTTPS um |
-| `deploy.sh` | Lädt `website/` per SFTP zu Hetzner hoch |
-| `.env.example` | Vorlage für die Zugangsdaten (kopieren nach `.env`) |
+| `.github/workflows/deploy.yml` | Lädt `website/` bei jedem Push automatisch per FTPS zu Hetzner hoch |
+| `deploy.sh` | Alternativer manueller Upload per SFTP (für Mac/PC) |
+| `.env.example` | Vorlage für die Zugangsdaten von `deploy.sh` |
+
+## Automatisches Deployment (einmalig einrichten, geht auch am iPad)
+
+1. In konsoleH das FTP-Passwort **einmal neu setzen** (*Einstellungen → Logindaten → Bearbeiten*).
+2. Auf GitHub im Repo: *Settings → Secrets and variables → Actions → New repository secret* — zwei Secrets anlegen:
+   - `FTP_USERNAME` → der FTP-Loginname aus konsoleH
+   - `FTP_PASSWORD` → das neue FTP-Passwort
+3. Fertig. Ab jetzt lädt GitHub bei jeder Änderung in `website/` die Seite
+   automatisch hoch. Manuell auslösen geht über *Actions → „Website zu Hetzner
+   deployen" → Run workflow*.
 
 ## Einmalig: Hosting bestellen (musst du selbst machen, ~5 Min.)
 

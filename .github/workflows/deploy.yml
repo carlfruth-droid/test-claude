@@ -1,0 +1,29 @@
+name: Website zu Hetzner deployen
+
+on:
+  push:
+    branches:
+      - main
+      - claude/hetzner-webhosting-setup-eah3q9
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Upload per FTPS zu Hetzner
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: www726.your-server.de
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          local-dir: ./website/
+          server-dir: public_html/
