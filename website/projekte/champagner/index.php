@@ -8,6 +8,15 @@ date_default_timezone_set('Europe/Berlin');
 const PASSWORT = 'dontwastewater';
 
 const DATEN_DATEI = __DIR__ . '/daten/bewertungen.json';
+const BILDER_DIR  = __DIR__ . '/bilder';
+const MAX_BILD_GROESSE = 25 * 1024 * 1024; // 25 MB pro Foto
+
+$BILD_TYPEN = [
+    'image/jpeg' => 'jpg',
+    'image/png'  => 'png',
+    'image/gif'  => 'gif',
+    'image/webp' => 'webp',
+];
 
 $KATEGORIEN = [
     'duft'          => ['Duft',          'Wie angenehm und interessant riecht der Champagner?'],
@@ -102,20 +111,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($aktion === 'champagner_anlegen') {
         $name = trim((string)($_POST['name'] ?? ''));
         $name = mb_substr($name, 0, 60);
+        $preis = trim((string)($_POST['preis'] ?? ''));
+        $preis = mb_substr($preis, 0, 20);
         if ($name === '') {
             zurueck('?fehler=' . rawurlencode('Bitte einen Namen für den Champagner angeben.'));
         }
         $neueId = bin2hex(random_bytes(4));
-        datenAendern(function (array $d) use ($name, $neueId): array {
+        datenAendern(function (array $d) use ($name, $preis, $neueId): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name)) {
                     zurueck('?fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
                 }
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
+    }
+
+    if ($aktion === 'foto_upload') {
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        if (champagnerHolen(datenLaden(), $cid) === null) {
+            zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
+        }
+        $dateien = $_FILES['fotos'] ?? null;
+        if ($dateien === null) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Keine Datei ausgewählt.'));
+        }
+        if (!is_dir(BILDER_DIR)) {
+            mkdir(BILDER_DIR, 0755, true);
+        }
+        $hochgeladen = 0;
+        $abgelehnt   = 0;
+        $finfo       = new finfo(FILEINFO_MIME_TYPE);
+        foreach ((array)$dateien['name'] as $i => $originalName) {
+            if (($dateien['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+                $abgelehnt++;
+                continue;
+            }
+            $tmp = (string)$dateien['tmp_name'][$i];
+            if (!is_uploaded_file($tmp) || (int)$dateien['size'][$i] > MAX_BILD_GROESSE) {
+                $abgelehnt++;
+                continue;
+            }
+            $typ = $finfo->file($tmp);
+            if (!isset($BILD_TYPEN[$typ])) {
+                $abgelehnt++;
+                continue;
+            }
+            $ziel = sprintf('%s/%s-%s-%s.%s', BILDER_DIR, $cid, date('Ymd-His'), bin2hex(random_bytes(3)), $BILD_TYPEN[$typ]);
+            if (move_uploaded_file($tmp, $ziel)) {
+                @chmod($ziel, 0644);
+                $hochgeladen++;
+            } else {
+                $abgelehnt++;
+            }
+        }
+        $text = $hochgeladen . ' Foto(s) hochgeladen.';
+        if ($abgelehnt > 0) {
+            $text .= ' ' . $abgelehnt . ' Datei(en) übersprungen (kein Bild, zu groß oder Fehler).';
+        }
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($text));
+    }
+
+    if ($aktion === 'foto_loeschen') {
+        $name = basename((string)($_POST['datei'] ?? ''));
+        $pfad = BILDER_DIR . '/' . $name;
+        if (preg_match('/^([a-f0-9]{8})-.*\.(jpe?g|png|gif|webp)$/i', $name, $m) && is_file($pfad)) {
+            unlink($pfad);
+            zurueck('?ergebnis=' . rawurlencode($m[1]) . '&ok=' . rawurlencode('Foto gelöscht.'));
+        }
+        zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
     }
 
     if ($aktion === 'champagner_loeschen') {
@@ -125,7 +191,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $d['bewertungen'] = array_values(array_filter($d['bewertungen'], fn($b) => $b['champagner_id'] !== $id));
             return $d;
         });
-        zurueck('?ok=' . rawurlencode('Champagner und zugehörige Bewertungen gelöscht.'));
+        if (preg_match('/^[a-f0-9]{8}$/', $id)) {
+            foreach (glob(BILDER_DIR . '/' . $id . '-*') ?: [] as $foto) {
+                @unlink($foto);
+            }
+        }
+        zurueck('?ok=' . rawurlencode('Champagner samt Bewertungen und Fotos gelöscht.'));
     }
 
     if ($aktion === 'bewerten') {
@@ -143,8 +214,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $werte[$schluessel] = $v;
         }
+        $notiz = trim((string)($_POST['notiz'] ?? ''));
+        $notiz = mb_substr($notiz, 0, 500);
         $_SESSION['person'] = $person;
-        datenAendern(function (array $d) use ($cid, $person, $werte): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -164,6 +237,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'champagner_id' => $cid,
                 'person'        => $person,
                 'werte'         => $werte,
+                'notiz'         => $notiz,
                 'zeit'          => time(),
             ];
             return $d;
@@ -225,6 +299,23 @@ function sterneAnzeige(?float $wert): string
     $voll = (int)round($wert);
     return '<span class="sterne-anzeige">' . str_repeat('★', $voll) . str_repeat('☆', 5 - $voll)
         . ' <span class="wert">' . number_format($wert, 1, ',', '') . '</span></span>';
+}
+
+/** Fotos zu einem Champagner (neueste zuerst). */
+function fotosFuer(string $cid): array
+{
+    if (!preg_match('/^[a-f0-9]{8}$/', $cid)) {
+        return [];
+    }
+    $treffer = glob(BILDER_DIR . '/' . $cid . '-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
+    usort($treffer, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
+    return array_map('basename', $treffer);
+}
+
+function preisZeile(array $c): string
+{
+    $preis = trim((string)($c['preis'] ?? ''));
+    return $preis === '' ? '' : ' &middot; ' . e($preis);
 }
 
 function champagnerHolen(array $daten, string $id): ?array
@@ -360,10 +451,34 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     }
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
 
-    input[type="password"], input[type="text"] {
+    input[type="password"], input[type="text"], input[type="file"], textarea {
       width: 100%; padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px;
       background: var(--bg); color: var(--text); font-size: 1rem; margin-bottom: 0.8rem;
+      font-family: inherit;
     }
+    textarea { resize: vertical; }
+    .thumb {
+      width: 72px; height: 72px; object-fit: cover; border-radius: 8px;
+      border: 1px solid var(--border); display: block;
+    }
+    .foto-galerie {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 0.6rem;
+    }
+    .foto {
+      position: relative; border: 1px solid var(--border); border-radius: 8px;
+      overflow: hidden; aspect-ratio: 1; background: var(--bg);
+    }
+    .foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .foto form { position: absolute; top: 6px; right: 6px; }
+    .foto button {
+      border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer;
+      background: rgba(0,0,0,0.55); color: #fff; font-size: 0.85rem;
+    }
+    .notiz { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+    .notiz:last-of-type { border-bottom: none; }
+    .notiz b { font-weight: normal; color: var(--accent); }
 
     /* Sterne-Eingabe (5 Radios, rückwärts angeordnet) */
     .kategorie { padding: 0.9rem 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
@@ -419,10 +534,10 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       <p class="untertitel">Jede Person bewertet für sich – 8 Kategorien, 1 bis 5 Sterne.</p>
     <?php elseif ($ansicht === 'bewerten'): ?>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
-      <p class="untertitel">Deine persönliche Bewertung</p>
+      <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
     <?php else: ?>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
-      <p class="untertitel">Ergebnis der Verkostung</p>
+      <p class="untertitel">Ergebnis der Verkostung<?= preisZeile($aktiverChampagner) ?></p>
     <?php endif; ?>
 
     <?php if ($meldung !== ''): ?>
@@ -451,6 +566,9 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
           <h2>Wer bewertet?</h2>
           <input type="text" name="person" placeholder="Dein Name" value="<?= e($personVorschlag) ?>" maxlength="40" required>
+
+          <h2>Persönliche Notiz <span style="color:var(--muted); font-style:italic; font-size:0.9rem;">(optional)</span></h2>
+          <textarea name="notiz" placeholder="z. B. erinnert an Brioche und grünen Apfel …" maxlength="500" rows="3"></textarea>
 
           <?php foreach ($KATEGORIEN as $schluessel => [$titel, $frage]): ?>
             <div class="kategorie">
@@ -489,6 +607,43 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         </div>
       </div>
 
+      <?php $fotos = fotosFuer($aktiverChampagner['id']); ?>
+      <div class="card">
+        <h2>Fotos</h2>
+        <?php if ($fotos === []): ?>
+          <p style="color:var(--muted); font-style:italic;">Noch keine Fotos zu diesem Champagner.</p>
+        <?php else: ?>
+          <div class="foto-galerie">
+            <?php foreach ($fotos as $foto): ?>
+              <div class="foto">
+                <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                  <img src="bilder/<?= e(rawurlencode($foto)) ?>" alt="" loading="lazy">
+                </a>
+                <?php if ($eingeloggt): ?>
+                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="foto_loeschen">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Foto löschen">&#10005;</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+        <?php if ($eingeloggt): ?>
+          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="foto_upload">
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+            <input type="file" name="fotos[]" accept="image/*" multiple required>
+            <button class="knopf" type="submit">Fotos hochladen</button>
+          </form>
+        <?php else: ?>
+          <p class="anzahl" style="margin-top:0.6rem;">Zum Hochladen von Fotos bitte auf der Übersichtsseite anmelden.</p>
+        <?php endif; ?>
+      </div>
+
       <?php if ($bewertungen !== []): ?>
         <div class="card">
           <h2>Durchschnitt je Kategorie</h2>
@@ -499,6 +654,16 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             </div>
           <?php endforeach; ?>
         </div>
+
+        <?php $mitNotiz = array_values(array_filter($bewertungen, fn($b) => trim((string)($b['notiz'] ?? '')) !== '')); ?>
+        <?php if ($mitNotiz !== []): ?>
+          <div class="card">
+            <h2>Notizen</h2>
+            <?php foreach ($mitNotiz as $b): ?>
+              <p class="notiz"><b><?= e($b['person']) ?>:</b> <?= nl2br(e((string)$b['notiz'])) ?></p>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
 
         <div class="card">
           <h2>Einzelbewertungen</h2>
@@ -546,10 +711,16 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           $bewertungen = bewertungenFuer($daten, $c['id']);
           $gesamt      = gesamtSchnitt($bewertungen);
         ?>
+        <?php $fotos = fotosFuer($c['id']); ?>
         <div class="card">
           <div class="champagner-zeile">
+            <?php if ($fotos !== []): ?>
+              <a href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
+                <img class="thumb" src="bilder/<?= e(rawurlencode($fotos[0])) ?>" alt="" loading="lazy">
+              </a>
+            <?php endif; ?>
             <div class="info">
-              <div class="name"><?= e($c['name']) ?></div>
+              <div class="name"><?= e($c['name']) ?><?= preisZeile($c) ?></div>
               <?= sterneAnzeige($gesamt) ?>
               <span class="anzahl">&middot; <?= count($bewertungen) ?> Bewertung(en)</span>
             </div>
@@ -575,7 +746,8 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="champagner_anlegen">
-            <input type="text" name="name" placeholder="z. B. Moët &amp; Chandon Brut Impérial" maxlength="60" required>
+            <input type="text" name="name" placeholder="Name, z. B. Moët &amp; Chandon Brut Impérial" maxlength="60" required>
+            <input type="text" name="preis" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
             <button class="knopf" type="submit">Anlegen</button>
           </form>
           <form method="post" class="abmelden">
