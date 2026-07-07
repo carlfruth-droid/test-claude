@@ -1173,7 +1173,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             </div>
             <div class="knopfreihe">
               <a class="knopf" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>">Bewerten</a>
-              <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">Ergebnis</a>
+              <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">Details &amp; Fotos</a>
             </div>
           </div>
           <?php if ($eingeloggt): ?>
