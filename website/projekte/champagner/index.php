@@ -249,6 +249,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
     }
 
+    if ($aktion === 'div_foto_upload') {
+        [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'div');
+        zurueck('?fotos=1&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+    }
+
+    if ($aktion === 'div_foto_loeschen') {
+        $name = basename((string)($_POST['datei'] ?? ''));
+        $pfad = BILDER_DIR . '/' . $name;
+        if (preg_match('/^div-.*\.(jpe?g|png|gif|webp)$/i', $name) && is_file($pfad)) {
+            unlink($pfad);
+            zurueck('?fotos=1&ok=' . rawurlencode('Foto gelöscht.'));
+        }
+        zurueck('?fotos=1&fehler=' . rawurlencode('Foto nicht gefunden.'));
+    }
+
     if ($aktion === 'champagner_weingut') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $wid = (string)($_POST['weingut_id'] ?? '');
@@ -414,6 +429,14 @@ function weingutFotos(string $id): array
     return array_map('basename', $treffer);
 }
 
+/** Diverse Fotos des Albums (neueste zuerst). */
+function divFotos(): array
+{
+    $treffer = glob(BILDER_DIR . '/div-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
+    usort($treffer, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
+    return array_map('basename', $treffer);
+}
+
 function weingutHolen(array $daten, string $id): ?array
 {
     foreach ($daten['weingueter'] as $w) {
@@ -523,6 +546,8 @@ if (isset($_GET['bewerten'])) {
     }
 } elseif (isset($_GET['weingueter'])) {
     $ansicht = 'weingueter';
+} elseif (isset($_GET['fotos'])) {
+    $ansicht = 'fotos';
 }
 
 $personVorschlag = (string)($_SESSION['person'] ?? '');
@@ -717,6 +742,9 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
+    <?php elseif ($ansicht === 'fotos'): ?>
+      <h1>Fotoalbum 📸</h1>
+      <p class="untertitel">Diverse Fotos rund um Champagne 26.</p>
     <?php elseif ($ansicht === 'weingut'): ?>
       <h1><?= e($aktivesWeingut['name']) ?></h1>
       <p class="untertitel">Weingut</p>
@@ -910,11 +938,58 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         <a class="knopf zweit" href="./">Zur Übersicht</a>
       </div>
 
+    <?php elseif ($ansicht === 'fotos'): ?>
+      <!-- ==================== FOTOALBUM ==================== -->
+      <div class="knopfreihe" style="margin-bottom:1.2rem;">
+        <a class="knopf zweit" href="./">Champagner</a>
+        <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
+        <a class="knopf" href="?fotos=1">Fotos</a>
+      </div>
+
+      <?php $fotos = divFotos(); ?>
+      <?php if ($fotos === []): ?>
+        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Fotos im Album – unten das erste hochladen!</p></div>
+      <?php else: ?>
+        <div class="foto-galerie" style="margin-bottom:1rem;">
+          <?php foreach ($fotos as $foto): ?>
+            <div class="foto">
+              <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                <img src="bilder/<?= e(rawurlencode($foto)) ?>" alt="" loading="lazy">
+              </a>
+              <?php if ($eingeloggt): ?>
+                <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="div_foto_loeschen">
+                  <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                  <button type="submit" title="Foto löschen">&#10005;</button>
+                </form>
+              <?php endif; ?>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+
+      <div class="card">
+        <?php if ($eingeloggt): ?>
+          <h2>Fotos hochladen</h2>
+          <form method="post" enctype="multipart/form-data">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="div_foto_upload">
+            <input type="file" name="fotos[]" accept="image/*" multiple required>
+            <button class="knopf" type="submit">Hochladen</button>
+          </form>
+          <p class="abmelden">Mehrere Fotos auf einmal möglich (max. 25&nbsp;MB pro Foto).</p>
+        <?php else: ?>
+          <?= loginFormular('?fotos=1') ?>
+        <?php endif; ?>
+      </div>
+
     <?php elseif ($ansicht === 'weingueter'): ?>
       <!-- ==================== WEINGUT-LISTE ==================== -->
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
         <a class="knopf zweit" href="./">Champagner</a>
         <a class="knopf" href="?weingueter=1">Weingüter</a>
+        <a class="knopf zweit" href="?fotos=1">Fotos</a>
       </div>
 
       <?php if ($daten['weingueter'] === []): ?>
@@ -1068,6 +1143,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
         <a class="knopf" href="./">Champagner</a>
         <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
+        <a class="knopf zweit" href="?fotos=1">Fotos</a>
       </div>
       <?php if ($daten['champagner'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Champagner angelegt – unten den ersten eintragen!</p></div>
