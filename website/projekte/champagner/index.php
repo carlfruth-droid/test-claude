@@ -156,6 +156,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
     }
 
+    if ($aktion === 'champagner_bearbeiten') {
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $name = trim((string)($_POST['name'] ?? ''));
+        $name = mb_substr($name, 0, 60);
+        $preis = trim((string)($_POST['preis'] ?? ''));
+        $preis = mb_substr($preis, 0, 20);
+        if ($name === '') {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Der Name darf nicht leer sein.'));
+        }
+        datenAendern(function (array $d) use ($cid, $name, $preis): array {
+            foreach ($d['champagner'] as $c) {
+                if ($c['id'] !== $cid && mb_strtolower($c['name']) === mb_strtolower($name)) {
+                    zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Ein anderer Champagner heißt schon so.'));
+                }
+            }
+            foreach ($d['champagner'] as &$c) {
+                if ($c['id'] === $cid) {
+                    $c['name']  = $name;
+                    $c['preis'] = $preis;
+                }
+            }
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Name und Preis gespeichert.'));
+    }
+
     if ($aktion === 'foto_upload') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         if (champagnerHolen(datenLaden(), $cid) === null) {
@@ -200,15 +226,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = (string)($_POST['id'] ?? '');
         $notiz = trim((string)($_POST['notiz'] ?? ''));
         $notiz = mb_substr($notiz, 0, 1000);
-        datenAendern(function (array $d) use ($id, $notiz): array {
+        $name = trim((string)($_POST['name'] ?? ''));
+        $name = mb_substr($name, 0, 60);
+        if ($name === '') {
+            zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Der Name darf nicht leer sein.'));
+        }
+        datenAendern(function (array $d) use ($id, $name, $notiz): array {
+            foreach ($d['weingueter'] as $w) {
+                if ($w['id'] !== $id && mb_strtolower($w['name']) === mb_strtolower($name)) {
+                    zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Ein anderes Weingut heißt schon so.'));
+                }
+            }
             foreach ($d['weingueter'] as &$w) {
                 if ($w['id'] === $id) {
+                    $w['name']  = $name;
                     $w['notiz'] = $notiz;
                 }
             }
             return $d;
         });
-        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Notiz gespeichert.'));
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Gespeichert.'));
     }
 
     if ($aktion === 'weingut_loeschen') {
@@ -322,8 +359,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $notiz = trim((string)($_POST['notiz'] ?? ''));
         $notiz = mb_substr($notiz, 0, 500);
+        $flaschen = max(0, min(99, (int)($_POST['flaschen'] ?? 0)));
         $_SESSION['person'] = $person;
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -344,6 +382,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'person'        => $person,
                 'werte'         => $werte,
                 'notiz'         => $notiz,
+                'flaschen'      => $flaschen,
                 'zeit'          => time(),
             ];
             return $d;
@@ -658,7 +697,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     }
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
 
-    input[type="password"], input[type="text"], input[type="file"], textarea, select {
+    input[type="password"], input[type="text"], input[type="number"], input[type="file"], textarea, select {
       width: 100%; padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px;
       background: var(--bg); color: var(--text); font-size: 1rem; margin-bottom: 0.8rem;
       font-family: inherit;
@@ -770,17 +809,37 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <?= loginFormular('?bewerten=' . rawurlencode($aktiverChampagner['id'])) ?>
         </div>
       <?php else: ?>
+        <?php
+          // Bestehende Bewertung der Person vorbelegen (Name aus ?person=… oder aus der Sitzung)
+          $formPerson = trim((string)($_GET['person'] ?? $personVorschlag));
+          $vorhandene = null;
+          if ($formPerson !== '') {
+              foreach (bewertungenFuer($daten, $aktiverChampagner['id']) as $b) {
+                  if (mb_strtolower($b['person']) === mb_strtolower($formPerson)) {
+                      $vorhandene = $b;
+                      break;
+                  }
+              }
+          }
+        ?>
+        <?php if ($vorhandene !== null): ?>
+          <div class="hinweis ok">Du änderst die bestehende Bewertung von <b><?= e($vorhandene['person']) ?></b> – Sterne, Notiz und Flaschen sind vorausgefüllt.</div>
+        <?php endif; ?>
         <form method="post" class="card">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="bewerten">
           <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
           <h2>Wer bewertet?</h2>
-          <input type="text" name="person" placeholder="Dein Name" value="<?= e($personVorschlag) ?>" maxlength="40" required>
+          <input type="text" name="person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40" required>
 
           <h2>Persönliche Notiz <span style="color:var(--muted); font-style:italic; font-size:0.9rem;">(optional)</span></h2>
-          <textarea name="notiz" placeholder="z. B. erinnert an Brioche und grünen Apfel …" maxlength="500" rows="3"></textarea>
+          <textarea name="notiz" placeholder="z. B. erinnert an Brioche und grünen Apfel …" maxlength="500" rows="3"><?= e((string)($vorhandene['notiz'] ?? '')) ?></textarea>
+
+          <h2>Flaschen <span style="color:var(--muted); font-style:italic; font-size:0.9rem;">(wie viele nimmst du mit / hast du gekauft?)</span></h2>
+          <input type="number" name="flaschen" min="0" max="99" inputmode="numeric" value="<?= (int)($vorhandene['flaschen'] ?? 0) ?>">
 
           <?php foreach ($KATEGORIEN as $schluessel => [$titel, $frage]): ?>
+            <?php $vorbelegt = (int)($vorhandene['werte'][$schluessel] ?? 0); ?>
             <div class="kategorie">
               <div class="frage">
                 <b><?= e($titel) ?></b>
@@ -788,7 +847,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
               </div>
               <div class="sterne">
                 <?php for ($i = 5; $i >= 1; $i--): ?>
-                  <input type="radio" id="<?= e($schluessel) ?><?= $i ?>" name="<?= e($schluessel) ?>" value="<?= $i ?>" required>
+                  <input type="radio" id="<?= e($schluessel) ?><?= $i ?>" name="<?= e($schluessel) ?>" value="<?= $i ?>"<?= $vorbelegt === $i ? ' checked' : '' ?> required>
                   <label for="<?= e($schluessel) ?><?= $i ?>" title="<?= $i ?> Sterne">★</label>
                 <?php endfor; ?>
               </div>
@@ -796,10 +855,10 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <?php endforeach; ?>
 
           <div class="knopfreihe" style="margin-top:1.2rem;">
-            <button class="knopf" type="submit">Bewertung speichern</button>
-            <a class="knopf zweit" href="./">Abbrechen</a>
+            <button class="knopf" type="submit"><?= $vorhandene !== null ? 'Änderungen speichern' : 'Bewertung speichern' ?></button>
+            <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Abbrechen</a>
           </div>
-          <p class="abmelden">Tipp: Wenn du denselben Champagner nochmal bewertest, ersetzt das deine alte Bewertung.</p>
+          <p class="abmelden">Pro Person zählt immer nur die neueste Bewertung – du kannst also jederzeit ändern.</p>
         </form>
       <?php endif; ?>
 
@@ -810,12 +869,27 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         $gesamt      = gesamtSchnitt($bewertungen);
         $schnitte    = kategorieSchnitte($bewertungen, $KATEGORIEN);
       ?>
+      <?php $flaschenGesamt = array_sum(array_map(fn($b) => (int)($b['flaschen'] ?? 0), $bewertungen)); ?>
       <div class="card">
         <div class="gesamt">
           <?= sterneAnzeige($gesamt) ?>
-          <span class="anzahl"><?= count($bewertungen) ?> Bewertung(en)</span>
+          <span class="anzahl"><?= count($bewertungen) ?> Bewertung(en)<?= $flaschenGesamt > 0 ? ' &middot; ' . $flaschenGesamt . ' Flasche(n)' : '' ?></span>
         </div>
       </div>
+
+      <?php if ($eingeloggt): ?>
+        <div class="card">
+          <h2>Name &amp; Preis bearbeiten</h2>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="champagner_bearbeiten">
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+            <input type="text" name="name" value="<?= e($aktiverChampagner['name']) ?>" maxlength="60" required>
+            <input type="text" name="preis" value="<?= e((string)($aktiverChampagner['preis'] ?? '')) ?>" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
+            <button class="knopf zweit" type="submit">Speichern</button>
+          </form>
+        </div>
+      <?php endif; ?>
 
       <?php $fotos = fotosFuer($aktiverChampagner['id']); ?>
       <div class="card">
@@ -888,6 +962,8 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
                     <th><?= e(mb_substr($titel, 0, 4)) ?>.</th>
                   <?php endforeach; ?>
                   <th>Ø</th>
+                  <th>Fl.</th>
+                  <?php if ($eingeloggt): ?><th></th><?php endif; ?>
                 </tr>
               </thead>
               <tbody>
@@ -898,12 +974,16 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
                       <td><?= $w ?></td>
                     <?php endforeach; ?>
                     <td><b><?= number_format($summe / count($KATEGORIEN), 1, ',', '') ?></b></td>
+                    <td><?= (int)($b['flaschen'] ?? 0) ?></td>
+                    <?php if ($eingeloggt): ?>
+                      <td><a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>">ändern</a></td>
+                    <?php endif; ?>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
             </table>
           </div>
-          <p class="anzahl" style="margin-top:0.5rem;">Spalten: <?php $t = []; foreach ($KATEGORIEN as [$titel, $frage]) { $t[] = mb_substr($titel, 0, 4) . '. = ' . $titel; } echo e(implode(', ', $t)); ?></p>
+          <p class="anzahl" style="margin-top:0.5rem;">Spalten: <?php $t = []; foreach ($KATEGORIEN as [$titel, $frage]) { $t[] = mb_substr($titel, 0, 4) . '. = ' . $titel; } echo e(implode(', ', $t)); ?>, Fl. = Flaschen</p>
         </div>
       <?php endif; ?>
 
@@ -1062,8 +1142,9 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="weingut_notiz">
             <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+            <input type="text" name="name" value="<?= e($aktivesWeingut['name']) ?>" maxlength="60" required>
             <textarea name="notiz" maxlength="1000" rows="4" placeholder="Notiz zum Weingut …"><?= e($wNotiz) ?></textarea>
-            <button class="knopf zweit" type="submit">Notiz speichern</button>
+            <button class="knopf zweit" type="submit">Speichern</button>
           </form>
         <?php endif; ?>
       </div>
