@@ -34,16 +34,93 @@
       display: flex;
       flex-direction: column;
     }
-    header {
-      padding: 5rem 1.5rem 3rem;
+    a { color: var(--accent); }
+
+    /* ---------- Kopfleiste mit Navigation ---------- */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.85rem 1.2rem;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      margin-right: auto;
+      font-size: 1.15rem;
+      color: var(--text);
+      text-decoration: none;
+      letter-spacing: 0.02em;
+    }
+    .brand strong { color: var(--accent); font-weight: normal; }
+    #nav-toggle { display: none; }
+    .burger { display: none; }
+    nav.site-nav { display: flex; gap: 1.4rem; }
+    nav.site-nav a {
+      color: var(--text);
+      text-decoration: none;
+      padding: 0.15rem 0;
+      border-bottom: 2px solid transparent;
+    }
+    nav.site-nav a:hover,
+    nav.site-nav a[aria-current="page"] {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    @media (max-width: 700px) {
+      .burger {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 5px;
+        padding: 8px;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .burger span {
+        display: block;
+        width: 26px;
+        height: 3px;
+        background: var(--text);
+        border-radius: 2px;
+        transition: transform 0.25s, opacity 0.25s;
+      }
+      nav.site-nav {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        flex-direction: column;
+        gap: 0;
+        background: var(--card);
+        border-bottom: 1px solid var(--border);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
+      }
+      nav.site-nav a {
+        padding: 0.95rem 1.4rem;
+        border-bottom: 1px solid var(--border);
+      }
+      #nav-toggle:checked ~ nav.site-nav { display: flex; }
+      #nav-toggle:checked ~ .burger span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
+      #nav-toggle:checked ~ .burger span:nth-child(2) { opacity: 0; }
+      #nav-toggle:checked ~ .burger span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
+    }
+
+    /* ---------- Inhalt ---------- */
+    .hero {
+      padding: 4.5rem 1.5rem 2.5rem;
       text-align: center;
     }
-    header h1 {
+    .hero h1 {
       font-size: clamp(2rem, 6vw, 3.2rem);
       font-weight: normal;
       letter-spacing: 0.02em;
     }
-    header p {
+    .hero p {
       margin-top: 0.8rem;
       color: var(--muted);
       font-size: 1.1rem;
@@ -52,7 +129,7 @@
     main {
       flex: 1;
       width: 100%;
-      max-width: 42rem;
+      max-width: 46rem;
       margin: 0 auto;
       padding: 0 1.5rem 4rem;
     }
@@ -69,7 +146,51 @@
       color: var(--accent);
       margin-bottom: 0.8rem;
     }
-    a { color: var(--accent); }
+
+    /* ---------- Projekt-Buttons ---------- */
+    .project-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .project-btn {
+      display: block;
+      padding: 1.4rem 1.5rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      text-decoration: none;
+      color: var(--text);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .project-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+    }
+    .project-btn .project-title {
+      display: block;
+      font-size: 1.2rem;
+      color: var(--accent);
+    }
+    .project-btn .project-desc {
+      display: block;
+      margin-top: 0.3rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      font-style: italic;
+    }
+    .project-btn.placeholder {
+      border-left-color: var(--border);
+      color: var(--muted);
+      font-style: italic;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
     footer {
       text-align: center;
       padding: 2rem 1.5rem;
@@ -81,18 +202,38 @@
   </style>
 </head>
 <body>
-  <header>
+  <header class="site-header">
+    <a class="brand" href="/"><strong>fruthzeug</strong>.de</a>
+    <input type="checkbox" id="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="burger" aria-label="Menü öffnen">
+      <span></span><span></span><span></span>
+    </label>
+    <nav class="site-nav">
+      <a href="/" aria-current="page">Start</a>
+      <a href="/#projekte">Projekte</a>
+      <a href="/projekte/champagne-26/">Champagne 26</a>
+      <a href="mailto:post@fruthzeug.de">Kontakt</a>
+    </nav>
+  </header>
+
+  <div class="hero">
     <h1>Hallo, ich bin Carl.</h1>
     <p>Willkommen auf meiner privaten Website.</p>
-  </header>
+  </div>
+
   <main>
-    <div class="card">
-      <h2>Über diese Seite</h2>
-      <p>
-        Diese Seite ist gerade frisch eingezogen – gehostet bei Hetzner in Deutschland.
-        Hier entsteht nach und nach mehr. Schau gern wieder vorbei.
-      </p>
+    <div class="card" id="projekte">
+      <h2>Meine Projekte</h2>
+      <p>Hier sammle ich meine Projekte – einfach antippen:</p>
+      <div class="project-grid">
+        <a class="project-btn" href="/projekte/champagne-26/">
+          <span class="project-title">Champagne 26</span>
+          <span class="project-desc">Bildergalerie</span>
+        </a>
+        <div class="project-btn placeholder">Weitere Projekte folgen&nbsp;…</div>
+      </div>
     </div>
+
     <div class="card">
       <h2>Kontakt</h2>
       <p>
@@ -102,10 +243,9 @@
       </p>
     </div>
   </main>
+
   <footer>
     <p>&copy; 2026 Carl &middot; Privat &amp; nicht-kommerziell</p>
   </footer>
 </body>
 </html>
-
-<!-- Deploy: Secrets eingerichtet -->

@@ -1,0 +1,8 @@
+# In diesem Ordner liegen nur hochgeladene Bilder.
+# Alles andere (insbesondere Skripte) wird weder ausgeliefert noch ausgeführt.
+Require all denied
+<FilesMatch "\.(?i:jpe?g|png|gif|webp)$">
+  Require all granted
+</FilesMatch>
+RemoveHandler .php .phtml .phar
+RemoveType .php .phtml .phar
