@@ -496,7 +496,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
-  <title>Champagner-Verkostung – fruthzeug.de</title>
+  <title>Champagne 26 – fruthzeug.de</title>
   <style>
     :root {
       --bg: #faf9f7;
@@ -668,15 +668,15 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     <nav class="site-nav">
       <a href="/">Start</a>
       <a href="/#projekte">Projekte</a>
-      <a href="/projekte/champagne-26/">Champagne 26</a>
-      <a href="/projekte/champagner/" aria-current="page">Champagner</a>
+      <a href="/projekte/champagner/" aria-current="page">Champagne 26</a>
+      <a href="mailto:post@fruthzeug.de">Kontakt</a>
     </nav>
   </header>
 
   <main>
     <?php if ($ansicht === 'liste'): ?>
-      <h1>Champagner-Verkostung 🍾</h1>
-      <p class="untertitel">Jede Person bewertet für sich – 8 Kategorien, 1 bis 5 Sterne.</p>
+      <h1>Champagne 26 🍾</h1>
+      <p class="untertitel">Champagner-Verkostung – jede Person bewertet für sich, 8 Kategorien, 1 bis 5 Sterne.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
