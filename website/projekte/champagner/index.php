@@ -1,5 +1,23 @@
 <?php
 declare(strict_types=1);
+
+// Anmeldung soll 30 Tage halten – eigene Session-Ablage, damit der
+// Hoster die Sitzungen nicht früher wegräumt.
+$sitzungsDir = __DIR__ . '/daten/sessions';
+if (!is_dir($sitzungsDir)) {
+    @mkdir($sitzungsDir, 0755, true);
+}
+if (is_dir($sitzungsDir) && is_writable($sitzungsDir)) {
+    session_save_path($sitzungsDir);
+}
+ini_set('session.gc_maxlifetime', (string)(60 * 60 * 24 * 30));
+session_set_cookie_params([
+    'lifetime' => 60 * 60 * 24 * 30,
+    'path'     => '/',
+    'secure'   => true,
+    'httponly' => true,
+    'samesite' => 'Lax',
+]);
 session_start();
 date_default_timezone_set('Europe/Berlin');
 
@@ -92,11 +110,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $aktion = (string)($_POST['aktion'] ?? '');
 
     if ($aktion === 'login') {
+        $weiter = (string)($_POST['weiter'] ?? '');
+        if (!preg_match('/^\?[A-Za-z0-9=&_%-]*$/', $weiter)) {
+            $weiter = '';
+        }
+        $anhang = $weiter === '' ? '?' : $weiter . '&';
         if (hash_equals(PASSWORT, (string)($_POST['passwort'] ?? ''))) {
             $_SESSION['tasting_ok'] = true;
-            zurueck('?ok=' . rawurlencode('Willkommen zur Verkostung!'));
+            zurueck($anhang . 'ok=' . rawurlencode('Willkommen zur Verkostung!'));
         }
-        zurueck('?fehler=' . rawurlencode('Das Passwort stimmt nicht.'));
+        zurueck($anhang . 'fehler=' . rawurlencode('Das Passwort stimmt nicht.'));
     }
 
     if ($aktion === 'logout') {
@@ -449,6 +472,20 @@ function uploadText(int $hochgeladen, int $abgelehnt): string
     return $text;
 }
 
+/** Anmeldeformular; $weiter = Query der aktuellen Seite (z. B. "?ergebnis=abc"), um dorthin zurückzukehren. */
+function loginFormular(string $weiter = ''): string
+{
+    $csrf = e((string)$_SESSION['csrf']);
+    $weiterFeld = $weiter === '' ? '' : '<input type="hidden" name="weiter" value="' . e($weiter) . '">';
+    return '<h2>Zum Mitmachen anmelden</h2>
+      <form method="post">
+        <input type="hidden" name="csrf" value="' . $csrf . '">
+        <input type="hidden" name="aktion" value="login">' . $weiterFeld . '
+        <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
+        <button class="knopf" type="submit">Anmelden</button>
+      </form>';
+}
+
 function preisZeile(array $c): string
 {
     $preis = trim((string)($c['preis'] ?? ''));
@@ -702,13 +739,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       <!-- ==================== BEWERTUNGSFORMULAR ==================== -->
       <?php if (!$eingeloggt): ?>
         <div class="card">
-          <h2>Zum Bewerten anmelden</h2>
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="login">
-            <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
-            <button class="knopf" type="submit">Anmelden</button>
-          </form>
+          <?= loginFormular('?bewerten=' . rawurlencode($aktiverChampagner['id'])) ?>
         </div>
       <?php else: ?>
         <form method="post" class="card">
@@ -791,7 +822,9 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <button class="knopf" type="submit">Fotos hochladen</button>
           </form>
         <?php else: ?>
-          <p class="anzahl" style="margin-top:0.6rem;">Zum Hochladen von Fotos bitte auf der Übersichtsseite anmelden.</p>
+          <div style="margin-top:1rem;">
+            <?= loginFormular('?ergebnis=' . rawurlencode($aktiverChampagner['id'])) ?>
+          </div>
         <?php endif; ?>
       </div>
 
@@ -934,13 +967,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <button type="submit">Abmelden</button>
           </form>
         <?php else: ?>
-          <h2>Zum Mitmachen anmelden</h2>
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="login">
-            <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
-            <button class="knopf" type="submit">Anmelden</button>
-          </form>
+          <?= loginFormular('?weingueter=1') ?>
         <?php endif; ?>
       </div>
 
@@ -1016,6 +1043,12 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <?php endforeach; ?>
         <?php endif; ?>
       </div>
+
+      <?php if (!$eingeloggt): ?>
+        <div class="card">
+          <?= loginFormular('?weingut=' . rawurlencode($aktivesWeingut['id'])) ?>
+        </div>
+      <?php endif; ?>
 
       <div class="knopfreihe">
         <a class="knopf zweit" href="?weingueter=1">Zur Weingut-Liste</a>
@@ -1102,13 +1135,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <button type="submit">Abmelden</button>
           </form>
         <?php else: ?>
-          <h2>Zum Mitmachen anmelden</h2>
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="login">
-            <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
-            <button class="knopf" type="submit">Anmelden</button>
-          </form>
+          <?= loginFormular() ?>
         <?php endif; ?>
       </div>
     <?php endif; ?>
