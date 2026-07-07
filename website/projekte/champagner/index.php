@@ -678,6 +678,8 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     }
 
     main { flex: 1; width: 100%; max-width: 46rem; margin: 0 auto; padding: 2rem 1.2rem 4rem; }
+    .zurueck { margin-bottom: 0.7rem; }
+    .zurueck a { text-decoration: none; font-size: 1.05rem; }
     h1 { font-size: clamp(1.7rem, 5vw, 2.4rem); font-weight: normal; margin-bottom: 0.3rem; }
     .untertitel { color: var(--muted); font-style: italic; margin-bottom: 1.6rem; }
 
@@ -798,12 +800,15 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       <h1>Fotoalbum 📸</h1>
       <p class="untertitel">Diverse Fotos rund um Champagne 26.</p>
     <?php elseif ($ansicht === 'weingut'): ?>
+      <p class="zurueck"><a href="?weingueter=1">&larr; Zur&uuml;ck zur Weingut-Liste</a></p>
       <h1><?= e($aktivesWeingut['name']) ?></h1>
       <p class="untertitel">Weingut</p>
     <?php elseif ($ansicht === 'bewerten'): ?>
+      <p class="zurueck"><a href="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">&larr; Zur&uuml;ck zu <?= e($aktiverChampagner['name']) ?></a></p>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
     <?php else: ?>
+      <p class="zurueck"><a href="./">&larr; Zur&uuml;ck zur Champagner-Liste</a></p>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Ergebnis der Verkostung<?= preisZeile($aktiverChampagner) ?></p>
     <?php endif; ?>
