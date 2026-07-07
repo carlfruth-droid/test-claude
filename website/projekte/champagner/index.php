@@ -286,6 +286,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
     }
 
+    if ($aktion === 'bewertung_loeschen') {
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $person = trim((string)($_POST['person'] ?? ''));
+        datenAendern(function (array $d) use ($cid, $person): array {
+            $d['bewertungen'] = array_values(array_filter(
+                $d['bewertungen'],
+                fn($b) => !($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person))
+            ));
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung von ' . $person . ' gelöscht.'));
+    }
+
     if ($aktion === 'div_foto_upload') {
         [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'div');
         zurueck('?fotos=1&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
@@ -976,7 +989,16 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
                     <td><b><?= number_format($summe / count($KATEGORIEN), 1, ',', '') ?></b></td>
                     <td><?= (int)($b['flaschen'] ?? 0) ?></td>
                     <?php if ($eingeloggt): ?>
-                      <td><a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>">ändern</a></td>
+                      <td>
+                        <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>">ändern</a>
+                        <form method="post" style="display:inline" onsubmit="return confirm('Bewertung von <?= e($b['person']) ?> wirklich löschen?');">
+                          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                          <input type="hidden" name="aktion" value="bewertung_loeschen">
+                          <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                          <input type="hidden" name="person" value="<?= e($b['person']) ?>">
+                          <button class="loeschen" type="submit">löschen</button>
+                        </form>
+                      </td>
                     <?php endif; ?>
                   </tr>
                 <?php endforeach; ?>
