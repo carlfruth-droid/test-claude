@@ -49,13 +49,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => []]
-        : ['champagner' => [], 'bewertungen' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -73,9 +73,9 @@ function datenAendern(callable $fn): void
     $roh = stream_get_contents($h);
     $d = json_decode((string)$roh, true);
     if (!is_array($d)) {
-        $d = ['champagner' => [], 'bewertungen' => []];
+        $d = ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
     }
-    $d += ['champagner' => [], 'bewertungen' => []];
+    $d += ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
     $d = $fn($d);
     ftruncate($h, 0);
     rewind($h);
@@ -113,17 +113,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name = mb_substr($name, 0, 60);
         $preis = trim((string)($_POST['preis'] ?? ''));
         $preis = mb_substr($preis, 0, 20);
+        $weingutId = (string)($_POST['weingut_id'] ?? '');
         if ($name === '') {
             zurueck('?fehler=' . rawurlencode('Bitte einen Namen für den Champagner angeben.'));
         }
         $neueId = bin2hex(random_bytes(4));
-        datenAendern(function (array $d) use ($name, $preis, $neueId): array {
+        datenAendern(function (array $d) use ($name, $preis, $weingutId, $neueId): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name)) {
                     zurueck('?fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
                 }
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'zeit' => time()];
+            if ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
+                $weingutId = '';
+            }
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
@@ -134,44 +138,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (champagnerHolen(datenLaden(), $cid) === null) {
             zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
         }
-        $dateien = $_FILES['fotos'] ?? null;
-        if ($dateien === null) {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Keine Datei ausgewählt.'));
-        }
-        if (!is_dir(BILDER_DIR)) {
-            mkdir(BILDER_DIR, 0755, true);
-        }
-        $hochgeladen = 0;
-        $abgelehnt   = 0;
-        $finfo       = new finfo(FILEINFO_MIME_TYPE);
-        foreach ((array)$dateien['name'] as $i => $originalName) {
-            if (($dateien['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-                $abgelehnt++;
-                continue;
-            }
-            $tmp = (string)$dateien['tmp_name'][$i];
-            if (!is_uploaded_file($tmp) || (int)$dateien['size'][$i] > MAX_BILD_GROESSE) {
-                $abgelehnt++;
-                continue;
-            }
-            $typ = $finfo->file($tmp);
-            if (!isset($BILD_TYPEN[$typ])) {
-                $abgelehnt++;
-                continue;
-            }
-            $ziel = sprintf('%s/%s-%s-%s.%s', BILDER_DIR, $cid, date('Ymd-His'), bin2hex(random_bytes(3)), $BILD_TYPEN[$typ]);
-            if (move_uploaded_file($tmp, $ziel)) {
-                @chmod($ziel, 0644);
-                $hochgeladen++;
-            } else {
-                $abgelehnt++;
-            }
-        }
-        $text = $hochgeladen . ' Foto(s) hochgeladen.';
-        if ($abgelehnt > 0) {
-            $text .= ' ' . $abgelehnt . ' Datei(en) übersprungen (kein Bild, zu groß oder Fehler).';
-        }
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($text));
+        [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, $cid);
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
     }
 
     if ($aktion === 'foto_loeschen') {
@@ -182,6 +150,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?ergebnis=' . rawurlencode($m[1]) . '&ok=' . rawurlencode('Foto gelöscht.'));
         }
         zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
+    }
+
+    if ($aktion === 'weingut_anlegen') {
+        $name = trim((string)($_POST['name'] ?? ''));
+        $name = mb_substr($name, 0, 60);
+        $notiz = trim((string)($_POST['notiz'] ?? ''));
+        $notiz = mb_substr($notiz, 0, 1000);
+        if ($name === '') {
+            zurueck('?weingueter=1&fehler=' . rawurlencode('Bitte einen Namen für das Weingut angeben.'));
+        }
+        $neueId = bin2hex(random_bytes(4));
+        datenAendern(function (array $d) use ($name, $notiz, $neueId): array {
+            foreach ($d['weingueter'] as $w) {
+                if (mb_strtolower($w['name']) === mb_strtolower($name)) {
+                    zurueck('?weingueter=1&fehler=' . rawurlencode('Dieses Weingut gibt es schon in der Liste.'));
+                }
+            }
+            $d['weingueter'][] = ['id' => $neueId, 'name' => $name, 'notiz' => $notiz, 'zeit' => time()];
+            return $d;
+        });
+        zurueck('?weingut=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ wurde angelegt.'));
+    }
+
+    if ($aktion === 'weingut_notiz') {
+        $id = (string)($_POST['id'] ?? '');
+        $notiz = trim((string)($_POST['notiz'] ?? ''));
+        $notiz = mb_substr($notiz, 0, 1000);
+        datenAendern(function (array $d) use ($id, $notiz): array {
+            foreach ($d['weingueter'] as &$w) {
+                if ($w['id'] === $id) {
+                    $w['notiz'] = $notiz;
+                }
+            }
+            return $d;
+        });
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Notiz gespeichert.'));
+    }
+
+    if ($aktion === 'weingut_loeschen') {
+        $id = (string)($_POST['id'] ?? '');
+        datenAendern(function (array $d) use ($id): array {
+            $d['weingueter'] = array_values(array_filter($d['weingueter'], fn($w) => $w['id'] !== $id));
+            foreach ($d['champagner'] as &$c) {
+                if (($c['weingut_id'] ?? '') === $id) {
+                    $c['weingut_id'] = '';
+                }
+            }
+            return $d;
+        });
+        if (preg_match('/^[a-f0-9]{8}$/', $id)) {
+            foreach (glob(BILDER_DIR . '/wg-' . $id . '-*') ?: [] as $foto) {
+                @unlink($foto);
+            }
+        }
+        zurueck('?weingueter=1&ok=' . rawurlencode('Weingut gelöscht (Champagner bleiben erhalten).'));
+    }
+
+    if ($aktion === 'weingut_foto_upload') {
+        $id = (string)($_POST['weingut_id'] ?? '');
+        if (weingutHolen(datenLaden(), $id) === null) {
+            zurueck('?weingueter=1&fehler=' . rawurlencode('Dieses Weingut existiert nicht (mehr).'));
+        }
+        [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'wg-' . $id);
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+    }
+
+    if ($aktion === 'weingut_foto_loeschen') {
+        $name = basename((string)($_POST['datei'] ?? ''));
+        $pfad = BILDER_DIR . '/' . $name;
+        if (preg_match('/^wg-([a-f0-9]{8})-.*\.(jpe?g|png|gif|webp)$/i', $name, $m) && is_file($pfad)) {
+            unlink($pfad);
+            zurueck('?weingut=' . rawurlencode($m[1]) . '&ok=' . rawurlencode('Foto gelöscht.'));
+        }
+        zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
+    }
+
+    if ($aktion === 'champagner_weingut') {
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $wid = (string)($_POST['weingut_id'] ?? '');
+        datenAendern(function (array $d) use ($cid, $wid): array {
+            if ($wid !== '') {
+                $gefunden = false;
+                foreach ($d['weingueter'] as $w) {
+                    if ($w['id'] === $wid) {
+                        $gefunden = true;
+                        break;
+                    }
+                }
+                if (!$gefunden) {
+                    zurueck('?fehler=' . rawurlencode('Dieses Weingut existiert nicht (mehr).'));
+                }
+            }
+            foreach ($d['champagner'] as &$c) {
+                if ($c['id'] === $cid) {
+                    $c['weingut_id'] = $wid;
+                }
+            }
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($wid === '' ? 'Zuordnung entfernt.' : 'Weingut zugeordnet.'));
     }
 
     if ($aktion === 'champagner_loeschen') {
@@ -312,6 +380,75 @@ function fotosFuer(string $cid): array
     return array_map('basename', $treffer);
 }
 
+/** Fotos zu einem Weingut (neueste zuerst). */
+function weingutFotos(string $id): array
+{
+    if (!preg_match('/^[a-f0-9]{8}$/', $id)) {
+        return [];
+    }
+    $treffer = glob(BILDER_DIR . '/wg-' . $id . '-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
+    usort($treffer, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
+    return array_map('basename', $treffer);
+}
+
+function weingutHolen(array $daten, string $id): ?array
+{
+    foreach ($daten['weingueter'] as $w) {
+        if ($w['id'] === $id) {
+            return $w;
+        }
+    }
+    return null;
+}
+
+/** Hochgeladene Fotos aus $_FILES['fotos'] speichern; gibt [hochgeladen, abgelehnt] zurück. */
+function fotoUploadVerarbeiten(array $bildTypen, string $praefix): array
+{
+    $dateien = $_FILES['fotos'] ?? null;
+    if ($dateien === null) {
+        return [0, 0];
+    }
+    if (!is_dir(BILDER_DIR)) {
+        mkdir(BILDER_DIR, 0755, true);
+    }
+    $hochgeladen = 0;
+    $abgelehnt   = 0;
+    $finfo       = new finfo(FILEINFO_MIME_TYPE);
+    foreach ((array)$dateien['name'] as $i => $originalName) {
+        if (($dateien['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            $abgelehnt++;
+            continue;
+        }
+        $tmp = (string)$dateien['tmp_name'][$i];
+        if (!is_uploaded_file($tmp) || (int)$dateien['size'][$i] > MAX_BILD_GROESSE) {
+            $abgelehnt++;
+            continue;
+        }
+        $typ = $finfo->file($tmp);
+        if (!isset($bildTypen[$typ])) {
+            $abgelehnt++;
+            continue;
+        }
+        $ziel = sprintf('%s/%s-%s-%s.%s', BILDER_DIR, $praefix, date('Ymd-His'), bin2hex(random_bytes(3)), $bildTypen[$typ]);
+        if (move_uploaded_file($tmp, $ziel)) {
+            @chmod($ziel, 0644);
+            $hochgeladen++;
+        } else {
+            $abgelehnt++;
+        }
+    }
+    return [$hochgeladen, $abgelehnt];
+}
+
+function uploadText(int $hochgeladen, int $abgelehnt): string
+{
+    $text = $hochgeladen . ' Foto(s) hochgeladen.';
+    if ($abgelehnt > 0) {
+        $text .= ' ' . $abgelehnt . ' Datei(en) übersprungen (kein Bild, zu groß oder Fehler).';
+    }
+    return $text;
+}
+
 function preisZeile(array $c): string
 {
     $preis = trim((string)($c['preis'] ?? ''));
@@ -331,6 +468,7 @@ function champagnerHolen(array $daten, string $id): ?array
 // Welche Ansicht?
 $ansicht = 'liste';
 $aktiverChampagner = null;
+$aktivesWeingut = null;
 if (isset($_GET['bewerten'])) {
     $aktiverChampagner = champagnerHolen($daten, (string)$_GET['bewerten']);
     if ($aktiverChampagner !== null) {
@@ -341,6 +479,13 @@ if (isset($_GET['bewerten'])) {
     if ($aktiverChampagner !== null) {
         $ansicht = 'ergebnis';
     }
+} elseif (isset($_GET['weingut'])) {
+    $aktivesWeingut = weingutHolen($daten, (string)$_GET['weingut']);
+    if ($aktivesWeingut !== null) {
+        $ansicht = 'weingut';
+    }
+} elseif (isset($_GET['weingueter'])) {
+    $ansicht = 'weingueter';
 }
 
 $personVorschlag = (string)($_SESSION['person'] ?? '');
@@ -451,7 +596,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     }
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
 
-    input[type="password"], input[type="text"], input[type="file"], textarea {
+    input[type="password"], input[type="text"], input[type="file"], textarea, select {
       width: 100%; padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px;
       background: var(--bg); color: var(--text); font-size: 1rem; margin-bottom: 0.8rem;
       font-family: inherit;
@@ -532,6 +677,12 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     <?php if ($ansicht === 'liste'): ?>
       <h1>Champagner-Verkostung 🍾</h1>
       <p class="untertitel">Jede Person bewertet für sich – 8 Kategorien, 1 bis 5 Sterne.</p>
+    <?php elseif ($ansicht === 'weingueter'): ?>
+      <h1>Weingüter 🍇</h1>
+      <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
+    <?php elseif ($ansicht === 'weingut'): ?>
+      <h1><?= e($aktivesWeingut['name']) ?></h1>
+      <p class="untertitel">Weingut</p>
     <?php elseif ($ansicht === 'bewerten'): ?>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
@@ -695,13 +846,196 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         </div>
       <?php endif; ?>
 
+      <?php $zugeordnet = weingutHolen($daten, (string)($aktiverChampagner['weingut_id'] ?? '')); ?>
+      <div class="card">
+        <h2>Weingut</h2>
+        <?php if ($zugeordnet !== null): ?>
+          <p><a href="?weingut=<?= e(rawurlencode($zugeordnet['id'])) ?>"><?= e($zugeordnet['name']) ?></a></p>
+        <?php else: ?>
+          <p style="color:var(--muted); font-style:italic;">Noch keinem Weingut zugeordnet.</p>
+        <?php endif; ?>
+        <?php if ($eingeloggt && $daten['weingueter'] !== []): ?>
+          <form method="post" style="margin-top:0.6rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="champagner_weingut">
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+            <select name="weingut_id">
+              <option value="">– kein Weingut –</option>
+              <?php foreach ($daten['weingueter'] as $w): ?>
+                <option value="<?= e($w['id']) ?>" <?= ($aktiverChampagner['weingut_id'] ?? '') === $w['id'] ? 'selected' : '' ?>><?= e($w['name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <button class="knopf zweit" type="submit">Zuordnung speichern</button>
+          </form>
+        <?php elseif ($eingeloggt): ?>
+          <p class="anzahl">Lege zuerst unter <a href="?weingueter=1">Weingüter</a> eines an.</p>
+        <?php endif; ?>
+      </div>
+
       <div class="knopfreihe">
         <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Jetzt selbst bewerten</a>
         <a class="knopf zweit" href="./">Zur Übersicht</a>
       </div>
 
+    <?php elseif ($ansicht === 'weingueter'): ?>
+      <!-- ==================== WEINGUT-LISTE ==================== -->
+      <div class="knopfreihe" style="margin-bottom:1.2rem;">
+        <a class="knopf zweit" href="./">Champagner</a>
+        <a class="knopf" href="?weingueter=1">Weingüter</a>
+      </div>
+
+      <?php if ($daten['weingueter'] === []): ?>
+        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Weingut angelegt – unten das erste eintragen!</p></div>
+      <?php endif; ?>
+
+      <?php foreach ($daten['weingueter'] as $w): ?>
+        <?php
+          $fotos = weingutFotos($w['id']);
+          $anzahlChampagner = count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id']));
+          $kurznotiz = trim((string)($w['notiz'] ?? ''));
+          if (mb_strlen($kurznotiz) > 120) {
+              $kurznotiz = mb_substr($kurznotiz, 0, 120) . ' …';
+          }
+        ?>
+        <div class="card">
+          <div class="champagner-zeile">
+            <?php if ($fotos !== []): ?>
+              <a href="?weingut=<?= e(rawurlencode($w['id'])) ?>">
+                <img class="thumb" src="bilder/<?= e(rawurlencode($fotos[0])) ?>" alt="" loading="lazy">
+              </a>
+            <?php endif; ?>
+            <div class="info">
+              <div class="name"><?= e($w['name']) ?></div>
+              <span class="anzahl"><?= $anzahlChampagner ?> Champagner zugeordnet</span>
+              <?php if ($kurznotiz !== ''): ?>
+                <p class="anzahl" style="font-style:italic;"><?= e($kurznotiz) ?></p>
+              <?php endif; ?>
+            </div>
+            <div class="knopfreihe">
+              <a class="knopf" href="?weingut=<?= e(rawurlencode($w['id'])) ?>">Ansehen</a>
+            </div>
+          </div>
+        </div>
+      <?php endforeach; ?>
+
+      <div class="card">
+        <?php if ($eingeloggt): ?>
+          <h2>Neues Weingut anlegen</h2>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="weingut_anlegen">
+            <input type="text" name="name" placeholder="Name, z. B. Champagne Taittinger" maxlength="60" required>
+            <textarea name="notiz" placeholder="Notiz, z. B. Besuch am 12.08., nette Führung … (optional)" maxlength="1000" rows="3"></textarea>
+            <button class="knopf" type="submit">Anlegen</button>
+          </form>
+          <form method="post" class="abmelden">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="logout">
+            <button type="submit">Abmelden</button>
+          </form>
+        <?php else: ?>
+          <h2>Zum Mitmachen anmelden</h2>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="login">
+            <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
+            <button class="knopf" type="submit">Anmelden</button>
+          </form>
+        <?php endif; ?>
+      </div>
+
+    <?php elseif ($ansicht === 'weingut'): ?>
+      <!-- ==================== WEINGUT-DETAIL ==================== -->
+      <div class="card">
+        <h2>Notiz</h2>
+        <?php $wNotiz = trim((string)($aktivesWeingut['notiz'] ?? '')); ?>
+        <?php if (!$eingeloggt): ?>
+          <?php if ($wNotiz !== ''): ?>
+            <p><?= nl2br(e($wNotiz)) ?></p>
+          <?php else: ?>
+            <p style="color:var(--muted); font-style:italic;">Noch keine Notiz.</p>
+          <?php endif; ?>
+        <?php else: ?>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="weingut_notiz">
+            <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+            <textarea name="notiz" maxlength="1000" rows="4" placeholder="Notiz zum Weingut …"><?= e($wNotiz) ?></textarea>
+            <button class="knopf zweit" type="submit">Notiz speichern</button>
+          </form>
+        <?php endif; ?>
+      </div>
+
+      <?php $fotos = weingutFotos($aktivesWeingut['id']); ?>
+      <div class="card">
+        <h2>Bilder</h2>
+        <?php if ($fotos === []): ?>
+          <p style="color:var(--muted); font-style:italic;">Noch keine Bilder zu diesem Weingut.</p>
+        <?php else: ?>
+          <div class="foto-galerie">
+            <?php foreach ($fotos as $foto): ?>
+              <div class="foto">
+                <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                  <img src="bilder/<?= e(rawurlencode($foto)) ?>" alt="" loading="lazy">
+                </a>
+                <?php if ($eingeloggt): ?>
+                  <form method="post" onsubmit="return confirm('Dieses Bild wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="weingut_foto_loeschen">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Bild löschen">&#10005;</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+        <?php if ($eingeloggt): ?>
+          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="weingut_foto_upload">
+            <input type="hidden" name="weingut_id" value="<?= e($aktivesWeingut['id']) ?>">
+            <input type="file" name="fotos[]" accept="image/*" multiple required>
+            <button class="knopf" type="submit">Bilder hochladen</button>
+          </form>
+        <?php endif; ?>
+      </div>
+
+      <div class="card">
+        <h2>Champagner dieses Weinguts</h2>
+        <?php $eigene = array_values(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $aktivesWeingut['id'])); ?>
+        <?php if ($eigene === []): ?>
+          <p style="color:var(--muted); font-style:italic;">Noch kein Champagner zugeordnet. Die Zuordnung machst du auf der Ergebnisseite des jeweiligen Champagners.</p>
+        <?php else: ?>
+          <?php foreach ($eigene as $c): ?>
+            <?php $g = gesamtSchnitt(bewertungenFuer($daten, $c['id'])); ?>
+            <div class="ergebnis-kategorie">
+              <span><a href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>"><?= e($c['name']) ?></a><?= preisZeile($c) ?></span>
+              <?= sterneAnzeige($g) ?>
+            </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
+
+      <div class="knopfreihe">
+        <a class="knopf zweit" href="?weingueter=1">Zur Weingut-Liste</a>
+        <a class="knopf zweit" href="./">Zur Champagner-Liste</a>
+      </div>
+      <?php if ($eingeloggt): ?>
+        <form method="post" onsubmit="return confirm('„<?= e($aktivesWeingut['name']) ?>“ löschen? Die Champagner bleiben erhalten, verlieren aber die Zuordnung.');" style="margin-top:0.8rem;">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="weingut_loeschen">
+          <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+          <button class="loeschen" type="submit">Weingut löschen</button>
+        </form>
+      <?php endif; ?>
+
     <?php else: ?>
       <!-- ==================== ÜBERSICHT ==================== -->
+      <div class="knopfreihe" style="margin-bottom:1.2rem;">
+        <a class="knopf" href="./">Champagner</a>
+        <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
+      </div>
       <?php if ($daten['champagner'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Champagner angelegt – unten den ersten eintragen!</p></div>
       <?php endif; ?>
@@ -721,6 +1055,10 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <?php endif; ?>
             <div class="info">
               <div class="name"><?= e($c['name']) ?><?= preisZeile($c) ?></div>
+              <?php $wg = weingutHolen($daten, (string)($c['weingut_id'] ?? '')); ?>
+              <?php if ($wg !== null): ?>
+                <span class="anzahl">Weingut: <a href="?weingut=<?= e(rawurlencode($wg['id'])) ?>"><?= e($wg['name']) ?></a></span><br>
+              <?php endif; ?>
               <?= sterneAnzeige($gesamt) ?>
               <span class="anzahl">&middot; <?= count($bewertungen) ?> Bewertung(en)</span>
             </div>
@@ -748,6 +1086,14 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <input type="hidden" name="aktion" value="champagner_anlegen">
             <input type="text" name="name" placeholder="Name, z. B. Moët &amp; Chandon Brut Impérial" maxlength="60" required>
             <input type="text" name="preis" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
+            <?php if ($daten['weingueter'] !== []): ?>
+              <select name="weingut_id">
+                <option value="">– Weingut zuordnen (optional) –</option>
+                <?php foreach ($daten['weingueter'] as $w): ?>
+                  <option value="<?= e($w['id']) ?>"><?= e($w['name']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php endif; ?>
             <button class="knopf" type="submit">Anlegen</button>
           </form>
           <form method="post" class="abmelden">
