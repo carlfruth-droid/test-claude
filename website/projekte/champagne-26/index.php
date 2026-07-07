@@ -4,7 +4,7 @@ session_start();
 
 // Passwort für das Hochladen/Löschen von Bildern.
 // Zum Ändern: einfach den Text zwischen den Anführungszeichen austauschen.
-const UPLOAD_PASSWORT = 'fruthzeug26';
+const UPLOAD_PASSWORT = 'dontwastewater';
 
 const BILDER_DIR  = __DIR__ . '/bilder';
 const MAX_GROESSE = 25 * 1024 * 1024; // 25 MB pro Bild
@@ -275,6 +275,7 @@ function e(string $s): string
       <a href="/">Start</a>
       <a href="/#projekte">Projekte</a>
       <a href="/projekte/champagne-26/" aria-current="page">Champagne 26</a>
+      <a href="/projekte/champagner/">Champagner</a>
       <a href="mailto:post@fruthzeug.de">Kontakt</a>
     </nav>
   </header>
