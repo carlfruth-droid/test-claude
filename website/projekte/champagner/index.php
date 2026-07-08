@@ -196,6 +196,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pfad = BILDER_DIR . '/' . $name;
         if (preg_match('/^([a-f0-9]{8})-.*\.(jpe?g|png|gif|webp)$/i', $name, $m) && is_file($pfad)) {
             unlink($pfad);
+            thumbLoeschen($name);
             zurueck('?ergebnis=' . rawurlencode($m[1]) . '&ok=' . rawurlencode('Foto gelöscht.'));
         }
         zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
@@ -262,6 +263,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (preg_match('/^[a-f0-9]{8}$/', $id)) {
             foreach (glob(BILDER_DIR . '/wg-' . $id . '-*') ?: [] as $foto) {
                 @unlink($foto);
+                thumbLoeschen(basename($foto));
             }
         }
         zurueck('?weingueter=1&ok=' . rawurlencode('Weingut gelöscht (Champagner bleiben erhalten).'));
@@ -281,6 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pfad = BILDER_DIR . '/' . $name;
         if (preg_match('/^wg-([a-f0-9]{8})-.*\.(jpe?g|png|gif|webp)$/i', $name, $m) && is_file($pfad)) {
             unlink($pfad);
+            thumbLoeschen($name);
             zurueck('?weingut=' . rawurlencode($m[1]) . '&ok=' . rawurlencode('Foto gelöscht.'));
         }
         zurueck('?fehler=' . rawurlencode('Foto nicht gefunden.'));
@@ -309,6 +312,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pfad = BILDER_DIR . '/' . $name;
         if (preg_match('/^div-.*\.(jpe?g|png|gif|webp)$/i', $name) && is_file($pfad)) {
             unlink($pfad);
+            thumbLoeschen($name);
             zurueck('?fotos=1&ok=' . rawurlencode('Foto gelöscht.'));
         }
         zurueck('?fotos=1&fehler=' . rawurlencode('Foto nicht gefunden.'));
@@ -350,6 +354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (preg_match('/^[a-f0-9]{8}$/', $id)) {
             foreach (glob(BILDER_DIR . '/' . $id . '-*') ?: [] as $foto) {
                 @unlink($foto);
+                thumbLoeschen(basename($foto));
             }
         }
         zurueck('?ok=' . rawurlencode('Champagner samt Bewertungen und Fotos gelöscht.'));
@@ -489,6 +494,84 @@ function divFotos(): array
     return array_map('basename', $treffer);
 }
 
+function thumbVerzeichnis(): string
+{
+    return BILDER_DIR . '/thumbs';
+}
+
+/**
+ * Verkleinerte, korrekt gedrehte Vorschau erzeugen (max. 640 px Kante).
+ * Gibt false zurück, wenn GD fehlt oder das Bild nicht lesbar ist.
+ */
+function thumbErzeugen(string $quelle, string $ziel, int $maxKante = 640): bool
+{
+    if (!function_exists('imagecreatetruecolor') || !is_file($quelle)) {
+        return false;
+    }
+    $info = @getimagesize($quelle);
+    if ($info === false) {
+        return false;
+    }
+    [$b, $h] = $info;
+    $typ = $info[2];
+    $img = match ($typ) {
+        IMAGETYPE_JPEG => @imagecreatefromjpeg($quelle),
+        IMAGETYPE_PNG  => @imagecreatefrompng($quelle),
+        IMAGETYPE_GIF  => @imagecreatefromgif($quelle),
+        IMAGETYPE_WEBP => @imagecreatefromwebp($quelle),
+        default        => false,
+    };
+    if ($img === false) {
+        return false;
+    }
+    // iPhone-Fotos: Drehung aus den EXIF-Daten übernehmen
+    if ($typ === IMAGETYPE_JPEG && function_exists('exif_read_data')) {
+        $exif = @exif_read_data($quelle);
+        $o = (int)($exif['Orientation'] ?? 1);
+        if ($o === 3) {
+            $img = imagerotate($img, 180, 0);
+        } elseif ($o === 6) {
+            $img = imagerotate($img, -90, 0);
+        } elseif ($o === 8) {
+            $img = imagerotate($img, 90, 0);
+        }
+        $b = imagesx($img);
+        $h = imagesy($img);
+    }
+    $faktor = min(1.0, $maxKante / max($b, $h));
+    $nb = max(1, (int)round($b * $faktor));
+    $nh = max(1, (int)round($h * $faktor));
+    $neu = imagecreatetruecolor($nb, $nh);
+    $weiss = imagecolorallocate($neu, 255, 255, 255);
+    imagefill($neu, 0, 0, $weiss);
+    imagecopyresampled($neu, $img, 0, 0, 0, 0, $nb, $nh, $b, $h);
+    if (!is_dir(dirname($ziel))) {
+        @mkdir(dirname($ziel), 0755, true);
+    }
+    $ok = imagejpeg($neu, $ziel, 82);
+    imagedestroy($img);
+    imagedestroy($neu);
+    if ($ok) {
+        @chmod($ziel, 0644);
+    }
+    return (bool)$ok;
+}
+
+/** URL der Vorschau eines Fotos; erzeugt sie bei Bedarf, Fallback aufs Original. */
+function thumbUrl(string $name): string
+{
+    $thumb = thumbVerzeichnis() . '/' . $name . '.jpg';
+    if (!is_file($thumb) && !thumbErzeugen(BILDER_DIR . '/' . $name, $thumb)) {
+        return 'bilder/' . rawurlencode($name);
+    }
+    return 'bilder/thumbs/' . rawurlencode($name . '.jpg');
+}
+
+function thumbLoeschen(string $name): void
+{
+    @unlink(thumbVerzeichnis() . '/' . $name . '.jpg');
+}
+
 function weingutHolen(array $daten, string $id): ?array
 {
     foreach ($daten['weingueter'] as $w) {
@@ -530,6 +613,7 @@ function fotoUploadVerarbeiten(array $bildTypen, string $praefix): array
         $ziel = sprintf('%s/%s-%s-%s.%s', BILDER_DIR, $praefix, date('Ymd-His'), bin2hex(random_bytes(3)), $bildTypen[$typ]);
         if (move_uploaded_file($tmp, $ziel)) {
             @chmod($ziel, 0644);
+            thumbErzeugen($ziel, thumbVerzeichnis() . '/' . basename($ziel) . '.jpg');
             $hochgeladen++;
         } else {
             $abgelehnt++;
@@ -919,7 +1003,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <?php foreach ($fotos as $foto): ?>
               <div class="foto">
                 <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                  <img src="bilder/<?= e(rawurlencode($foto)) ?>" alt="" loading="lazy">
+                  <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
                 </a>
                 <?php if ($eingeloggt): ?>
                   <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
@@ -1061,7 +1145,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <?php foreach ($fotos as $foto): ?>
             <div class="foto">
               <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                <img src="bilder/<?= e(rawurlencode($foto)) ?>" alt="" loading="lazy">
+                <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
               </a>
               <?php if ($eingeloggt): ?>
                 <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
@@ -1116,7 +1200,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <div class="champagner-zeile">
             <?php if ($fotos !== []): ?>
               <a href="?weingut=<?= e(rawurlencode($w['id'])) ?>">
-                <img class="thumb" src="bilder/<?= e(rawurlencode($fotos[0])) ?>" alt="" loading="lazy">
+                <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
               </a>
             <?php endif; ?>
             <div class="info">
@@ -1186,7 +1270,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <?php foreach ($fotos as $foto): ?>
               <div class="foto">
                 <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                  <img src="bilder/<?= e(rawurlencode($foto)) ?>" alt="" loading="lazy">
+                  <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
                 </a>
                 <?php if ($eingeloggt): ?>
                   <form method="post" onsubmit="return confirm('Dieses Bild wirklich löschen?');">
@@ -1267,7 +1351,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <div class="champagner-zeile">
             <?php if ($fotos !== []): ?>
               <a href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
-                <img class="thumb" src="bilder/<?= e(rawurlencode($fotos[0])) ?>" alt="" loading="lazy">
+                <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
               </a>
             <?php endif; ?>
             <div class="info">
