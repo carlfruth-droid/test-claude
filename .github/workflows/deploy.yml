@@ -17,6 +17,18 @@ jobs:
       - name: Code auschecken
         uses: actions/checkout@v4
 
+      - name: KI-Schlüssel für Etikett-Erkennung bereitstellen (optional)
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            mkdir -p website/projekte/champagner/daten
+            printf "<?php return '%s';" "$KEY" > website/projekte/champagner/daten/apikey.php
+            echo "API-Schlüssel wird mit deployt."
+          else
+            echo "Kein ANTHROPIC_API_KEY-Secret gesetzt – Erkennung bleibt aus."
+          fi
+
       - name: Upload per FTPS zu Hetzner
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
