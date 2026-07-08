@@ -20,6 +20,7 @@ session_set_cookie_params([
 ]);
 session_start();
 date_default_timezone_set('Europe/Berlin');
+@ini_set('memory_limit', '512M'); // große Handyfotos beim Verkleinern verarbeiten können
 
 // Passwort zum Mitmachen (Bewerten und Champagner anlegen).
 // Zum Ändern: einfach den Text zwischen den Anführungszeichen austauschen.
@@ -104,6 +105,11 @@ function datenAendern(callable $fn): void
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Überschreitet der Upload das Server-Limit, kommt der POST leer an –
+    // dann eine verständliche Meldung statt "Sitzung abgelaufen".
+    if ($_POST === [] && $_FILES === [] && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+        zurueck('?fehler=' . rawurlencode('Die Fotos sind zusammen zu groß für einen Upload – bitte weniger Fotos auf einmal auswählen.'));
+    }
     if (!hash_equals($_SESSION['csrf'], (string)($_POST['csrf'] ?? ''))) {
         zurueck('?fehler=' . rawurlencode('Die Sitzung ist abgelaufen – bitte nochmal versuchen.'));
     }
@@ -513,6 +519,11 @@ function thumbErzeugen(string $quelle, string $ziel, int $maxKante = 640): bool
         return false;
     }
     [$b, $h] = $info;
+    // Extrem hochauflösende Fotos (>40 Megapixel) würden das Speicherlimit
+    // sprengen – dann lieber keine Vorschau als ein abgebrochener Upload.
+    if ($b * $h > 40000000) {
+        return false;
+    }
     $typ = $info[2];
     $img = match ($typ) {
         IMAGETYPE_JPEG => @imagecreatefromjpeg($quelle),
@@ -794,6 +805,14 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     a.knopf.zweit, button.knopf.zweit {
       background: transparent; color: var(--accent); border: 1px solid var(--accent);
     }
+    a.knopf:active, button:active {
+      transform: scale(0.96);
+      filter: brightness(0.85);
+    }
+    a.knopf, button { transition: transform 0.08s, filter 0.08s; }
+    button[disabled] { opacity: 0.55; cursor: wait; }
+    @keyframes pulsieren { 50% { opacity: 0.4; } }
+    button.laedt { animation: pulsieren 1s infinite; }
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
 
     input[type="password"], input[type="text"], input[type="number"], input[type="file"], textarea, select {
@@ -1412,5 +1431,25 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
   <footer>
     <p>&copy; 2026 Carl &middot; <a href="/">Zur&uuml;ck zur Startseite</a></p>
   </footer>
+
+  <script>
+    // Beim Absenden sichtbar machen, dass gearbeitet wird (v. a. Foto-Upload)
+    document.querySelectorAll('form').forEach(function (form) {
+      form.addEventListener('submit', function (e) {
+        var knopf = form.querySelector('button[type="submit"]');
+        if (!knopf || knopf.disabled) { return; }
+        setTimeout(function () {
+          if (e.defaultPrevented) { return; } // z. B. Sicherheitsabfrage abgebrochen
+          knopf.disabled = true;
+          knopf.classList.add('laedt');
+          if (knopf.classList.contains('knopf')) {
+            knopf.textContent = form.querySelector('input[type="file"]')
+              ? 'Wird hochgeladen …'
+              : 'Bitte warten …';
+          }
+        }, 0);
+      });
+    });
+  </script>
 </body>
 </html>
