@@ -173,7 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $fotoName = $treffer !== [] ? basename($treffer[0]) : '';
         }
         $erkannt = $fotoName !== '' ? etikettErkennen($fotoName) : ['name' => '', 'weingut' => ''];
-        $_SESSION['neu'] = ['foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
+        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
         if ($fotoName === '') {
             zurueck('?neu=1&fehler=' . rawurlencode('Das Foto kam nicht an – bitte nochmal versuchen (nur JPG/PNG, max. 25 MB).'));
         }
@@ -215,15 +215,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'zeit' => time()];
             return $d;
         });
-        // Foto vom Zwischen-Präfix auf den neuen Champagner umhängen
-        if ($foto !== '' && preg_match('/^neu-[a-f0-9]{8}-.*\.(jpe?g|png|gif|webp)$/i', $foto, $m) && is_file(BILDER_DIR . '/' . $foto)) {
-            $endung = strtolower(pathinfo($foto, PATHINFO_EXTENSION));
-            $neuerName = sprintf('%s-%s-%s.%s', $neueId, date('Ymd-His'), bin2hex(random_bytes(3)), $endung);
-            if (rename(BILDER_DIR . '/' . $foto, BILDER_DIR . '/' . $neuerName)) {
-                thumbLoeschen($foto);
-                thumbErzeugen(BILDER_DIR . '/' . $neuerName, thumbVerzeichnis() . '/' . $neuerName . '.jpg');
-            }
-        }
+        // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
+        fotosUmhaengen((string)($_SESSION['neu']['praefix'] ?? ''), 'neu', $neueId);
         unset($_SESSION['neu']);
         zurueck('?bewerten=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
     }
@@ -521,7 +514,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $hinweis = 'Im Foto stecken keine GPS-Daten (beim iPhone: im Auswahldialog „Optionen“ → „Standort“ einschalten). Du kannst den Namen unten von Hand eintragen.';
         }
-        $_SESSION['wneu'] = ['foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt];
+        $_SESSION['wneu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt];
         zurueck('?wneu=2' . ($hinweis !== '' ? '&fehler=' . rawurlencode($hinweis) : ''));
     }
 
@@ -543,16 +536,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $d['weingueter'][] = ['id' => $neueId, 'name' => $name, 'notiz' => $notiz, 'kontakt' => $kontakt, 'zeit' => time()];
             return $d;
         });
-        if ($foto !== '' && preg_match('/^wneu-[a-f0-9]{8}-.*\.(jpe?g|png|gif|webp)$/i', $foto) && is_file(BILDER_DIR . '/' . $foto)) {
-            $endung = strtolower(pathinfo($foto, PATHINFO_EXTENSION));
-            $neuerName = sprintf('wg-%s-%s-%s.%s', $neueId, date('Ymd-His'), bin2hex(random_bytes(3)), $endung);
-            if (rename(BILDER_DIR . '/' . $foto, BILDER_DIR . '/' . $neuerName)) {
-                thumbLoeschen($foto);
-                thumbErzeugen(BILDER_DIR . '/' . $neuerName, thumbVerzeichnis() . '/' . $neuerName . '.jpg');
-            }
-        }
+        // Alle Fotos vom Zwischen-Präfix auf das neue Weingut umhängen
+        fotosUmhaengen((string)($_SESSION['wneu']['praefix'] ?? ''), 'wneu', 'wg-' . $neueId);
         unset($_SESSION['wneu']);
         zurueck('?weingut=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt.'));
+    }
+
+    if ($aktion === 'champagner_recherche') {
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $c = champagnerHolen(datenLaden(), $cid);
+        if ($c === null) {
+            zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
+        }
+        $wg = weingutHolen(datenLaden(), (string)($c['weingut_id'] ?? ''));
+        $auftrag = 'Recherchiere im Web den Champagner "' . $c['name'] . '"'
+            . ($wg !== null ? ' vom Erzeuger "' . $wg['name'] . '"' : '')
+            . '. Fasse kurz auf Deutsch zusammen, als Stichpunkte mit Zeilenumbrüchen, insgesamt höchstens ~120 Wörter: '
+            . 'Stil und Rebsorten, Dosage, Besonderheiten der Herstellung, Bewertungen/Auszeichnungen (falls findbar), üblicher Preis. '
+            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben.';
+        $text = claudeWebsuche($auftrag);
+        if ($text === '') {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.'));
+        }
+        datenAendern(function (array $d) use ($cid, $text): array {
+            foreach ($d['champagner'] as &$c2) {
+                if ($c2['id'] === $cid) {
+                    $c2['recherche'] = $text;
+                }
+            }
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.'));
+    }
+
+    if ($aktion === 'weingut_recherche') {
+        $id = (string)($_POST['id'] ?? '');
+        $weingut = weingutHolen(datenLaden(), $id);
+        if ($weingut === null) {
+            zurueck('?weingueter=1&fehler=' . rawurlencode('Dieses Weingut existiert nicht (mehr).'));
+        }
+        $auftrag = 'Recherchiere im Web das Champagner-Weingut/Champagnerhaus "' . $weingut['name'] . '" (Champagne, Frankreich). '
+            . 'Fasse kurz auf Deutsch zusammen, als Stichpunkte mit Zeilenumbrüchen, insgesamt höchstens ~120 Wörter: '
+            . 'Geschichte und Größe, Stil und Besonderheiten, bekannte Cuvées, Preisniveau, Besuchsmöglichkeiten. '
+            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben.';
+        $text = claudeWebsuche($auftrag);
+        if ($text === '') {
+            zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.'));
+        }
+        datenAendern(function (array $d) use ($id, $text): array {
+            foreach ($d['weingueter'] as &$w) {
+                if ($w['id'] === $id) {
+                    $w['recherche'] = $text;
+                }
+            }
+            return $d;
+        });
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.'));
     }
 
     if ($aktion === 'weingut_kontakt') {
@@ -807,6 +846,25 @@ function thumbUrl(string $name): string
 function thumbLoeschen(string $name): void
 {
     @unlink(thumbVerzeichnis() . '/' . $name . '.jpg');
+}
+
+/** Alle Fotos eines Zwischen-Präfixes auf das endgültige Ziel-Präfix umbenennen. */
+function fotosUmhaengen(string $praefix, string $erwarteterTyp, string $zielPraefix): void
+{
+    if (!preg_match('/^' . $erwarteterTyp . '-[a-f0-9]{8}$/', $praefix)) {
+        return;
+    }
+    foreach (glob(BILDER_DIR . '/' . $praefix . '-*') ?: [] as $alt) {
+        $basis = basename($alt);
+        if (!preg_match('/\.(jpe?g|png|gif|webp)$/i', $basis, $m)) {
+            continue;
+        }
+        $neuerName = sprintf('%s-%s-%s.%s', $zielPraefix, date('Ymd-His'), bin2hex(random_bytes(3)), strtolower($m[1]));
+        if (rename($alt, BILDER_DIR . '/' . $neuerName)) {
+            thumbLoeschen($basis);
+            thumbErzeugen(BILDER_DIR . '/' . $neuerName, thumbVerzeichnis() . '/' . $neuerName . '.jpg');
+        }
+    }
 }
 
 function weingutHolen(array $daten, string $id): ?array
@@ -1164,6 +1222,58 @@ function weingutNameErmitteln(string $standort, float $lat, float $lon, array $k
         }
     }
     return '';
+}
+
+/** Allgemeine KI-Websuche: liefert die Textantwort oder '' (kein Schlüssel/kein Ergebnis). */
+function claudeWebsuche(string $auftrag, int $maxTokens = 800): string
+{
+    $keyDatei = __DIR__ . '/daten/apikey.php';
+    if (!is_file($keyDatei)) {
+        return '';
+    }
+    $key = (string)(require $keyDatei);
+    if ($key === '' || !function_exists('curl_init')) {
+        return '';
+    }
+    @set_time_limit(120);
+    $body = json_encode([
+        'model'      => 'claude-haiku-4-5',
+        'max_tokens' => $maxTokens,
+        'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 4]],
+        'messages'   => [['role' => 'user', 'content' => $auftrag]],
+    ]);
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $body,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_HTTPHEADER     => [
+            'content-type: application/json',
+            'x-api-key: ' . $key,
+            'anthropic-version: 2023-06-01',
+        ],
+    ]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return '';
+    }
+    $j = json_decode($antwort, true);
+    $bloecke = (array)($j['content'] ?? []);
+    $letzteSuche = -1;
+    foreach ($bloecke as $i => $block) {
+        if (($block['type'] ?? '') === 'web_search_tool_result') {
+            $letzteSuche = $i;
+        }
+    }
+    $text = '';
+    foreach ($bloecke as $i => $block) {
+        if ($i > $letzteSuche && ($block['type'] ?? '') === 'text') {
+            $text .= (string)($block['text'] ?? '');
+        }
+    }
+    return mb_substr(trim($text), 0, 1500);
 }
 
 /** Kontakt-Text fürs Anzeigen: escapen, Links klickbar machen, Zeilenumbrüche. */
@@ -1757,6 +1867,27 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         </div>
       <?php endif; ?>
 
+      <?php $recherche = trim((string)($aktiverChampagner['recherche'] ?? '')); ?>
+      <?php if ($recherche !== '' || $eingeloggt): ?>
+        <div class="card">
+          <h2>Recherche</h2>
+          <?php if ($recherche !== ''): ?>
+            <p><?= verlinken($recherche) ?></p>
+          <?php else: ?>
+            <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Champagner.</p>
+          <?php endif; ?>
+          <?php if ($eingeloggt): ?>
+            <form method="post" style="margin-top:0.8rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="champagner_recherche">
+              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+              <button class="knopf zweit" type="submit">🔎&nbsp; Im Internet recherchieren</button>
+            </form>
+            <p class="anzahl" style="margin-top:0.4rem;">Dauert bis zu einer halben Minute; erneutes Recherchieren ersetzt den Text.</p>
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
+
       <?php $zugeordnet = weingutHolen($daten, (string)($aktiverChampagner['weingut_id'] ?? '')); ?>
       <div class="card">
         <h2>Weingut</h2>
@@ -1870,7 +2001,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <h2>1. Etikett fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach ein Foto vom Etikett – oder wähl ein vorhandenes Bild aus. Danach geht es automatisch weiter.</p>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="foto-kamera" style="display:none;">
-          <input type="file" name="fotos[]" accept="image/*" id="foto-galerie" style="display:none;">
+          <input type="file" name="fotos[]" accept="image/*" multiple id="foto-galerie" style="display:none;">
           <div class="knopfreihe">
             <label class="knopf" for="foto-kamera" id="kamera-label">📷&nbsp; Foto aufnehmen</label>
             <label class="knopf zweit" for="foto-galerie" id="galerie-label">🖼️&nbsp; Aus Galerie wählen</label>
@@ -1928,7 +2059,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <h2>1. Weingut fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach vor Ort ein Foto (Gebäude, Hof, Schild) – aus den GPS-Daten des Fotos ermitteln wir Standort und Erzeuger. Danach geht es automatisch weiter.</p>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="wfoto-kamera" style="display:none;">
-          <input type="file" name="fotos[]" accept="image/*" id="wfoto-galerie" style="display:none;">
+          <input type="file" name="fotos[]" accept="image/*" multiple id="wfoto-galerie" style="display:none;">
           <div class="knopfreihe">
             <label class="knopf" for="wfoto-kamera" id="wkamera-label">📷&nbsp; Foto aufnehmen</label>
             <label class="knopf zweit" for="wfoto-galerie" id="wgalerie-label">🖼️&nbsp; Aus Galerie wählen</label>
@@ -2105,6 +2236,27 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <p class="anzahl" style="margin-top:0.4rem;">Die Suche dauert bis zu einer halben Minute; das Ergebnis kannst du oben im Bearbeiten-Feld anpassen.</p>
         <?php endif; ?>
       </div>
+
+      <?php $wRecherche = trim((string)($aktivesWeingut['recherche'] ?? '')); ?>
+      <?php if ($wRecherche !== '' || $eingeloggt): ?>
+        <div class="card">
+          <h2>Recherche</h2>
+          <?php if ($wRecherche !== ''): ?>
+            <p><?= verlinken($wRecherche) ?></p>
+          <?php else: ?>
+            <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Weingut.</p>
+          <?php endif; ?>
+          <?php if ($eingeloggt): ?>
+            <form method="post" style="margin-top:0.8rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="weingut_recherche">
+              <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+              <button class="knopf zweit" type="submit">🔎&nbsp; Im Internet recherchieren</button>
+            </form>
+            <p class="anzahl" style="margin-top:0.4rem;">Dauert bis zu einer halben Minute; erneutes Recherchieren ersetzt den Text.</p>
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
 
       <?php $fotos = weingutFotos($aktivesWeingut['id']); ?>
       <div class="card">
