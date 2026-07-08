@@ -368,7 +368,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?weingueter=1&fehler=' . rawurlencode('Dieses Weingut existiert nicht (mehr).'));
         }
         [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'wg-' . $id);
-        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+        // GPS aus den neuen Fotos lesen und daraus den Standort ermitteln
+        $extra = '';
+        if ($hochgeladen > 0) {
+            $gps = null;
+            foreach (array_slice(weingutFotos($id), 0, $hochgeladen) as $foto) {
+                $gps = gpsAusFoto(BILDER_DIR . '/' . $foto);
+                if ($gps !== null) {
+                    break;
+                }
+            }
+            if ($gps !== null) {
+                $bisherigerKontakt = trim((string)(weingutHolen(datenLaden(), $id)['kontakt'] ?? ''));
+                if (!str_contains($bisherigerKontakt, 'Standort (aus Foto-GPS)')) {
+                    $standort = standortErmitteln($gps[0], $gps[1]);
+                    if ($standort !== '') {
+                        $zeile = 'Standort (aus Foto-GPS): ' . $standort . "\n"
+                            . 'Karte: https://www.openstreetmap.org/?mlat=' . round($gps[0], 6) . '&mlon=' . round($gps[1], 6) . '#map=17/' . round($gps[0], 6) . '/' . round($gps[1], 6);
+                        datenAendern(function (array $d) use ($id, $zeile): array {
+                            foreach ($d['weingueter'] as &$w) {
+                                if ($w['id'] === $id) {
+                                    $alt = trim((string)($w['kontakt'] ?? ''));
+                                    $w['kontakt'] = mb_substr(trim($alt . ($alt === '' ? '' : "\n") . $zeile), 0, 900);
+                                }
+                            }
+                            return $d;
+                        });
+                        $extra = ' Standort aus dem Foto erkannt und im Kontakt-Bereich ergänzt.';
+                    }
+                }
+            }
+        }
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt) . $extra));
     }
 
     if ($aktion === 'weingut_foto_loeschen') {
@@ -889,6 +920,69 @@ function weingutKontaktErmitteln(string $name): string
         }
     }
     return mb_substr(trim(implode('', $teile)), 0, 900);
+}
+
+/** GPS-Koordinaten aus den EXIF-Daten eines Fotos lesen (oder null). */
+function gpsAusFoto(string $pfad): ?array
+{
+    if (!function_exists('exif_read_data') || !is_file($pfad)) {
+        return null;
+    }
+    $exif = @exif_read_data($pfad);
+    if (!is_array($exif) || !isset($exif['GPSLatitude'], $exif['GPSLongitude'])) {
+        return null;
+    }
+    $umrechnen = static function (array $teile, string $ref): float {
+        $wert = static function ($r): float {
+            $p = explode('/', (string)$r);
+            return isset($p[1]) && (float)$p[1] !== 0.0 ? (float)$p[0] / (float)$p[1] : (float)$r;
+        };
+        $dez = $wert($teile[0] ?? '0') + $wert($teile[1] ?? '0') / 60 + $wert($teile[2] ?? '0') / 3600;
+        return in_array(strtoupper($ref), ['S', 'W'], true) ? -$dez : $dez;
+    };
+    $lat = $umrechnen((array)$exif['GPSLatitude'], (string)($exif['GPSLatitudeRef'] ?? 'N'));
+    $lon = $umrechnen((array)$exif['GPSLongitude'], (string)($exif['GPSLongitudeRef'] ?? 'E'));
+    if (abs($lat) < 0.0001 && abs($lon) < 0.0001) {
+        return null;
+    }
+    return [$lat, $lon];
+}
+
+/** Adresse/Ort zu Koordinaten ermitteln (OpenStreetMap Nominatim); '' wenn nichts gefunden. */
+function standortErmitteln(float $lat, float $lon): string
+{
+    if (!function_exists('curl_init')) {
+        return '';
+    }
+    $url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=de'
+        . '&lat=' . rawurlencode((string)$lat) . '&lon=' . rawurlencode((string)$lon);
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_HTTPHEADER     => ['User-Agent: fruthzeug.de Champagne26 (post@fruthzeug.de)'],
+    ]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return '';
+    }
+    $j = json_decode($antwort, true);
+    $name    = trim((string)($j['name'] ?? ''));
+    $anzeige = trim((string)($j['display_name'] ?? ''));
+    if ($anzeige === '') {
+        return '';
+    }
+    return $name !== '' && !str_starts_with($anzeige, $name) ? $name . ', ' . $anzeige : $anzeige;
+}
+
+/** Kontakt-Text fürs Anzeigen: escapen, Links klickbar machen, Zeilenumbrüche. */
+function verlinken(string $text): string
+{
+    $esc = e($text);
+    $esc = preg_replace('~(https?://[^\s<]+)~', '<a href="$1" target="_blank" rel="noopener">$1</a>', $esc) ?? $esc;
+    $esc = preg_replace('~(?<![/\w])(www\.[^\s<]+)~', '<a href="https://$1" target="_blank" rel="noopener">$1</a>', $esc) ?? $esc;
+    return nl2br($esc);
 }
 
 /** Anmeldeformular; $weiter = Query der aktuellen Seite (z. B. "?ergebnis=abc"), um dorthin zurückzukehren. */
@@ -1700,7 +1794,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         <h2>Kontakt</h2>
         <?php $wKontakt = trim((string)($aktivesWeingut['kontakt'] ?? '')); ?>
         <?php if ($wKontakt !== ''): ?>
-          <p><?= nl2br(e($wKontakt)) ?></p>
+          <p><?= verlinken($wKontakt) ?></p>
         <?php else: ?>
           <p style="color:var(--muted); font-style:italic;">Noch keine Kontaktdaten hinterlegt.</p>
         <?php endif; ?>
