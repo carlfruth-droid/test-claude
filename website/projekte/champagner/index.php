@@ -227,6 +227,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?bewerten=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
     }
 
+    if ($aktion === 'erkennen_bestehend') {
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        if (champagnerHolen(datenLaden(), $cid) === null) {
+            zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
+        }
+        $fotos = fotosFuer($cid);
+        if ($fotos === []) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Kein Foto vorhanden – bitte zuerst ein Etikett-Foto hochladen.'));
+        }
+        $erkannt = etikettErkennen($fotos[0]);
+        if ($erkannt['name'] === '' && $erkannt['weingut'] === '') {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Auf dem Foto war kein Etikett zu erkennen – am besten ein neues Foto direkt vom Etikett hochladen und nochmal versuchen.'));
+        }
+        $_SESSION['erkannt'] = ['cid' => $cid, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Etikett erkannt – die Vorschläge stehen unten in den Bearbeiten-Feldern. Prüfen und speichern!'));
+    }
+
     if ($aktion === 'champagner_bearbeiten') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $name = trim((string)($_POST['name'] ?? ''));
@@ -250,6 +267,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
+        unset($_SESSION['erkannt']);
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Name und Preis gespeichert.'));
     }
 
@@ -300,10 +318,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notiz = mb_substr($notiz, 0, 1000);
         $name = trim((string)($_POST['name'] ?? ''));
         $name = mb_substr($name, 0, 60);
+        $kontakt = mb_substr(trim((string)($_POST['kontakt'] ?? '')), 0, 900);
         if ($name === '') {
             zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Der Name darf nicht leer sein.'));
         }
-        datenAendern(function (array $d) use ($id, $name, $notiz): array {
+        datenAendern(function (array $d) use ($id, $name, $notiz, $kontakt): array {
             foreach ($d['weingueter'] as $w) {
                 if ($w['id'] !== $id && mb_strtolower($w['name']) === mb_strtolower($name)) {
                     zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Ein anderes Weingut heißt schon so.'));
@@ -311,8 +330,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             foreach ($d['weingueter'] as &$w) {
                 if ($w['id'] === $id) {
-                    $w['name']  = $name;
-                    $w['notiz'] = $notiz;
+                    $w['name']    = $name;
+                    $w['notiz']   = $notiz;
+                    $w['kontakt'] = $kontakt;
                 }
             }
             return $d;
@@ -392,7 +412,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($aktion === 'champagner_weingut') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $wid = (string)($_POST['weingut_id'] ?? '');
-        datenAendern(function (array $d) use ($cid, $wid): array {
+        $weingutNeu = mb_substr(trim((string)($_POST['weingut_neu'] ?? '')), 0, 60);
+        $neueWeingutId = bin2hex(random_bytes(4));
+        datenAendern(function (array $d) use ($cid, &$wid, $weingutNeu, $neueWeingutId): array {
+            if ($weingutNeu !== '') {
+                $wid = '';
+                foreach ($d['weingueter'] as $w) {
+                    if (mb_strtolower($w['name']) === mb_strtolower($weingutNeu)) {
+                        $wid = $w['id'];
+                        break;
+                    }
+                }
+                if ($wid === '') {
+                    $d['weingueter'][] = ['id' => $neueWeingutId, 'name' => $weingutNeu, 'notiz' => '', 'zeit' => time()];
+                    $wid = $neueWeingutId;
+                }
+            }
             if ($wid !== '') {
                 $gefunden = false;
                 foreach ($d['weingueter'] as $w) {
@@ -412,7 +447,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
+        unset($_SESSION['erkannt']);
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($wid === '' ? 'Zuordnung entfernt.' : 'Weingut zugeordnet.'));
+    }
+
+    if ($aktion === 'weingut_kontakt') {
+        $id = (string)($_POST['id'] ?? '');
+        $weingut = weingutHolen(datenLaden(), $id);
+        if ($weingut === null) {
+            zurueck('?weingueter=1&fehler=' . rawurlencode('Dieses Weingut existiert nicht (mehr).'));
+        }
+        $kontakt = weingutKontaktErmitteln($weingut['name']);
+        if ($kontakt === '') {
+            zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Es wurden keine verlässlichen Kontaktdaten gefunden – du kannst sie unten von Hand eintragen.'));
+        }
+        datenAendern(function (array $d) use ($id, $kontakt): array {
+            foreach ($d['weingueter'] as &$w) {
+                if ($w['id'] === $id) {
+                    $w['kontakt'] = $kontakt;
+                }
+            }
+            return $d;
+        });
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Kontaktdaten gefunden und eingetragen – bitte kurz auf Plausibilität prüfen.'));
     }
 
     if ($aktion === 'champagner_loeschen') {
@@ -768,6 +825,59 @@ function etikettErkennen(string $fotoName): array
         }
     }
     return $leer;
+}
+
+/**
+ * Kontaktdaten eines Weinguts per KI-Websuche ermitteln.
+ * Liefert einen kurzen Textblock oder '' (kein Schlüssel/kein Treffer).
+ */
+function weingutKontaktErmitteln(string $name): string
+{
+    $keyDatei = __DIR__ . '/daten/apikey.php';
+    if (!is_file($keyDatei)) {
+        return '';
+    }
+    $key = (string)(require $keyDatei);
+    if ($key === '' || !function_exists('curl_init')) {
+        return '';
+    }
+    @set_time_limit(120);
+    $body = json_encode([
+        'model'      => 'claude-haiku-4-5',
+        'max_tokens' => 700,
+        'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 3]],
+        'messages'   => [[
+            'role'    => 'user',
+            'content' => 'Suche im Web die Kontaktdaten des Champagner-Erzeugers/Weinguts "' . $name . '" (Region Champagne, Frankreich). '
+                . 'Antworte NUR mit einem kurzen Textblock in diesem Format (Zeilen ohne gesicherte Angabe einfach weglassen, keine Einleitung, keine Erklärungen):' . "\n"
+                . 'Adresse: …' . "\n" . 'Telefon: …' . "\n" . 'E-Mail: …' . "\n" . 'Website: …' . "\n" . 'Besuch/Verkostung: …',
+        ]],
+    ]);
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $body,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_HTTPHEADER     => [
+            'content-type: application/json',
+            'x-api-key: ' . $key,
+            'anthropic-version: 2023-06-01',
+        ],
+    ]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return '';
+    }
+    $j = json_decode($antwort, true);
+    $letzterText = '';
+    foreach ((array)($j['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text' && trim((string)($block['text'] ?? '')) !== '') {
+            $letzterText = trim((string)$block['text']);
+        }
+    }
+    return mb_substr($letzterText, 0, 900);
 }
 
 /** Anmeldeformular; $weiter = Query der aktuellen Seite (z. B. "?ergebnis=abc"), um dorthin zurückzukehren. */
@@ -1153,21 +1263,34 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         </div>
       </div>
 
+      <?php
+        $fotos = fotosFuer($aktiverChampagner['id']);
+        $erkanntVorschlag = null;
+        if (($_SESSION['erkannt']['cid'] ?? '') === $aktiverChampagner['id']) {
+            $erkanntVorschlag = $_SESSION['erkannt'];
+        }
+      ?>
       <?php if ($eingeloggt): ?>
         <div class="card">
           <h2>Name &amp; Preis bearbeiten</h2>
+          <?php if ($fotos !== []): ?>
+            <form method="post" style="margin-bottom:0.9rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="erkennen_bestehend">
+              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+              <button class="knopf zweit" type="submit">📷&nbsp; Etikett vom Foto erkennen</button>
+            </form>
+          <?php endif; ?>
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="champagner_bearbeiten">
             <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-            <input type="text" name="name" value="<?= e($aktiverChampagner['name']) ?>" maxlength="60" required>
+            <input type="text" name="name" value="<?= e($erkanntVorschlag !== null && $erkanntVorschlag['name'] !== '' ? $erkanntVorschlag['name'] : $aktiverChampagner['name']) ?>" maxlength="60" required>
             <input type="text" name="preis" value="<?= e((string)($aktiverChampagner['preis'] ?? '')) ?>" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
             <button class="knopf zweit" type="submit">Speichern</button>
           </form>
         </div>
       <?php endif; ?>
-
-      <?php $fotos = fotosFuer($aktiverChampagner['id']); ?>
       <div class="card">
         <h2>Fotos</h2>
         <?php if ($fotos === []): ?>
@@ -1280,21 +1403,41 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         <?php else: ?>
           <p style="color:var(--muted); font-style:italic;">Noch keinem Weingut zugeordnet.</p>
         <?php endif; ?>
-        <?php if ($eingeloggt && $daten['weingueter'] !== []): ?>
+        <?php if ($eingeloggt): ?>
+          <?php
+            // Von der Erkennung vorgeschlagenes Weingut: vorhandenes vorauswählen, sonst als neues vorschlagen
+            $vorschlagWeingutId = (string)($aktiverChampagner['weingut_id'] ?? '');
+            $vorschlagWeingutNeu = '';
+            if ($erkanntVorschlag !== null && $erkanntVorschlag['weingut'] !== '') {
+                $gefundenes = null;
+                foreach ($daten['weingueter'] as $w) {
+                    if (mb_strtolower($w['name']) === mb_strtolower($erkanntVorschlag['weingut'])) {
+                        $gefundenes = $w;
+                        break;
+                    }
+                }
+                if ($gefundenes !== null) {
+                    $vorschlagWeingutId = $gefundenes['id'];
+                } else {
+                    $vorschlagWeingutNeu = $erkanntVorschlag['weingut'];
+                }
+            }
+          ?>
           <form method="post" style="margin-top:0.6rem;">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="champagner_weingut">
             <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-            <select name="weingut_id">
-              <option value="">– kein Weingut –</option>
-              <?php foreach ($daten['weingueter'] as $w): ?>
-                <option value="<?= e($w['id']) ?>" <?= ($aktiverChampagner['weingut_id'] ?? '') === $w['id'] ? 'selected' : '' ?>><?= e($w['name']) ?></option>
-              <?php endforeach; ?>
-            </select>
+            <?php if ($daten['weingueter'] !== []): ?>
+              <select name="weingut_id">
+                <option value="">– kein Weingut –</option>
+                <?php foreach ($daten['weingueter'] as $w): ?>
+                  <option value="<?= e($w['id']) ?>" <?= $vorschlagWeingutId === $w['id'] ? 'selected' : '' ?>><?= e($w['name']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php endif; ?>
+            <input type="text" name="weingut_neu" value="<?= e($vorschlagWeingutNeu) ?>" placeholder="… oder neues Weingut eintragen" maxlength="60">
             <button class="knopf zweit" type="submit">Zuordnung speichern</button>
           </form>
-        <?php elseif ($eingeloggt): ?>
-          <p class="anzahl">Lege zuerst unter <a href="?weingueter=1">Weingüter</a> eines an.</p>
         <?php endif; ?>
       </div>
 
@@ -1515,8 +1658,28 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
             <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
             <input type="text" name="name" value="<?= e($aktivesWeingut['name']) ?>" maxlength="60" required>
             <textarea name="notiz" maxlength="1000" rows="4" placeholder="Notiz zum Weingut …"><?= e($wNotiz) ?></textarea>
+            <textarea name="kontakt" maxlength="900" rows="4" placeholder="Kontaktdaten (Adresse, Telefon, Website …)"><?= e(trim((string)($aktivesWeingut['kontakt'] ?? ''))) ?></textarea>
             <button class="knopf zweit" type="submit">Speichern</button>
           </form>
+        <?php endif; ?>
+      </div>
+
+      <div class="card">
+        <h2>Kontakt</h2>
+        <?php $wKontakt = trim((string)($aktivesWeingut['kontakt'] ?? '')); ?>
+        <?php if ($wKontakt !== ''): ?>
+          <p><?= nl2br(e($wKontakt)) ?></p>
+        <?php else: ?>
+          <p style="color:var(--muted); font-style:italic;">Noch keine Kontaktdaten hinterlegt.</p>
+        <?php endif; ?>
+        <?php if ($eingeloggt): ?>
+          <form method="post" style="margin-top:0.8rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="weingut_kontakt">
+            <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+            <button class="knopf zweit" type="submit">🔎&nbsp; Kontaktdaten automatisch suchen</button>
+          </form>
+          <p class="anzahl" style="margin-top:0.4rem;">Die Suche dauert bis zu einer halben Minute; das Ergebnis kannst du oben im Bearbeiten-Feld anpassen.</p>
         <?php endif; ?>
       </div>
 
