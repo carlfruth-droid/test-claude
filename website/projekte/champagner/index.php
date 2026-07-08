@@ -236,7 +236,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($fotos === []) {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Kein Foto vorhanden – bitte zuerst ein Etikett-Foto hochladen.'));
         }
-        $erkannt = etikettErkennen($fotos[0]);
+        $gewaehlt = basename((string)($_POST['foto'] ?? ''));
+        $fotoName = in_array($gewaehlt, $fotos, true) ? $gewaehlt : $fotos[0];
+        $erkannt = etikettErkennen($fotoName);
         if ($erkannt['name'] === '' && $erkannt['weingut'] === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Auf dem Foto war kein Etikett zu erkennen – am besten ein neues Foto direkt vom Etikett hochladen und nochmal versuchen.'));
         }
@@ -1110,6 +1112,16 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer;
       background: rgba(0,0,0,0.55); color: #fff; font-size: 0.85rem;
     }
+    .foto-wahl { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .foto-wahl-item input { display: none; }
+    .foto-wahl-item img {
+      width: 72px; height: 72px; object-fit: cover; border-radius: 8px;
+      border: 2px solid var(--border); cursor: pointer; display: block;
+    }
+    .foto-wahl-item input:checked + img {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent);
+    }
     .notiz { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
     .notiz:last-of-type { border-bottom: none; }
     .notiz b { font-weight: normal; color: var(--accent); }
@@ -1287,6 +1299,17 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="erkennen_bestehend">
               <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+              <?php if (count($fotos) > 1): ?>
+                <p class="anzahl" style="margin-bottom:0.4rem;">Welches Foto zeigt das Etikett? Antippen:</p>
+                <div class="foto-wahl">
+                  <?php foreach ($fotos as $i => $f): ?>
+                    <label class="foto-wahl-item">
+                      <input type="radio" name="foto" value="<?= e($f) ?>"<?= $i === 0 ? ' checked' : '' ?>>
+                      <img src="<?= e(thumbUrl($f)) ?>" alt="">
+                    </label>
+                  <?php endforeach; ?>
+                </div>
+              <?php endif; ?>
               <button class="knopf zweit" type="submit">📷&nbsp; Etikett vom Foto erkennen</button>
             </form>
           <?php endif; ?>
