@@ -1359,17 +1359,34 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           </div>
         </form>
       <?php else: ?>
-        <form method="post" enctype="multipart/form-data" class="card">
+        <form method="post" enctype="multipart/form-data" class="card" id="schnellfoto">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="schnell_foto">
           <h2>1. Etikett fotografieren</h2>
-          <p style="margin-bottom:0.8rem;">Mach ein Foto vom Etikett der Flasche – gut beleuchtet und möglichst gerade.</p>
-          <input type="file" name="fotos[]" accept="image/*" capture="environment" required>
-          <div class="knopfreihe" style="margin-top:0.4rem;">
-            <button class="knopf" type="submit">Weiter</button>
-            <a class="knopf zweit" href="?neu=2">Ohne Foto weiter</a>
+          <p style="margin-bottom:0.9rem;">Mach ein Foto vom Etikett – oder wähl ein vorhandenes Bild aus. Danach geht es automatisch weiter.</p>
+          <input type="file" name="fotos[]" accept="image/*" capture="environment" id="foto-kamera" style="display:none;">
+          <input type="file" name="fotos[]" accept="image/*" id="foto-galerie" style="display:none;">
+          <div class="knopfreihe">
+            <label class="knopf" for="foto-kamera" id="kamera-label">📷&nbsp; Foto aufnehmen</label>
+            <label class="knopf zweit" for="foto-galerie" id="galerie-label">🖼️&nbsp; Aus Galerie wählen</label>
+            <a class="knopf zweit" href="?neu=2">Ohne Foto</a>
           </div>
+          <noscript>
+            <p style="margin-top:0.8rem;">Bitte Datei oben wählen und dann:</p>
+            <button class="knopf" type="submit">Weiter</button>
+          </noscript>
         </form>
+        <script>
+          ['foto-kamera', 'foto-galerie'].forEach(function (id) {
+            var input = document.getElementById(id);
+            input.addEventListener('change', function () {
+              if (!input.files || input.files.length === 0) { return; }
+              document.getElementById('kamera-label').textContent = 'Wird hochgeladen …';
+              document.getElementById('galerie-label').style.display = 'none';
+              document.getElementById('schnellfoto').submit();
+            });
+          });
+        </script>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'fotos'): ?>
