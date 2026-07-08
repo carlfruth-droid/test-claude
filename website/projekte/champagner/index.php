@@ -1331,6 +1331,25 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer;
       background: rgba(0,0,0,0.55); color: #fff; font-size: 0.85rem;
     }
+    /* Listenansicht: Kopf bleibt stehen, nur die Einträge scrollen */
+    body.listenansicht { height: 100vh; height: 100dvh; overflow: hidden; }
+    body.listenansicht main {
+      flex: 1 1 auto; min-height: 0;
+      display: flex; flex-direction: column;
+      padding-bottom: 0.5rem;
+    }
+    body.listenansicht main > * { flex-shrink: 0; }
+    body.listenansicht h1 { font-size: clamp(1.4rem, 4vw, 1.9rem); }
+    body.listenansicht .untertitel { margin-bottom: 1rem; }
+    body.listenansicht .liste-scroll {
+      flex: 1 1 auto; min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 0 -0.3rem;
+      padding: 0.3rem 0.3rem 2rem;
+    }
+    body.listenansicht footer { display: none; }
+
     .foto-wahl { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
     .foto-wahl-item input { display: none; }
     .foto-wahl-item img {
@@ -1378,7 +1397,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     footer { text-align: center; padding: 2rem 1.5rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--border); }
   </style>
 </head>
-<body>
+<body<?= in_array($ansicht, ['liste', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
   <header class="site-header">
     <a class="brand" href="/"><strong>fruthzeug</strong>.de</a>
     <input type="checkbox" id="nav-toggle" aria-hidden="true">
@@ -1900,7 +1919,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       </div>
 
       <a class="knopf gross" href="?wneu=1">📷&nbsp; Neues Weingut per Foto</a>
-
+      <div class="liste-scroll">
       <?php if ($daten['weingueter'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Weingut angelegt – unten das erste eintragen!</p></div>
       <?php endif; ?>
@@ -1953,6 +1972,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         <?php else: ?>
           <?= loginFormular('?weingueter=1') ?>
         <?php endif; ?>
+      </div>
       </div>
 
     <?php elseif ($ansicht === 'weingut'): ?>
@@ -2077,6 +2097,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       </div>
 
       <a class="knopf gross" href="?neu=1">📷&nbsp; Neue Flasche erfassen</a>
+      <div class="liste-scroll">
       <?php if ($daten['champagner'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Champagner angelegt – oben auf „Neue Flasche erfassen" tippen!</p></div>
       <?php endif; ?>
@@ -2132,6 +2153,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
           <?= loginFormular() ?>
         </div>
       <?php endif; ?>
+      </div>
     <?php endif; ?>
   </main>
 
