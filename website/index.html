@@ -213,6 +213,7 @@
       <a href="/#projekte">Projekte</a>
       <a href="/projekte/champagner/">Champagne 26</a>
       <a href="mailto:post@fruthzeug.de">Kontakt</a>
+      <a href="#" id="neu-laden">&#10227; Neu laden</a>
     </nav>
   </header>
 
@@ -247,5 +248,13 @@
   <footer>
     <p>&copy; 2026 Carl &middot; Privat &amp; nicht-kommerziell</p>
   </footer>
+  <script>
+    document.getElementById('neu-laden').addEventListener('click', function (e) {
+      e.preventDefault();
+      var u = new URL(location.href);
+      u.searchParams.set('_r', Date.now());
+      location.replace(u.toString());
+    });
+  </script>
 </body>
 </html>

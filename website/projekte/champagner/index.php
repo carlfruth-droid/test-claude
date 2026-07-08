@@ -21,6 +21,7 @@ session_set_cookie_params([
 session_start();
 date_default_timezone_set('Europe/Berlin');
 @ini_set('memory_limit', '512M'); // große Handyfotos beim Verkleinern verarbeiten können
+header('Cache-Control: no-cache, must-revalidate'); // Handys sollen immer die frische Version holen
 
 // Passwort zum Mitmachen (Bewerten und Champagner anlegen).
 // Zum Ändern: einfach den Text zwischen den Anführungszeichen austauschen.
@@ -1495,6 +1496,7 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       <a href="/#projekte">Projekte</a>
       <a href="/projekte/champagner/" aria-current="page">Champagne 26</a>
       <a href="mailto:post@fruthzeug.de">Kontakt</a>
+      <a href="#" id="neu-laden">&#10227; Neu laden</a>
     </nav>
   </header>
 
@@ -2253,6 +2255,14 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
   </div>
 
   <script>
+    // "Neu laden": Seite garantiert frisch am Zwischenspeicher vorbei holen
+    document.getElementById('neu-laden').addEventListener('click', function (e) {
+      e.preventDefault();
+      var u = new URL(location.href);
+      u.searchParams.set('_r', Date.now());
+      location.replace(u.toString());
+    });
+
     // Fotos in der Großansicht öffnen statt die Seite zu verlassen
     (function () {
       var box = document.getElementById('grossansicht');
