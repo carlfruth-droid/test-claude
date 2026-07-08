@@ -505,7 +505,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($standort !== '') {
                 $kontakt = 'Standort (aus Foto-GPS): ' . $standort . "\n"
                     . 'Karte: https://www.openstreetmap.org/?mlat=' . round($gps[0], 6) . '&mlon=' . round($gps[1], 6) . '#map=17/' . round($gps[0], 6) . '/' . round($gps[1], 6);
-                $name = weingutNameErmitteln($standort, $gps[0], $gps[1]);
+                $kandidaten = weingutKandidatenOSM($gps[0], $gps[1]);
+                if ($kandidaten !== [] && $kandidaten[0]['dist'] <= 60) {
+                    // Man steht praktisch davor – der OSM-Eintrag ist es
+                    $name = mb_substr($kandidaten[0]['name'], 0, 60);
+                } else {
+                    $name = weingutNameErmitteln($standort, $gps[0], $gps[1], $kandidaten);
+                    if ($name === '' && $kandidaten !== []) {
+                        // Lieber der nächstgelegene Kandidat als gar kein Vorschlag
+                        $name = mb_substr($kandidaten[0]['name'], 0, 60);
+                    }
+                }
             }
         } else {
             $hinweis = 'Im Foto stecken keine GPS-Daten (beim iPhone: im Auswahldialog „Optionen“ → „Standort“ einschalten). Du kannst den Namen unten von Hand eintragen.';
@@ -1036,8 +1046,55 @@ function standortErmitteln(float $lat, float $lon): string
     return $name !== '' && !str_starts_with($anzeige, $name) ? $name . ', ' . $anzeige : $anzeige;
 }
 
+/** In OpenStreetMap verzeichnete Weingüter/Weinhändler im Umkreis (sortiert nach Entfernung). */
+function weingutKandidatenOSM(float $lat, float $lon): array
+{
+    if (!function_exists('curl_init')) {
+        return [];
+    }
+    $q = '[out:json][timeout:15];('
+        . 'nwr(around:200,' . $lat . ',' . $lon . ')["craft"="winery"];'
+        . 'nwr(around:200,' . $lat . ',' . $lon . ')["shop"~"^(wine|alcohol)$"];'
+        . 'nwr(around:200,' . $lat . ',' . $lon . ')["name"~"[Cc]hampagne"];'
+        . ');out center tags 20;';
+    $ch = curl_init('https://overpass-api.de/api/interpreter');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => 'data=' . rawurlencode($q),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 20,
+        CURLOPT_HTTPHEADER     => ['User-Agent: fruthzeug.de Champagne26 (post@fruthzeug.de)'],
+    ]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return [];
+    }
+    $j = json_decode($antwort, true);
+    $kandidaten = [];
+    foreach ((array)($j['elements'] ?? []) as $e) {
+        $name = trim((string)($e['tags']['name'] ?? ''));
+        $eLat = (float)($e['lat'] ?? ($e['center']['lat'] ?? 0));
+        $eLon = (float)($e['lon'] ?? ($e['center']['lon'] ?? 0));
+        if ($name === '' || ($eLat === 0.0 && $eLon === 0.0)) {
+            continue;
+        }
+        // grobe Distanz in Metern (für kleine Abstände ausreichend)
+        $dx = ($eLon - $lon) * cos(deg2rad($lat)) * 111320;
+        $dy = ($eLat - $lat) * 110540;
+        $dist = (int)round(sqrt($dx * $dx + $dy * $dy));
+        // Riesige Regions-Polygone (z. B. Landschaft "Champagne crayeuse") aussortieren
+        if ($dist > 250) {
+            continue;
+        }
+        $kandidaten[] = ['name' => $name, 'dist' => $dist];
+    }
+    usort($kandidaten, static fn(array $a, array $b): int => $a['dist'] <=> $b['dist']);
+    return $kandidaten;
+}
+
 /** Per KI-Websuche ermitteln, welcher Erzeuger an einem Standort sitzt; '' wenn unklar. */
-function weingutNameErmitteln(string $standort, float $lat, float $lon): string
+function weingutNameErmitteln(string $standort, float $lat, float $lon, array $kandidaten = []): string
 {
     $keyDatei = __DIR__ . '/daten/apikey.php';
     if ($standort === '' || !is_file($keyDatei)) {
@@ -1048,15 +1105,24 @@ function weingutNameErmitteln(string $standort, float $lat, float $lon): string
         return '';
     }
     @set_time_limit(120);
+    $hinweise = '';
+    if ($kandidaten !== []) {
+        $teile = array_map(
+            static fn(array $k): string => '„' . $k['name'] . '“ (' . $k['dist'] . ' m entfernt)',
+            array_slice($kandidaten, 0, 5)
+        );
+        $hinweise = ' Laut OpenStreetMap gibt es in der Nähe: ' . implode(', ', $teile) . '.';
+    }
     $body = json_encode([
         'model'      => 'claude-haiku-4-5',
         'max_tokens' => 400,
         'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 3]],
         'messages'   => [[
             'role'    => 'user',
-            'content' => 'An diesem Ort wurde ein Foto aufgenommen: "' . $standort . '" (GPS ' . round($lat, 5) . ', ' . round($lon, 5) . '). '
-                . 'Welcher Champagner-Erzeuger (Weingut/Champagnerhaus) hat genau dort seinen Sitz oder seine Verkaufsstelle? Suche im Web. '
-                . 'Antworte NUR mit JSON in genau dieser Form: {"weingut":"..."} – wenn du es nicht sicher bestimmen kannst, gib {"weingut":""} zurück.',
+            'content' => 'An diesem Ort wurde ein Foto aufgenommen: "' . $standort . '" (GPS ' . round($lat, 5) . ', ' . round($lon, 5) . ').' . $hinweise
+                . ' Welcher Champagner-Erzeuger (Weingut/Champagnerhaus) hat an genau dieser Adresse oder unmittelbar daneben seinen Sitz bzw. seine Verkaufsstelle? '
+                . 'In so einem kleinen Umkreis gibt es in der Regel genau einen Erzeuger – suche im Web nach der Adresse und nenne den wahrscheinlichsten, auch wenn du nicht hundertprozentig sicher bist. '
+                . 'Antworte NUR mit JSON in genau dieser Form: {"weingut":"..."} – leer nur dann, wenn wirklich nichts dafür spricht, dass dort ein Erzeuger sitzt.',
         ]],
     ]);
     $ch = curl_init('https://api.anthropic.com/v1/messages');
