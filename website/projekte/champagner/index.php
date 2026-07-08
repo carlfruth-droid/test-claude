@@ -484,6 +484,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($wid === '' ? 'Zuordnung entfernt.' : 'Weingut zugeordnet.'));
     }
 
+    if ($aktion === 'weingut_foto_neu') {
+        // Schritt 1: Foto sichern, GPS auslesen, Standort und Erzeuger ermitteln
+        $praefix = 'wneu-' . bin2hex(random_bytes(4));
+        [$hochgeladen, ] = fotoUploadVerarbeiten($BILD_TYPEN, $praefix);
+        $fotoName = '';
+        if ($hochgeladen > 0) {
+            $treffer = glob(BILDER_DIR . '/' . $praefix . '-*') ?: [];
+            $fotoName = $treffer !== [] ? basename($treffer[0]) : '';
+        }
+        if ($fotoName === '') {
+            zurueck('?wneu=1&fehler=' . rawurlencode('Das Foto kam nicht an – bitte nochmal versuchen (nur JPG/PNG, max. 25 MB).'));
+        }
+        $name = '';
+        $kontakt = '';
+        $hinweis = '';
+        $gps = gpsAusFoto(BILDER_DIR . '/' . $fotoName);
+        if ($gps !== null) {
+            $standort = standortErmitteln($gps[0], $gps[1]);
+            if ($standort !== '') {
+                $kontakt = 'Standort (aus Foto-GPS): ' . $standort . "\n"
+                    . 'Karte: https://www.openstreetmap.org/?mlat=' . round($gps[0], 6) . '&mlon=' . round($gps[1], 6) . '#map=17/' . round($gps[0], 6) . '/' . round($gps[1], 6);
+                $name = weingutNameErmitteln($standort, $gps[0], $gps[1]);
+            }
+        } else {
+            $hinweis = 'Im Foto stecken keine GPS-Daten (beim iPhone: im Auswahldialog „Optionen“ → „Standort“ einschalten). Du kannst den Namen unten von Hand eintragen.';
+        }
+        $_SESSION['wneu'] = ['foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt];
+        zurueck('?wneu=2' . ($hinweis !== '' ? '&fehler=' . rawurlencode($hinweis) : ''));
+    }
+
+    if ($aktion === 'weingut_foto_anlegen') {
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 60);
+        $notiz = mb_substr(trim((string)($_POST['notiz'] ?? '')), 0, 1000);
+        $kontakt = mb_substr(trim((string)($_POST['kontakt'] ?? '')), 0, 900);
+        $foto = basename((string)($_POST['foto'] ?? ''));
+        if ($name === '') {
+            zurueck('?wneu=2&fehler=' . rawurlencode('Bitte einen Namen für das Weingut angeben.'));
+        }
+        $neueId = bin2hex(random_bytes(4));
+        datenAendern(function (array $d) use ($name, $notiz, $kontakt, $neueId): array {
+            foreach ($d['weingueter'] as $w) {
+                if (mb_strtolower($w['name']) === mb_strtolower($name)) {
+                    zurueck('?wneu=2&fehler=' . rawurlencode('Dieses Weingut gibt es schon in der Liste.'));
+                }
+            }
+            $d['weingueter'][] = ['id' => $neueId, 'name' => $name, 'notiz' => $notiz, 'kontakt' => $kontakt, 'zeit' => time()];
+            return $d;
+        });
+        if ($foto !== '' && preg_match('/^wneu-[a-f0-9]{8}-.*\.(jpe?g|png|gif|webp)$/i', $foto) && is_file(BILDER_DIR . '/' . $foto)) {
+            $endung = strtolower(pathinfo($foto, PATHINFO_EXTENSION));
+            $neuerName = sprintf('wg-%s-%s-%s.%s', $neueId, date('Ymd-His'), bin2hex(random_bytes(3)), $endung);
+            if (rename(BILDER_DIR . '/' . $foto, BILDER_DIR . '/' . $neuerName)) {
+                thumbLoeschen($foto);
+                thumbErzeugen(BILDER_DIR . '/' . $neuerName, thumbVerzeichnis() . '/' . $neuerName . '.jpg');
+            }
+        }
+        unset($_SESSION['wneu']);
+        zurueck('?weingut=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt.'));
+    }
+
     if ($aktion === 'weingut_kontakt') {
         $id = (string)($_POST['id'] ?? '');
         $weingut = weingutHolen(datenLaden(), $id);
@@ -976,6 +1036,69 @@ function standortErmitteln(float $lat, float $lon): string
     return $name !== '' && !str_starts_with($anzeige, $name) ? $name . ', ' . $anzeige : $anzeige;
 }
 
+/** Per KI-Websuche ermitteln, welcher Erzeuger an einem Standort sitzt; '' wenn unklar. */
+function weingutNameErmitteln(string $standort, float $lat, float $lon): string
+{
+    $keyDatei = __DIR__ . '/daten/apikey.php';
+    if ($standort === '' || !is_file($keyDatei)) {
+        return '';
+    }
+    $key = (string)(require $keyDatei);
+    if ($key === '' || !function_exists('curl_init')) {
+        return '';
+    }
+    @set_time_limit(120);
+    $body = json_encode([
+        'model'      => 'claude-haiku-4-5',
+        'max_tokens' => 400,
+        'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 3]],
+        'messages'   => [[
+            'role'    => 'user',
+            'content' => 'An diesem Ort wurde ein Foto aufgenommen: "' . $standort . '" (GPS ' . round($lat, 5) . ', ' . round($lon, 5) . '). '
+                . 'Welcher Champagner-Erzeuger (Weingut/Champagnerhaus) hat genau dort seinen Sitz oder seine Verkaufsstelle? Suche im Web. '
+                . 'Antworte NUR mit JSON in genau dieser Form: {"weingut":"..."} – wenn du es nicht sicher bestimmen kannst, gib {"weingut":""} zurück.',
+        ]],
+    ]);
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $body,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_HTTPHEADER     => [
+            'content-type: application/json',
+            'x-api-key: ' . $key,
+            'anthropic-version: 2023-06-01',
+        ],
+    ]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return '';
+    }
+    $j = json_decode($antwort, true);
+    $bloecke = (array)($j['content'] ?? []);
+    $letzteSuche = -1;
+    foreach ($bloecke as $i => $block) {
+        if (($block['type'] ?? '') === 'web_search_tool_result') {
+            $letzteSuche = $i;
+        }
+    }
+    $text = '';
+    foreach ($bloecke as $i => $block) {
+        if ($i > $letzteSuche && ($block['type'] ?? '') === 'text') {
+            $text .= (string)($block['text'] ?? '');
+        }
+    }
+    if (preg_match('/\{.*\}/s', $text, $m)) {
+        $e = json_decode($m[0], true);
+        if (is_array($e)) {
+            return mb_substr(trim((string)($e['weingut'] ?? '')), 0, 60);
+        }
+    }
+    return '';
+}
+
 /** Kontakt-Text fürs Anzeigen: escapen, Links klickbar machen, Zeilenumbrüche. */
 function verlinken(string $text): string
 {
@@ -1040,6 +1163,8 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'fotos';
 } elseif (isset($_GET['neu'])) {
     $ansicht = 'neu';
+} elseif (isset($_GET['wneu'])) {
+    $ansicht = 'wneu';
 }
 
 $personVorschlag = (string)($_SESSION['person'] ?? '');
@@ -1282,6 +1407,10 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       <p class="zurueck"><a href="./">&larr; Zur&uuml;ck zur Champagner-Liste</a></p>
       <h1>Neue Flasche 📷</h1>
       <p class="untertitel">Fotografieren – erkennen – bewerten.</p>
+    <?php elseif ($ansicht === 'wneu'): ?>
+      <p class="zurueck"><a href="?weingueter=1">&larr; Zur&uuml;ck zur Weingut-Liste</a></p>
+      <h1>Neues Weingut 📷</h1>
+      <p class="untertitel">Fotografieren – Standort erkennen – anlegen.</p>
     <?php elseif ($ansicht === 'weingut'): ?>
       <p class="zurueck"><a href="?weingueter=1">&larr; Zur&uuml;ck zur Weingut-Liste</a></p>
       <h1><?= e($aktivesWeingut['name']) ?></h1>
@@ -1658,6 +1787,64 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         </script>
       <?php endif; ?>
 
+    <?php elseif ($ansicht === 'wneu'): ?>
+      <!-- ==================== WEINGUT-SCHNELL-ERFASSUNG ==================== -->
+      <?php if (!$eingeloggt): ?>
+        <div class="card"><?= loginFormular('?wneu=1') ?></div>
+      <?php elseif ((int)$_GET['wneu'] === 2): ?>
+        <?php $wneu = $_SESSION['wneu'] ?? ['foto' => '', 'name' => '', 'kontakt' => '']; ?>
+        <?php if ($wneu['name'] !== ''): ?>
+          <div class="hinweis ok">Erzeuger am Standort gefunden – bitte kurz prüfen und ggf. korrigieren.</div>
+        <?php elseif ($wneu['kontakt'] !== ''): ?>
+          <div class="hinweis ok">Standort aus dem Foto erkannt – der Name ließ sich nicht sicher bestimmen, bitte eintragen.</div>
+        <?php endif; ?>
+        <form method="post" class="card">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="weingut_foto_anlegen">
+          <input type="hidden" name="foto" value="<?= e($wneu['foto']) ?>">
+          <?php if ($wneu['foto'] !== ''): ?>
+            <img src="<?= e(thumbUrl($wneu['foto'])) ?>" alt="" style="max-width:180px; border-radius:10px; border:1px solid var(--border); display:block; margin-bottom:1rem;">
+          <?php endif; ?>
+          <h2>Weingut</h2>
+          <input type="text" name="name" value="<?= e($wneu['name']) ?>" placeholder="Name des Weinguts" maxlength="60" required>
+          <textarea name="kontakt" maxlength="900" rows="4" placeholder="Kontakt/Standort (füllt sich aus dem Foto-GPS)"><?= e($wneu['kontakt']) ?></textarea>
+          <textarea name="notiz" maxlength="1000" rows="3" placeholder="Notiz, z. B. Besuch am … (optional)"></textarea>
+          <div class="knopfreihe" style="margin-top:0.6rem;">
+            <button class="knopf" type="submit">Weingut anlegen</button>
+            <a class="knopf zweit" href="?wneu=1">Anderes Foto</a>
+          </div>
+        </form>
+      <?php else: ?>
+        <form method="post" enctype="multipart/form-data" class="card" id="wneufoto">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="weingut_foto_neu">
+          <h2>1. Weingut fotografieren</h2>
+          <p style="margin-bottom:0.9rem;">Mach vor Ort ein Foto (Gebäude, Hof, Schild) – aus den GPS-Daten des Fotos ermitteln wir Standort und Erzeuger. Danach geht es automatisch weiter.</p>
+          <input type="file" name="fotos[]" accept="image/*" capture="environment" id="wfoto-kamera" style="display:none;">
+          <input type="file" name="fotos[]" accept="image/*" id="wfoto-galerie" style="display:none;">
+          <div class="knopfreihe">
+            <label class="knopf" for="wfoto-kamera" id="wkamera-label">📷&nbsp; Foto aufnehmen</label>
+            <label class="knopf zweit" for="wfoto-galerie" id="wgalerie-label">🖼️&nbsp; Aus Galerie wählen</label>
+            <a class="knopf zweit" href="?wneu=2">Ohne Foto</a>
+          </div>
+          <p class="anzahl" style="margin-top:0.8rem;">iPhone-Tipp: Im Auswahldialog oben „Optionen" → „Standort" einschalten, sonst fehlen die GPS-Daten.</p>
+          <noscript>
+            <button class="knopf" type="submit">Weiter</button>
+          </noscript>
+        </form>
+        <script>
+          ['wfoto-kamera', 'wfoto-galerie'].forEach(function (id) {
+            var input = document.getElementById(id);
+            input.addEventListener('change', function () {
+              if (!input.files || input.files.length === 0) { return; }
+              document.getElementById('wkamera-label').textContent = 'Wird hochgeladen und Standort ermittelt …';
+              document.getElementById('wgalerie-label').style.display = 'none';
+              document.getElementById('wneufoto').submit();
+            });
+          });
+        </script>
+      <?php endif; ?>
+
     <?php elseif ($ansicht === 'fotos'): ?>
       <!-- ==================== FOTOALBUM ==================== -->
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
@@ -1711,6 +1898,8 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
         <a class="knopf" href="?weingueter=1">Weingüter</a>
         <a class="knopf zweit" href="?fotos=1">Fotos</a>
       </div>
+
+      <a class="knopf gross" href="?wneu=1">📷&nbsp; Neues Weingut per Foto</a>
 
       <?php if ($daten['weingueter'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Weingut angelegt – unten das erste eintragen!</p></div>
