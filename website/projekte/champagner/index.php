@@ -871,13 +871,22 @@ function weingutKontaktErmitteln(string $name): string
         return '';
     }
     $j = json_decode($antwort, true);
-    $letzterText = '';
-    foreach ((array)($j['content'] ?? []) as $block) {
-        if (($block['type'] ?? '') === 'text' && trim((string)($block['text'] ?? '')) !== '') {
-            $letzterText = trim((string)$block['text']);
+    // Bei Websuchen zerfällt die Antwort in mehrere Textblöcke (Zitate) –
+    // alles hinter dem letzten Suchergebnis zusammensetzen.
+    $bloecke = (array)($j['content'] ?? []);
+    $letzteSuche = -1;
+    foreach ($bloecke as $i => $block) {
+        if (($block['type'] ?? '') === 'web_search_tool_result') {
+            $letzteSuche = $i;
         }
     }
-    return mb_substr($letzterText, 0, 900);
+    $teile = [];
+    foreach ($bloecke as $i => $block) {
+        if ($i > $letzteSuche && ($block['type'] ?? '') === 'text') {
+            $teile[] = (string)($block['text'] ?? '');
+        }
+    }
+    return mb_substr(trim(implode('', $teile)), 0, 900);
 }
 
 /** Anmeldeformular; $weiter = Query der aktuellen Seite (z. B. "?ergebnis=abc"), um dorthin zurückzukehren. */
