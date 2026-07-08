@@ -1426,6 +1426,26 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       border-color: var(--accent);
       box-shadow: 0 0 0 2px var(--accent);
     }
+    /* Großansicht (Lightbox) */
+    #grossansicht {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(0, 0, 0, 0.92);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.2rem;
+    }
+    #grossansicht[hidden] { display: none; }
+    #grossansicht img {
+      max-width: 100%; max-height: 100%;
+      object-fit: contain; border-radius: 6px;
+    }
+    #grossansicht .schliessen {
+      position: absolute; top: max(0.8rem, env(safe-area-inset-top)); right: 1rem;
+      background: rgba(255, 255, 255, 0.15); color: #fff;
+      border: none; border-radius: 50%;
+      width: 44px; height: 44px; font-size: 1.5rem; line-height: 1;
+      cursor: pointer;
+    }
+
     .notiz { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
     .notiz:last-of-type { border-bottom: none; }
     .notiz b { font-weight: normal; color: var(--accent); }
@@ -2227,7 +2247,35 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
     <p>&copy; 2026 Carl &middot; <a href="/">Zur&uuml;ck zur Startseite</a></p>
   </footer>
 
+  <div id="grossansicht" hidden>
+    <button class="schliessen" type="button" aria-label="Schließen">&#10005;</button>
+    <img src="" alt="">
+  </div>
+
   <script>
+    // Fotos in der Großansicht öffnen statt die Seite zu verlassen
+    (function () {
+      var box = document.getElementById('grossansicht');
+      var bild = box.querySelector('img');
+      document.querySelectorAll('.foto > a, .bild > a').forEach(function (link) {
+        link.addEventListener('click', function (e) {
+          e.preventDefault();
+          bild.src = link.getAttribute('href');
+          box.hidden = false;
+          document.body.style.overflow = 'hidden';
+        });
+      });
+      function schliessen() {
+        box.hidden = true;
+        bild.src = '';
+        document.body.style.overflow = '';
+      }
+      box.addEventListener('click', schliessen);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { schliessen(); }
+      });
+    })();
+
     // Beim Absenden sichtbar machen, dass gearbeitet wird (v. a. Foto-Upload)
     document.querySelectorAll('form').forEach(function (form) {
       form.addEventListener('submit', function (e) {
