@@ -1412,6 +1412,7 @@ if (isset($_GET['bewerten'])) {
 }
 
 $personVorschlag = (string)($_SESSION['person'] ?? '');
+$sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -1575,6 +1576,14 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer;
       background: rgba(0,0,0,0.55); color: #fff; font-size: 0.85rem;
     }
+    .sortier-leiste { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.7rem; }
+    .sortier-leiste a {
+      color: var(--muted); text-decoration: none;
+      padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border);
+      margin-left: 0.3rem; white-space: nowrap;
+    }
+    .sortier-leiste a.aktiv { color: var(--accent); border-color: var(--accent); }
+
     /* Listenansicht: Kopf bleibt stehen, nur die Einträge scrollen */
     body.listenansicht { height: 100vh; height: 100dvh; overflow: hidden; }
     body.listenansicht main {
@@ -2205,12 +2214,24 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       </div>
 
       <a class="knopf gross" href="?wneu=1">📷&nbsp; Neues Weingut per Foto</a>
+      <div class="sortier-leiste">Sortieren:
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=datum">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=name">Name</a>
+      </div>
       <div class="liste-scroll">
       <?php if ($daten['weingueter'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Weingut angelegt – unten das erste eintragen!</p></div>
       <?php endif; ?>
 
-      <?php foreach ($daten['weingueter'] as $w): ?>
+      <?php
+        $weingutListe = $daten['weingueter'];
+        if ($sortierung === 'name') {
+            usort($weingutListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
+        } else {
+            usort($weingutListe, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+        }
+      ?>
+      <?php foreach ($weingutListe as $w): ?>
         <?php
           $fotos = weingutFotos($w['id']);
           $anzahlChampagner = count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id']));
@@ -2404,21 +2425,23 @@ $personVorschlag = (string)($_SESSION['person'] ?? '');
       </div>
 
       <a class="knopf gross" href="?neu=1">📷&nbsp; Neue Flasche erfassen</a>
+      <div class="sortier-leiste">Sortieren:
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?sort=datum">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?sort=name">Name</a>
+      </div>
       <div class="liste-scroll">
       <?php if ($daten['champagner'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Champagner angelegt – oben auf „Neue Flasche erfassen" tippen!</p></div>
       <?php endif; ?>
 
       <?php
-        // Zuletzt verkostete (bzw. angelegte) Flaschen zuerst
-        $letzteAktivitaet = [];
-        foreach ($daten['bewertungen'] as $b) {
-            $cid = $b['champagner_id'];
-            $letzteAktivitaet[$cid] = max($letzteAktivitaet[$cid] ?? 0, (int)$b['zeit']);
-        }
         $champagnerListe = $daten['champagner'];
-        usort($champagnerListe, fn(array $x, array $y): int =>
-            max($letzteAktivitaet[$y['id']] ?? 0, (int)$y['zeit']) <=> max($letzteAktivitaet[$x['id']] ?? 0, (int)$x['zeit']));
+        if ($sortierung === 'name') {
+            usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
+        } else {
+            // Anlagedatum, neueste zuerst
+            usort($champagnerListe, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+        }
       ?>
       <?php foreach ($champagnerListe as $c): ?>
         <?php
