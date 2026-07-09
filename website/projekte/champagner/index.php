@@ -172,12 +172,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $treffer = glob(BILDER_DIR . '/' . $praefix . '-*') ?: [];
             $fotoName = $treffer !== [] ? basename($treffer[0]) : '';
         }
-        $erkannt = $fotoName !== '' ? etikettErkennen($fotoName) : ['name' => '', 'weingut' => ''];
-        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
         if ($fotoName === '') {
             zurueck('?neu=1&fehler=' . rawurlencode('Das Foto kam nicht an – bitte nochmal versuchen (nur JPG/PNG, max. 25 MB).'));
         }
-        zurueck('?neu=2');
+        $erkannt = etikettErkennen($fotoName);
+        // Passen die Foto-Koordinaten zu einem gespeicherten Weingut?
+        $gpsHinweis = '';
+        $gps = gpsAusFoto(BILDER_DIR . '/' . $fotoName);
+        if ($gps !== null) {
+            $passendes = weingutPerKoordinaten(datenLaden(), $gps[0], $gps[1]);
+            if ($passendes !== null) {
+                $gpsHinweis = 'Die Foto-Koordinaten entsprechen dem Weingut „' . $passendes['name'] . '“ – es ist unten vorausgewählt.';
+                if ($erkannt['weingut'] === '') {
+                    $erkannt['weingut'] = $passendes['name'];
+                }
+            }
+        }
+        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
+        zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
     }
 
     if ($aktion === 'schnell_anlegen') {
@@ -269,11 +281,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'foto_upload') {
         $cid = (string)($_POST['champagner_id'] ?? '');
-        if (champagnerHolen(datenLaden(), $cid) === null) {
+        $champagner = champagnerHolen(datenLaden(), $cid);
+        if ($champagner === null) {
             zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
         }
         [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, $cid);
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+        // Foto am Weingut aufgenommen? Dann bei fehlender Zuordnung automatisch zuordnen
+        $extra = '';
+        if ($hochgeladen > 0 && trim((string)($champagner['weingut_id'] ?? '')) === '') {
+            foreach (array_slice(fotosFuer($cid), 0, $hochgeladen) as $foto) {
+                $gps = gpsAusFoto(BILDER_DIR . '/' . $foto);
+                if ($gps === null) {
+                    continue;
+                }
+                $passendes = weingutPerKoordinaten(datenLaden(), $gps[0], $gps[1]);
+                if ($passendes !== null) {
+                    $wid = $passendes['id'];
+                    datenAendern(function (array $d) use ($cid, $wid): array {
+                        foreach ($d['champagner'] as &$c) {
+                            if ($c['id'] === $cid) {
+                                $c['weingut_id'] = $wid;
+                            }
+                        }
+                        return $d;
+                    });
+                    $extra = ' Die Foto-Koordinaten entsprechen dem Weingut „' . $passendes['name'] . '“ – es wurde automatisch zugeordnet.';
+                    break;
+                }
+            }
+        }
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt) . $extra));
     }
 
     if ($aktion === 'foto_loeschen') {
@@ -1103,6 +1140,36 @@ function standortErmitteln(float $lat, float $lon): string
         return '';
     }
     return $name !== '' && !str_starts_with($anzeige, $name) ? $name . ', ' . $anzeige : $anzeige;
+}
+
+/** Gespeicherte Koordinaten eines Weinguts (aus dem Karten-Link im Kontakt) oder null. */
+function weingutKoordinaten(array $w): ?array
+{
+    if (preg_match('/mlat=(-?[0-9.]+)&(?:amp;)?mlon=(-?[0-9.]+)/', (string)($w['kontakt'] ?? ''), $m)) {
+        return [(float)$m[1], (float)$m[2]];
+    }
+    return null;
+}
+
+/** Das gespeicherte Weingut, dessen Koordinaten zum Punkt passen (Umkreis in Metern), oder null. */
+function weingutPerKoordinaten(array $daten, float $lat, float $lon, int $maxMeter = 150): ?array
+{
+    $bestes = null;
+    $besteDistanz = PHP_INT_MAX;
+    foreach ($daten['weingueter'] as $w) {
+        $k = weingutKoordinaten($w);
+        if ($k === null) {
+            continue;
+        }
+        $dx = ($k[1] - $lon) * cos(deg2rad($lat)) * 111320;
+        $dy = ($k[0] - $lat) * 110540;
+        $dist = (int)round(sqrt($dx * $dx + $dy * $dy));
+        if ($dist <= $maxMeter && $dist < $besteDistanz) {
+            $bestes = $w;
+            $besteDistanz = $dist;
+        }
+    }
+    return $bestes;
 }
 
 /** In OpenStreetMap verzeichnete Weingüter/Weinhändler im Umkreis (sortiert nach Entfernung). */
