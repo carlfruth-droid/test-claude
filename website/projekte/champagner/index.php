@@ -188,7 +188,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         }
-        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
+        $vk = (string)($_POST['vk'] ?? '');
+        if ($vk !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vk)) {
+            $vk = '';
+        }
+        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'vk' => $vk];
         zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
     }
 
@@ -197,7 +201,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $preis = mb_substr(trim((string)($_POST['preis'] ?? '')), 0, 20);
         $weingutId = (string)($_POST['weingut_id'] ?? '');
         $weingutNeu = mb_substr(trim((string)($_POST['weingut_neu'] ?? '')), 0, 60);
-        $foto = basename((string)($_POST['foto'] ?? ''));
+        $vk = (string)($_POST['vk'] ?? '');
+        if ($vk !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vk)) {
+            $vk = '';
+        }
+        if ($weingutId === '' && $weingutNeu === '' && preg_match('/^[a-f0-9]{8}$/', $vk)) {
+            $weingutId = $vk; // Weingut aus dem Verkosten-Kontext übernehmen
+        }
         if ($name === '') {
             zurueck('?neu=2&fehler=' . rawurlencode('Bitte einen Namen für den Champagner angeben.'));
         }
@@ -230,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
         fotosUmhaengen((string)($_SESSION['neu']['praefix'] ?? ''), 'neu', $neueId);
         unset($_SESSION['neu']);
-        zurueck('?bewerten=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
+        zurueck('?bewerten=' . rawurlencode($neueId) . ($vk !== '' ? '&vk=' . rawurlencode($vk) : '') . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
     }
 
     if ($aktion === 'erkennen_bestehend') {
@@ -530,6 +540,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name = '';
         $kontakt = '';
         $hinweis = '';
+        $alternativen = [];
         $gps = gpsAusFoto(BILDER_DIR . '/' . $fotoName);
         if ($gps !== null) {
             $standort = standortErmitteln($gps[0], $gps[1]);
@@ -547,11 +558,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $name = mb_substr($kandidaten[0]['name'], 0, 60);
                     }
                 }
+                // Bis zu 3 Alternativen aus der Umgebung zum Antippen anbieten
+                foreach ($kandidaten as $k) {
+                    if (mb_strtolower($k['name']) !== mb_strtolower($name) && count($alternativen) < 3) {
+                        $alternativen[] = mb_substr($k['name'], 0, 60);
+                    }
+                }
             }
         } else {
             $hinweis = 'Im Foto stecken keine GPS-Daten (beim iPhone: im Auswahldialog „Optionen“ → „Standort“ einschalten). Du kannst den Namen unten von Hand eintragen.';
         }
-        $_SESSION['wneu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt];
+        $vkmodus = (string)($_POST['vkmodus'] ?? '') === '1';
+        $_SESSION['wneu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt, 'alternativen' => $alternativen, 'vkmodus' => $vkmodus];
         zurueck('?wneu=2' . ($hinweis !== '' ? '&fehler=' . rawurlencode($hinweis) : ''));
     }
 
@@ -575,7 +593,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         });
         // Alle Fotos vom Zwischen-Präfix auf das neue Weingut umhängen
         fotosUmhaengen((string)($_SESSION['wneu']['praefix'] ?? ''), 'wneu', 'wg-' . $neueId);
+        $vkmodus = (bool)($_SESSION['wneu']['vkmodus'] ?? false);
         unset($_SESSION['wneu']);
+        if ($vkmodus) {
+            // Verkosten-Modus: direkt auf die Arbeitsfläche des Weinguts
+            zurueck('?vk=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt den ersten Wein verkosten!'));
+        }
         zurueck('?weingut=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt.'));
     }
 
@@ -686,6 +709,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notiz = trim((string)($_POST['notiz'] ?? ''));
         $notiz = mb_substr($notiz, 0, 500);
         $flaschen = max(0, min(99, (int)($_POST['flaschen'] ?? 0)));
+        $vk = (string)($_POST['vk'] ?? '');
+        if ($vk !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vk)) {
+            $vk = '';
+        }
         $_SESSION['person'] = $person;
         datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen): array {
             $existiert = false;
@@ -713,6 +740,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
             return $d;
         });
+        if ($vk !== '') {
+            // Im Verkosten-Modus direkt zurück zur Arbeitsfläche – der nächste Wein wartet
+            zurueck('?vk=' . rawurlencode($vk) . '&ok=' . rawurlencode('Danke, ' . $person . ' – gespeichert! Der nächste Wein kann ins Glas. 🥂'));
+        }
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Danke, ' . $person . ' – deine Bewertung ist gespeichert!'));
     }
 
@@ -1383,9 +1414,11 @@ function champagnerHolen(array $daten, string $id): ?array
 }
 
 // Welche Ansicht?
-$ansicht = 'liste';
+$ansicht = 'verkosten'; // Startseite: Wo verkostest du?
 $aktiverChampagner = null;
 $aktivesWeingut = null;
+$kontextWeingut = null;   // Arbeitsfläche: aktives Weingut ('ohne' = zu Hause/ohne Weingut)
+$kontextOhne = false;
 if (isset($_GET['bewerten'])) {
     $aktiverChampagner = champagnerHolen($daten, (string)$_GET['bewerten']);
     if ($aktiverChampagner !== null) {
@@ -1409,7 +1442,28 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'neu';
 } elseif (isset($_GET['wneu'])) {
     $ansicht = 'wneu';
+} elseif (isset($_GET['vk'])) {
+    if ((string)$_GET['vk'] === 'ohne') {
+        $kontextOhne = true;
+        $ansicht = 'werkstatt';
+    } else {
+        $kontextWeingut = weingutHolen($daten, (string)$_GET['vk']);
+        if ($kontextWeingut !== null) {
+            $ansicht = 'werkstatt';
+        }
+    }
+} elseif (isset($_GET['liste'])) {
+    $ansicht = 'liste';
+} elseif (isset($_GET['tasting'])) {
+    $ansicht = 'tastingplatz';
 }
+
+// Bereich für die Tab-Leiste unten
+$bereich = match ($ansicht) {
+    'verkosten', 'werkstatt', 'neu', 'wneu', 'bewerten' => 'verkosten',
+    'tastingplatz' => 'tasting',
+    default => 'entdecken',
+};
 
 $personVorschlag = (string)($_SESSION['person'] ?? '');
 $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
@@ -1423,40 +1477,117 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
   <title>Champagne 26 – fruthzeug.de</title>
   <style>
     :root {
-      --bg: #faf9f7;
-      --text: #2a2a28;
-      --muted: #6b6b66;
-      --accent: #b4532a;
+      --bg: #faf6ee;
+      --text: #2b2620;
+      --muted: #8a8073;
       --card: #ffffff;
-      --border: #e8e6e1;
-      --stern: #d99a1b;
-      --ok: #2e7d32;
-      --warn: #b3261e;
+      --border: #ecdfc8;
+      --gold: #c8900f;
+      --gold-hell: #fdf3dc;
+      --violett: #7a5cc4;
+      --violett-hell: #f1ecfb;
+      --gruen: #14997d;
+      --gruen-hell: #e3f6f0;
+      --accent: var(--gold);
+      --accent-hell: var(--gold-hell);
+      --stern: #e0a411;
+      --ok: #14997d;
+      --warn: #cf3f2e;
+      --schatten: 0 2px 10px rgba(90, 70, 30, 0.07);
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #1c1b19;
-        --text: #ece9e4;
-        --muted: #a3a09a;
-        --accent: #e08050;
-        --card: #262421;
-        --border: #3a3833;
+        --bg: #191613;
+        --text: #efe9df;
+        --muted: #a59a89;
+        --card: #242019;
+        --border: #3c352a;
+        --gold: #e8b544;
+        --gold-hell: #33290f;
+        --violett: #a98ff0;
+        --violett-hell: #251e38;
+        --gruen: #3cc9a7;
+        --gruen-hell: #10312a;
         --stern: #e8b544;
-        --ok: #7cc47f;
+        --ok: #3cc9a7;
         --warn: #ef8a80;
+        --schatten: 0 2px 10px rgba(0, 0, 0, 0.35);
       }
     }
+    body[data-bereich="entdecken"] { --accent: var(--violett); --accent-hell: var(--violett-hell); }
+    body[data-bereich="tasting"]   { --accent: var(--gruen); --accent-hell: var(--gruen-hell); }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: Georgia, 'Times New Roman', serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
       background: var(--bg);
       color: var(--text);
-      line-height: 1.7;
+      line-height: 1.6;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
     }
     a { color: var(--accent); }
+
+    /* ---------- Tab-Leiste unten ---------- */
+    .tab-leiste {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+      display: flex; justify-content: space-around;
+      background: var(--card); border-top: 1px solid var(--border);
+      padding: 0.35rem 0 calc(0.35rem + env(safe-area-inset-bottom));
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.06);
+    }
+    .tab-leiste a {
+      display: flex; flex-direction: column; align-items: center; gap: 1px;
+      flex: 1; text-decoration: none; color: var(--muted);
+      font-size: 0.72rem; padding: 0.25rem 0.4rem; border-radius: 12px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .tab-leiste a .tab-icon { font-size: 1.45rem; line-height: 1.2; }
+    .tab-leiste a.aktiv { color: var(--accent); }
+    .tab-leiste a.aktiv .tab-icon {
+      background: var(--accent-hell); border-radius: 999px; padding: 2px 14px;
+    }
+    main { padding-bottom: 5.5rem !important; }
+    body.listenansicht main { padding-bottom: 4.2rem !important; }
+
+    /* ---------- Verkosten-Startseite & Arbeitsfläche ---------- */
+    .kachel {
+      display: flex; align-items: center; gap: 1rem;
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: var(--schatten);
+      padding: 1.1rem 1.2rem; margin-bottom: 0.8rem;
+      text-decoration: none; color: var(--text); font-size: 1.05rem;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .kachel:active { transform: scale(0.98); }
+    .kachel .k-icon {
+      font-size: 1.7rem; width: 52px; height: 52px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--accent-hell); border-radius: 14px;
+    }
+    .kachel .k-text b { font-weight: 600; display: block; }
+    .kachel .k-text small { color: var(--muted); }
+
+    /* ---------- Overlay (Weingut-Details) ---------- */
+    #overlay {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(0,0,0,0.45);
+      display: flex; align-items: flex-end; justify-content: center;
+    }
+    #overlay[hidden] { display: none; }
+    #overlay .blatt {
+      background: var(--bg); width: 100%; max-width: 46rem;
+      max-height: 92dvh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      border-radius: 18px 18px 0 0; padding: 1rem 1.2rem 3rem;
+    }
+    #overlay .blatt-kopf {
+      display: flex; justify-content: space-between; align-items: center;
+      position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; z-index: 2;
+    }
+    #overlay .blatt-kopf button {
+      background: var(--card); border: 1px solid var(--border); border-radius: 50%;
+      width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text);
+    }
 
     .site-header {
       position: sticky; top: 0; z-index: 10;
@@ -1670,7 +1801,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     footer { text-align: center; padding: 2rem 1.5rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--border); }
   </style>
 </head>
-<body<?= in_array($ansicht, ['liste', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
+<body data-bereich="<?= e($bereich) ?>"<?= in_array($ansicht, ['liste', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
   <header class="site-header">
     <a class="brand" href="/"><strong>fruthzeug</strong>.de</a>
     <input type="checkbox" id="nav-toggle" aria-hidden="true">
@@ -1687,9 +1818,19 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
   </header>
 
   <main>
-    <?php if ($ansicht === 'liste'): ?>
-      <h1>Champagne 26 🍾</h1>
-      <p class="untertitel">Champagner-Verkostung – jede Person bewertet für sich, 8 Kategorien, 1 bis 5 Sterne.</p>
+    <?php if ($ansicht === 'verkosten'): ?>
+      <h1>Verkosten 🥂</h1>
+      <p class="untertitel">Wo verkostest du gerade?</p>
+    <?php elseif ($ansicht === 'werkstatt'): ?>
+      <p class="zurueck"><a href="./">&larr; Anderes Weingut w&auml;hlen</a></p>
+      <h1><?= $kontextOhne ? 'Ohne Weingut 🏠' : e($kontextWeingut['name']) . ' 🍇' ?></h1>
+      <p class="untertitel"><?= $kontextOhne ? 'Zu Hause oder unterwegs verkosten.' : 'Du bist hier – verkoste und erfasse die Weine.' ?></p>
+    <?php elseif ($ansicht === 'tastingplatz'): ?>
+      <h1>Tasting 👥</h1>
+      <p class="untertitel">Gemeinsame Verkostungen mit deiner Gruppe.</p>
+    <?php elseif ($ansicht === 'liste'): ?>
+      <h1>Entdecken 🔍</h1>
+      <p class="untertitel">Alle verkosteten Champagner im Überblick.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
@@ -1697,7 +1838,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <h1>Fotoalbum 📸</h1>
       <p class="untertitel">Diverse Fotos rund um Champagne 26.</p>
     <?php elseif ($ansicht === 'neu'): ?>
-      <p class="zurueck"><a href="./">&larr; Zur&uuml;ck zur Champagner-Liste</a></p>
+      <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck zur Liste</a></p>
       <h1>Neue Flasche 📷</h1>
       <p class="untertitel">Fotografieren – erkennen – bewerten.</p>
     <?php elseif ($ansicht === 'wneu'): ?>
@@ -1713,7 +1854,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
     <?php else: ?>
-      <p class="zurueck"><a href="./">&larr; Zur&uuml;ck zur Champagner-Liste</a></p>
+      <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck zur Liste</a></p>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Ergebnis der Verkostung<?= preisZeile($aktiverChampagner) ?></p>
     <?php endif; ?>
@@ -1725,7 +1866,96 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <div class="hinweis fehler"><?= e($fehler) ?></div>
     <?php endif; ?>
 
-    <?php if ($ansicht === 'bewerten'): ?>
+    <?php if ($ansicht === 'verkosten'): ?>
+      <!-- ==================== VERKOSTEN-START ==================== -->
+      <a class="kachel" href="?wneu=1&amp;vkmodus=1">
+        <span class="k-icon">📷</span>
+        <span class="k-text"><b>Weingut per Foto erkennen</b><small>Vor Ort fotografieren – GPS findet das Weingut</small></span>
+      </a>
+      <a class="kachel" href="?vk=ohne">
+        <span class="k-icon">🏠</span>
+        <span class="k-text"><b>Ohne Weingut verkosten</b><small>Zu Hause, im Restaurant, unterwegs</small></span>
+      </a>
+      <?php if ($daten['weingueter'] !== []): ?>
+        <p class="untertitel" style="margin-top:1.4rem;">… oder Weingut wählen:</p>
+        <?php
+          $wgSortiert = $daten['weingueter'];
+          usort($wgSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+        ?>
+        <?php foreach ($wgSortiert as $w): ?>
+          <?php $wFotos = weingutFotos($w['id']); ?>
+          <a class="kachel" href="?vk=<?= e(rawurlencode($w['id'])) ?>">
+            <?php if ($wFotos !== []): ?>
+              <img class="thumb" src="<?= e(thumbUrl($wFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
+            <?php else: ?>
+              <span class="k-icon">🍇</span>
+            <?php endif; ?>
+            <span class="k-text"><b><?= e($w['name']) ?></b>
+              <small><?= count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id'])) ?> Champagner erfasst</small>
+            </span>
+          </a>
+        <?php endforeach; ?>
+      <?php endif; ?>
+      <?php if (!$eingeloggt): ?>
+        <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
+      <?php endif; ?>
+
+    <?php elseif ($ansicht === 'werkstatt'): ?>
+      <!-- ==================== ARBEITSFLÄCHE (Weingut-Kontext) ==================== -->
+      <a class="kachel" href="?neu=1<?= $kontextOhne ? '&amp;vk=ohne' : '&amp;vk=' . e(rawurlencode($kontextWeingut['id'])) ?>" style="border-left:5px solid var(--accent);">
+        <span class="k-icon">📷</span>
+        <span class="k-text"><b>Champagner verkosten</b><small>Etikett fotografieren – erkennen – bewerten</small></span>
+      </a>
+      <?php if (!$kontextOhne): ?>
+        <a class="kachel" href="#" id="details-oeffnen" data-url="?weingut=<?= e(rawurlencode($kontextWeingut['id'])) ?>">
+          <span class="k-icon">ℹ️</span>
+          <span class="k-text"><b>Weingut-Details</b><small>Kontakt, Notizen, Bilder, Recherche</small></span>
+        </a>
+      <?php endif; ?>
+
+      <?php
+        $hierChampagner = array_values(array_filter(
+            $daten['champagner'],
+            fn($c) => $kontextOhne ? trim((string)($c['weingut_id'] ?? '')) === '' : ($c['weingut_id'] ?? '') === $kontextWeingut['id']
+        ));
+        usort($hierChampagner, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+      ?>
+      <?php if ($hierChampagner !== []): ?>
+        <p class="untertitel" style="margin-top:1.4rem;"><?= $kontextOhne ? 'Champagner ohne Weingut:' : 'Bisher hier verkostet:' ?></p>
+        <?php foreach ($hierChampagner as $c): ?>
+          <?php
+            $bewertungen = bewertungenFuer($daten, $c['id']);
+            $gesamt      = gesamtSchnitt($bewertungen);
+            $fotos       = fotosFuer($c['id']);
+          ?>
+          <div class="card flasche">
+            <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
+              <?php if ($fotos !== []): ?>
+                <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
+              <?php else: ?>
+                <span class="thumb platzhalter">🍾</span>
+              <?php endif; ?>
+              <span class="flasche-info">
+                <span class="f-name"><?= e($c['name']) ?></span>
+                <span class="f-wertung"><?= sterneAnzeige($gesamt) ?><?= $bewertungen !== [] ? ' <span class="anzahl">(' . count($bewertungen) . ')</span>' : '' ?></span>
+              </span>
+            </a>
+            <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>&amp;vk=<?= $kontextOhne ? 'ohne' : e(rawurlencode($kontextWeingut['id'])) ?>">Bewerten</a>
+          </div>
+        <?php endforeach; ?>
+      <?php endif; ?>
+      <?php if (!$eingeloggt): ?>
+        <div class="card" style="margin-top:1.2rem;"><?= loginFormular($kontextOhne ? '?vk=ohne' : '?vk=' . rawurlencode($kontextWeingut['id'])) ?></div>
+      <?php endif; ?>
+
+    <?php elseif ($ansicht === 'tastingplatz'): ?>
+      <!-- ==================== TASTING (kommt in Etappe 3) ==================== -->
+      <div class="card">
+        <h2>Bald verfügbar 🛠</h2>
+        <p>Hier entstehen die <b>Tasting-Gruppen</b>: Titel anlegen, Freunde per Link einladen (ohne Passwort), gemeinsam bewerten – mit dem „Gerade im Glas“-Champagner für alle.</p>
+      </div>
+
+    <?php elseif ($ansicht === 'bewerten'): ?>
       <!-- ==================== BEWERTUNGSFORMULAR ==================== -->
       <?php if (!$eingeloggt): ?>
         <div class="card">
@@ -1752,6 +1982,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="bewerten">
           <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+          <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
           <h2>Wer bewertet?</h2>
           <input type="text" name="person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40" required>
 
@@ -2012,7 +2243,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
 
       <div class="knopfreihe">
         <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Jetzt selbst bewerten</a>
-        <a class="knopf zweit" href="./">Zur Übersicht</a>
+        <a class="knopf zweit" href="?liste=1">Zur Liste</a>
       </div>
       <?php if ($eingeloggt): ?>
         <form method="post" onsubmit="return confirm('„<?= e($aktiverChampagner['name']) ?>“ samt aller Bewertungen und Fotos löschen?');" style="margin-top:0.8rem;">
@@ -2029,7 +2260,14 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <div class="card"><?= loginFormular('?neu=1') ?></div>
       <?php elseif ((int)$_GET['neu'] === 2): ?>
         <?php
-          $neu = $_SESSION['neu'] ?? ['foto' => '', 'name' => '', 'weingut' => ''];
+          $neu = $_SESSION['neu'] ?? ['foto' => '', 'name' => '', 'weingut' => '', 'vk' => ''];
+          $vkAktiv = (string)($neu['vk'] ?? '');
+          if ($vkAktiv === '') {
+              $vkAktiv = (string)($_GET['vk'] ?? '');
+          }
+          if ($vkAktiv !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vkAktiv)) {
+              $vkAktiv = '';
+          }
           $erkanntesWeingut = null;
           if ($neu['weingut'] !== '') {
               foreach ($daten['weingueter'] as $w) {
@@ -2038,6 +2276,10 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
                       break;
                   }
               }
+          }
+          if ($erkanntesWeingut === null && preg_match('/^[a-f0-9]{8}$/', $vkAktiv)) {
+              // Verkosten-Kontext: das Weingut, an dem wir gerade sind
+              $erkanntesWeingut = weingutHolen($daten, $vkAktiv);
           }
         ?>
         <?php if ($neu['name'] !== '' || $neu['weingut'] !== ''): ?>
@@ -2048,6 +2290,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <form method="post" class="card">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="schnell_anlegen">
+          <input type="hidden" name="vk" value="<?= e($vkAktiv) ?>">
           <input type="hidden" name="foto" value="<?= e($neu['foto']) ?>">
           <?php if ($neu['foto'] !== ''): ?>
             <img src="<?= e(thumbUrl($neu['foto'])) ?>" alt="" style="max-width:180px; border-radius:10px; border:1px solid var(--border); display:block; margin-bottom:1rem;">
@@ -2074,6 +2317,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <form method="post" enctype="multipart/form-data" class="card" id="schnellfoto">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="schnell_foto">
+          <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
           <h2>1. Etikett fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach ein Foto vom Etikett – oder wähl ein vorhandenes Bild aus. Danach geht es automatisch weiter.</p>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="foto-kamera" style="display:none;">
@@ -2081,7 +2325,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
           <div class="knopfreihe">
             <label class="knopf" for="foto-kamera" id="kamera-label">📷&nbsp; Foto aufnehmen</label>
             <label class="knopf zweit" for="foto-galerie" id="galerie-label">🖼️&nbsp; Aus Galerie wählen</label>
-            <a class="knopf zweit" href="?neu=2">Ohne Foto</a>
+            <a class="knopf zweit" href="?neu=2<?= isset($_GET['vk']) ? '&amp;vk=' . e(rawurlencode((string)$_GET['vk'])) : '' ?>">Ohne Foto</a>
           </div>
           <noscript>
             <p style="margin-top:0.8rem;">Bitte Datei oben wählen und dann:</p>
@@ -2106,7 +2350,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <?php if (!$eingeloggt): ?>
         <div class="card"><?= loginFormular('?wneu=1') ?></div>
       <?php elseif ((int)$_GET['wneu'] === 2): ?>
-        <?php $wneu = $_SESSION['wneu'] ?? ['foto' => '', 'name' => '', 'kontakt' => '']; ?>
+        <?php $wneu = $_SESSION['wneu'] ?? ['foto' => '', 'name' => '', 'kontakt' => '', 'alternativen' => []]; ?>
         <?php if ($wneu['name'] !== ''): ?>
           <div class="hinweis ok">Erzeuger am Standort gefunden – bitte kurz prüfen und ggf. korrigieren.</div>
         <?php elseif ($wneu['kontakt'] !== ''): ?>
@@ -2120,7 +2364,22 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
             <img src="<?= e(thumbUrl($wneu['foto'])) ?>" alt="" style="max-width:180px; border-radius:10px; border:1px solid var(--border); display:block; margin-bottom:1rem;">
           <?php endif; ?>
           <h2>Weingut</h2>
-          <input type="text" name="name" value="<?= e($wneu['name']) ?>" placeholder="Name des Weinguts" maxlength="60" required>
+          <input type="text" name="name" id="wneu-name" value="<?= e($wneu['name']) ?>" placeholder="Name des Weinguts" maxlength="60" required>
+          <?php if (($wneu['alternativen'] ?? []) !== []): ?>
+            <p class="anzahl" style="margin:-0.3rem 0 0.3rem;">Oder war es eines davon? Antippen:</p>
+            <div class="knopfreihe" style="margin-bottom:0.8rem;">
+              <?php foreach ($wneu['alternativen'] as $alt): ?>
+                <button type="button" class="knopf zweit alternative" data-name="<?= e($alt) ?>"><?= e($alt) ?></button>
+              <?php endforeach; ?>
+            </div>
+            <script>
+              document.querySelectorAll('.alternative').forEach(function (k) {
+                k.addEventListener('click', function () {
+                  document.getElementById('wneu-name').value = k.dataset.name;
+                });
+              });
+            </script>
+          <?php endif; ?>
           <textarea name="kontakt" maxlength="900" rows="4" placeholder="Kontakt/Standort (füllt sich aus dem Foto-GPS)"><?= e($wneu['kontakt']) ?></textarea>
           <textarea name="notiz" maxlength="1000" rows="3" placeholder="Notiz, z. B. Besuch am … (optional)"></textarea>
           <div class="knopfreihe" style="margin-top:0.6rem;">
@@ -2132,6 +2391,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <form method="post" enctype="multipart/form-data" class="card" id="wneufoto">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="weingut_foto_neu">
+          <input type="hidden" name="vkmodus" value="<?= isset($_GET['vkmodus']) ? '1' : '' ?>">
           <h2>1. Weingut fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach vor Ort ein Foto (Gebäude, Hof, Schild) – aus den GPS-Daten des Fotos ermitteln wir Standort und Erzeuger. Danach geht es automatisch weiter.</p>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="wfoto-kamera" style="display:none;">
@@ -2162,7 +2422,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     <?php elseif ($ansicht === 'fotos'): ?>
       <!-- ==================== FOTOALBUM ==================== -->
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf zweit" href="./">Champagner</a>
+        <a class="knopf zweit" href="?liste=1">Champagner</a>
         <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
         <a class="knopf" href="?fotos=1">Fotos</a>
       </div>
@@ -2208,7 +2468,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     <?php elseif ($ansicht === 'weingueter'): ?>
       <!-- ==================== WEINGUT-LISTE ==================== -->
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf zweit" href="./">Champagner</a>
+        <a class="knopf zweit" href="?liste=1">Champagner</a>
         <a class="knopf" href="?weingueter=1">Weingüter</a>
         <a class="knopf zweit" href="?fotos=1">Fotos</a>
       </div>
@@ -2405,7 +2665,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
 
       <div class="knopfreihe">
         <a class="knopf zweit" href="?weingueter=1">Zur Weingut-Liste</a>
-        <a class="knopf zweit" href="./">Zur Champagner-Liste</a>
+        <a class="knopf zweit" href="?liste=1">Zur Champagner-Liste</a>
       </div>
       <?php if ($eingeloggt): ?>
         <form method="post" onsubmit="return confirm('„<?= e($aktivesWeingut['name']) ?>“ löschen? Die Champagner bleiben erhalten, verlieren aber die Zuordnung.');" style="margin-top:0.8rem;">
@@ -2419,15 +2679,15 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     <?php else: ?>
       <!-- ==================== ÜBERSICHT ==================== -->
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf" href="./">Champagner</a>
+        <a class="knopf" href="?liste=1">Champagner</a>
         <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
         <a class="knopf zweit" href="?fotos=1">Fotos</a>
       </div>
 
       <a class="knopf gross" href="?neu=1">📷&nbsp; Neue Flasche erfassen</a>
       <div class="sortier-leiste">Sortieren:
-        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?sort=datum">Anlagedatum</a>
-        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?sort=name">Name</a>
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=datum">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=name">Name</a>
       </div>
       <div class="liste-scroll">
       <?php if ($daten['champagner'] === []): ?>
@@ -2491,12 +2751,50 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     <p>&copy; 2026 Carl &middot; <a href="/">Zur&uuml;ck zur Startseite</a></p>
   </footer>
 
+  <nav class="tab-leiste">
+    <a href="./" class="<?= $bereich === 'verkosten' ? 'aktiv' : '' ?>"><span class="tab-icon">🥂</span>Verkosten</a>
+    <a href="?liste=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">🔍</span>Entdecken</a>
+    <a href="?tasting=1" class="<?= $bereich === 'tasting' ? 'aktiv' : '' ?>"><span class="tab-icon">👥</span>Tasting</a>
+  </nav>
+
+  <div id="overlay" hidden>
+    <div class="blatt">
+      <div class="blatt-kopf">
+        <b>Details</b>
+        <button type="button" aria-label="Schließen">&#10005;</button>
+      </div>
+      <div class="blatt-inhalt"><p>Lade …</p></div>
+    </div>
+  </div>
+
   <div id="grossansicht" hidden>
     <button class="schliessen" type="button" aria-label="Schließen">&#10005;</button>
     <img src="" alt="">
   </div>
 
   <script>
+    // Weingut-Details als Overlay laden (holt die Detailseite und zeigt deren Inhalt)
+    (function () {
+      var ausloeser = document.getElementById('details-oeffnen');
+      if (!ausloeser) { return; }
+      var overlay = document.getElementById('overlay');
+      var inhalt = overlay.querySelector('.blatt-inhalt');
+      ausloeser.addEventListener('click', function (e) {
+        e.preventDefault();
+        overlay.hidden = false;
+        document.body.style.overflow = 'hidden';
+        inhalt.innerHTML = '<p>Lade …</p>';
+        fetch(ausloeser.dataset.url).then(function (r) { return r.text(); }).then(function (html) {
+          var doc = new DOMParser().parseFromString(html, 'text/html');
+          var main = doc.querySelector('main');
+          if (main) { inhalt.replaceChildren.apply(inhalt, Array.prototype.slice.call(main.childNodes)); }
+        }).catch(function () { inhalt.innerHTML = '<p>Konnte nicht geladen werden.</p>'; });
+      });
+      function zu() { overlay.hidden = true; document.body.style.overflow = ''; }
+      overlay.querySelector('.blatt-kopf button').addEventListener('click', zu);
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) { zu(); } });
+    })();
+
     // "Neu laden": Seite garantiert frisch am Zwischenspeicher vorbei holen
     document.getElementById('neu-laden').addEventListener('click', function (e) {
       e.preventDefault();
