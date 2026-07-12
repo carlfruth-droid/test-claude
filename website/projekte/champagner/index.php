@@ -2032,6 +2032,7 @@ $blickTastingId = (string)(meinTasting($daten)['id'] ?? '');
 
 // Angemeldetes Benutzerkonto (Dauer-Cookie) – steuert Tasting-Anlage und Verwaltung
 $benutzerAktiv = aktuellerBenutzer($daten);
+$istAdmin = $benutzerAktiv !== null && !empty($benutzerAktiv['admin']);
 
 /** Alle Bewertungen zu einem Champagner. */
 function bewertungenFuer(array $daten, string $cid): array
@@ -3381,11 +3382,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?meine=1">📖 Meine Liste</a>
       <a href="?liste=1">🔍 Entdecken</a>
       <a href="?tasting=1">👥 Tastings</a>
-      <a href="?weingueter=1">🍇 Weingüter</a>
-      <a href="?fotos=1">📸 Fotoalbum</a>
       <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
       <a href="?ueber=1">💛 Über diese App</a>
-      <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
+      <?php if ($istAdmin): ?>
+        <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
+        <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
         <a href="?verwaltung=1">🛠️ Verwaltung</a>
       <?php endif; ?>
       <a href="mailto:tasting@fruthzeug.de">✉️ Kontakt</a>
@@ -3521,7 +3522,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php endforeach; ?>
         </div>
       <?php endif; ?>
-      <?php if (count($daten['weingueter']) > count($wgSortiert)): ?>
+      <?php if ($istAdmin && count($daten['weingueter']) > count($wgSortiert)): ?>
         <p class="anzahl" style="margin-top:0.6rem;"><a href="?weingueter=1&amp;alle=1">Alle Weingüter ansehen (Archiv)</a></p>
       <?php endif; ?>
       <?php if (!$eingeloggt): ?>
@@ -4967,7 +4968,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php
         // Fotoalbum des aktuellen Tastings (mit „Alle“ als Archiv):
         // zugeordnet (Flasche/Weingut/Tasting) und nicht zugeordnet (div-)
-        $alleFotosZeigen = isset($_GET['alle']);
+        $alleFotosZeigen = isset($_GET['alle']) && $istAdmin; // Archiv über alle Tastings: Admin-Funktion
         $albumTasting = null;
         foreach ($daten['tastings'] as $tt) {
             if ($tt['id'] === $blickTastingId) {
@@ -5003,10 +5004,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         }
         $vorschlag = $_SESSION['foto_vorschlag'] ?? null;
       ?>
-      <div class="sortier-leiste">Zeigen:
-        <a class="<?= !$alleFotosZeigen ? 'aktiv' : '' ?>" href="?fotos=1">👥 <?= e($albumTasting['titel'] ?? 'Mein Tasting') ?></a>
-        <a class="<?= $alleFotosZeigen ? 'aktiv' : '' ?>" href="?fotos=1&amp;alle=1">Alle<?= $ausgeblendet > 0 && !$alleFotosZeigen ? ' (+' . $ausgeblendet . ')' : '' ?></a>
-      </div>
+      <?php if ($istAdmin): ?>
+        <div class="sortier-leiste">Zeigen:
+          <a class="<?= !$alleFotosZeigen ? 'aktiv' : '' ?>" href="?fotos=1">👥 <?= e($albumTasting['titel'] ?? 'Mein Tasting') ?></a>
+          <a class="<?= $alleFotosZeigen ? 'aktiv' : '' ?>" href="?fotos=1&amp;alle=1">Alle<?= $ausgeblendet > 0 && !$alleFotosZeigen ? ' (+' . $ausgeblendet . ')' : '' ?></a>
+        </div>
+      <?php endif; ?>
 
       <?php if ($offen !== []): ?>
         <div class="card" style="border-left:5px solid var(--accent);">
@@ -5104,8 +5107,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <a class="knopf gross" href="?wneu=1">📷&nbsp; Neues Weingut per Foto</a>
       <?php
-        // Standard: nur die Weingüter des aktuellen Tastings; „Alle“ = Archiv
-        $alleWgZeigen = isset($_GET['alle']);
+        // Standard: nur die Weingüter des aktuellen Tastings; „Alle“ = Archiv (Admin-Funktion)
+        $alleWgZeigen = isset($_GET['alle']) && $istAdmin;
         $wgTastingIds = weingutIdsImTasting($daten, $blickTastingId);
         $wgTastingTitel = '';
         foreach ($daten['tastings'] as $tt) {
@@ -5123,10 +5126,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             usort($weingutListe, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
         }
       ?>
-      <div class="sortier-leiste">Zeigen:
-        <a class="<?= !$alleWgZeigen ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=<?= e($sortierung) ?>">👥 <?= e($wgTastingTitel !== '' ? $wgTastingTitel : 'Mein Tasting') ?></a>
-        <a class="<?= $alleWgZeigen ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=<?= e($sortierung) ?>&amp;alle=1">Alle (<?= count($daten['weingueter']) ?>)</a>
-      </div>
+      <?php if ($istAdmin): ?>
+        <div class="sortier-leiste">Zeigen:
+          <a class="<?= !$alleWgZeigen ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=<?= e($sortierung) ?>">👥 <?= e($wgTastingTitel !== '' ? $wgTastingTitel : 'Mein Tasting') ?></a>
+          <a class="<?= $alleWgZeigen ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=<?= e($sortierung) ?>&amp;alle=1">Alle (<?= count($daten['weingueter']) ?>)</a>
+        </div>
+      <?php endif; ?>
       <div class="sortier-leiste">Sortieren:
         <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=datum<?= $alleWgZeigen ? '&amp;alle=1' : '' ?>">Anlagedatum</a>
         <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=name<?= $alleWgZeigen ? '&amp;alle=1' : '' ?>">Name</a>
@@ -5360,9 +5365,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php else: ?>
       <a class="knopf gross" href="?neu=1&amp;kat=<?= e($kategorie === 'alle' ? 'champagner' : $kategorie) ?>">📷&nbsp; Neue Flasche erfassen</a>
       <?php
-        // Tasting-Umschalter: eigenes Tasting ist Standard, „Alle“ zeigt das Archiv
+        // Tasting-Umschalter: eigenes Tasting ist Standard, „Alle“ (Archiv) nur für Admins
         $tidWahl = (string)($_GET['tid'] ?? '');
-        $tidGueltig = $tidWahl === 'alle';
+        $tidGueltig = $tidWahl === 'alle' && $istAdmin;
         foreach ($daten['tastings'] as $t) {
             if ($t['id'] === $tidWahl) { $tidGueltig = true; break; }
         }
@@ -5377,7 +5382,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php foreach ($tastingsSortiert as $t): ?>
             <a class="<?= $tidWahl === $t['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=<?= e(rawurlencode($t['id'])) ?>"><?= e($t['titel']) ?></a>
           <?php endforeach; ?>
-          <a class="<?= $tidWahl === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=alle">Alle</a>
+          <?php if ($istAdmin): ?>
+            <a class="<?= $tidWahl === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=alle">Alle</a>
+          <?php endif; ?>
         </div>
       <?php endif; ?>
       <div class="sortier-leiste">Sortieren:
