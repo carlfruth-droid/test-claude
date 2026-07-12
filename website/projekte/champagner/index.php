@@ -308,13 +308,50 @@ function teilnehmerZuToken(array $daten, string $token): ?array
     return null;
 }
 
+/** Benutzerkonto zum Dauer-Login-Token finden. */
+function benutzerZuToken(array $daten, string $token): ?array
+{
+    if (!preg_match('/^[a-f0-9]{32}$/', $token)) {
+        return null;
+    }
+    foreach (($daten['benutzer'] ?? []) as $b) {
+        if (hash_equals((string)($b['token'] ?? ''), $token)) {
+            return $b;
+        }
+    }
+    return null;
+}
+
+/** Aktuell angemeldeter Benutzer (per Dauer-Cookie) oder null. */
+function aktuellerBenutzer(array $daten): ?array
+{
+    return benutzerZuToken($daten, (string)($_COOKIE['benutzer'] ?? ''));
+}
+
+/** Darf dieser Benutzer Tastings anlegen? (Admin oder freigeschaltet) */
+function darfTastingsAnlegen(?array $b): bool
+{
+    return $b !== null && (!empty($b['admin']) || !empty($b['darf_tasting']));
+}
+
+// Benutzerkonto-Cookie: dauerhaft angemeldet bleiben (läuft nicht ab)
+if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['benutzer'])) {
+    $kontoTreffer = benutzerZuToken(datenLaden(), (string)$_COOKIE['benutzer']);
+    if ($kontoTreffer !== null) {
+        $_SESSION['tasting_ok'] = true;
+        if (trim((string)($_SESSION['person'] ?? '')) === '') {
+            $_SESSION['person'] = (string)($kontoTreffer['vorname'] ?? '');
+        }
+    }
+}
+
 // Einladungslink angeklickt? Cookie setzen und automatisch anmelden.
 if (isset($_GET['einladung'])) {
     $treffer = teilnehmerZuToken(datenLaden(), (string)$_GET['einladung']);
     if ($treffer !== null) {
         [$einladungsTasting, $teilnehmer] = $treffer;
         setcookie('einladung', $teilnehmer['token'], [
-            'expires' => time() + 60 * 60 * 24 * 180,
+            'expires' => time() + 60 * 60 * 24 * 3650, // läuft praktisch nie ab
             'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
         ]);
         $_SESSION['tasting_ok'] = true;
@@ -366,13 +403,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []]
-        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -431,6 +468,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ok=' . rawurlencode('Abgemeldet.'));
     }
 
+    if ($aktion === 'benutzer_login') {
+        $email = mb_strtolower(trim((string)($_POST['email'] ?? '')));
+        $pw = (string)($_POST['passwort'] ?? '');
+        $gefunden = null;
+        foreach (datenLaden()['benutzer'] as $b) {
+            if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
+                $gefunden = $b;
+                break;
+            }
+        }
+        if ($gefunden === null || !password_verify($pw, (string)($gefunden['pw_hash'] ?? ''))) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('E-Mail oder Passwort stimmt nicht.'));
+        }
+        setcookie('benutzer', (string)$gefunden['token'], [
+            'expires' => time() + 60 * 60 * 24 * 3650, // läuft nicht ab
+            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = (string)($gefunden['vorname'] ?? '');
+        zurueck('?tasting=1&ok=' . rawurlencode('Willkommen, ' . ($gefunden['vorname'] ?? '') . '! Du bleibst auf diesem Gerät dauerhaft angemeldet.'));
+    }
+
+    if ($aktion === 'benutzer_logout') {
+        setcookie('benutzer', '', ['expires' => time() - 3600, 'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax']);
+        zurueck('?tasting=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
+    }
+
     if ($aktion === 'beitreten') {
         // Beitritt per QR-Code/Gruppenlink – braucht keine Anmeldung
         $beitritt = (string)($_POST['beitritt'] ?? '');
@@ -473,7 +537,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             });
         }
         setcookie('einladung', $token, [
-            'expires' => time() + 60 * 60 * 24 * 180,
+            'expires' => time() + 60 * 60 * 24 * 3650, // läuft praktisch nie ab
             'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
         ]);
         $_SESSION['tasting_ok'] = true;
@@ -1207,17 +1271,117 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'tasting_anlegen') {
+        $konto = aktuellerBenutzer(datenLaden());
+        if (!darfTastingsAnlegen($konto)) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Tastings anlegen dürfen nur freigeschaltete Benutzer – bitte unten mit deinem Benutzerkonto anmelden.'));
+        }
         $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
         if ($titel === '') {
             zurueck('?tasting=1&fehler=' . rawurlencode('Bitte einen Titel für das Tasting angeben.'));
         }
         $neueId = bin2hex(random_bytes(4));
         $beitrittToken = bin2hex(random_bytes(8));
-        datenAendern(function (array $d) use ($titel, $neueId, $beitrittToken): array {
-            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'zeit' => time()];
+        $besitzerId = (string)($konto['id'] ?? '');
+        datenAendern(function (array $d) use ($titel, $neueId, $beitrittToken, $besitzerId): array {
+            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'besitzer' => $besitzerId, 'zeit' => time()];
             return $d;
         });
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
+    }
+
+    if (in_array($aktion, ['benutzer_anlegen', 'benutzer_rechte', 'benutzer_loeschen', 'benutzer_passwort'], true)) {
+        // Benutzerverwaltung: nur für Administratoren
+        $admin = aktuellerBenutzer(datenLaden());
+        if ($admin === null || empty($admin['admin'])) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Die Benutzerverwaltung ist nur für Administratoren.'));
+        }
+
+        if ($aktion === 'benutzer_anlegen') {
+            $vorname = mb_substr(trim((string)($_POST['vorname'] ?? '')), 0, 40);
+            $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+            $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
+            $pw = (string)($_POST['passwort'] ?? '');
+            $darfTasting = (string)($_POST['darf_tasting'] ?? '') === '1';
+            if ($vorname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                zurueck('?tasting=1&fehler=' . rawurlencode('Bitte mindestens Vorname und eine gültige E-Mail angeben.'));
+            }
+            if (mb_strlen($pw) < 6) {
+                zurueck('?tasting=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+            }
+            $neuerBenutzer = [
+                'id' => bin2hex(random_bytes(4)),
+                'vorname' => $vorname,
+                'name' => $name,
+                'email' => $email,
+                'pw_hash' => password_hash($pw, PASSWORD_DEFAULT),
+                'admin' => false,
+                'darf_tasting' => $darfTasting,
+                'token' => bin2hex(random_bytes(16)),
+                'zeit' => time(),
+            ];
+            datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
+                foreach ($d['benutzer'] as $b) {
+                    if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
+                        zurueck('?tasting=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Benutzerkonto.'));
+                    }
+                }
+                $d['benutzer'][] = $neuerBenutzer;
+                return $d;
+            });
+            zurueck('?tasting=1&ok=' . rawurlencode('Benutzer „' . $vorname . '“ angelegt' . ($darfTasting ? ' – darf Tastings anlegen.' : '.')));
+        }
+
+        if ($aktion === 'benutzer_rechte') {
+            $bid = (string)($_POST['id'] ?? '');
+            $feld = (string)($_POST['feld'] ?? '');
+            if (!in_array($feld, ['darf_tasting', 'admin'], true)) {
+                zurueck('?tasting=1');
+            }
+            if ($feld === 'admin' && $bid === (string)$admin['id']) {
+                zurueck('?tasting=1&fehler=' . rawurlencode('Du kannst dir nicht selbst die Admin-Rechte entziehen.'));
+            }
+            datenAendern(function (array $d) use ($bid, $feld): array {
+                foreach ($d['benutzer'] as &$b) {
+                    if ($b['id'] === $bid) {
+                        $b[$feld] = empty($b[$feld]);
+                    }
+                }
+                unset($b);
+                return $d;
+            });
+            zurueck('?tasting=1&ok=' . rawurlencode('Rechte aktualisiert.'));
+        }
+
+        if ($aktion === 'benutzer_passwort') {
+            $bid = (string)($_POST['id'] ?? '');
+            $pw = (string)($_POST['passwort'] ?? '');
+            if (mb_strlen($pw) < 6) {
+                zurueck('?tasting=1&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
+            }
+            $hash = password_hash($pw, PASSWORD_DEFAULT);
+            datenAendern(function (array $d) use ($bid, $hash): array {
+                foreach ($d['benutzer'] as &$b) {
+                    if ($b['id'] === $bid) {
+                        $b['pw_hash'] = $hash;
+                    }
+                }
+                unset($b);
+                return $d;
+            });
+            zurueck('?tasting=1&ok=' . rawurlencode('Passwort neu gesetzt.'));
+        }
+
+        if ($aktion === 'benutzer_loeschen') {
+            $bid = (string)($_POST['id'] ?? '');
+            if ($bid === (string)$admin['id']) {
+                zurueck('?tasting=1&fehler=' . rawurlencode('Du kannst dein eigenes Konto nicht löschen.'));
+            }
+            datenAendern(function (array $d) use ($bid): array {
+                $d['benutzer'] = array_values(array_filter($d['benutzer'], fn($b) => $b['id'] !== $bid));
+                return $d;
+            });
+            zurueck('?tasting=1&ok=' . rawurlencode('Benutzer gelöscht.'));
+        }
     }
 
     if ($aktion === 'tasting_titel') {
@@ -1541,8 +1705,42 @@ function champagnerInTasting(array $c, string $tid): bool
     return $ct === '' || $tid === '' || $ct === $tid;
 }
 
+// Einmalig: Admin-Konto für Carl anlegen, falls noch kein Administrator existiert
+$hatAdmin = false;
+foreach ($daten['benutzer'] as $b) {
+    if (!empty($b['admin'])) {
+        $hatAdmin = true;
+        break;
+    }
+}
+if (!$hatAdmin) {
+    datenAendern(function (array $d): array {
+        foreach ($d['benutzer'] as $b) {
+            if (!empty($b['admin'])) {
+                return $d;
+            }
+        }
+        $d['benutzer'][] = [
+            'id' => bin2hex(random_bytes(4)),
+            'vorname' => 'Carl',
+            'name' => 'Fruth',
+            'email' => 'carl.fruth@gmail.com',
+            'pw_hash' => password_hash(PASSWORT, PASSWORD_DEFAULT),
+            'admin' => true,
+            'darf_tasting' => true,
+            'token' => bin2hex(random_bytes(16)),
+            'zeit' => time(),
+        ];
+        return $d;
+    });
+    $daten = datenLaden();
+}
+
 // Tasting-Blick des Betrachters (per Cookie, sonst neuestes) – filtert die Listen
 $blickTastingId = (string)(meinTasting($daten)['id'] ?? '');
+
+// Angemeldetes Benutzerkonto (Dauer-Cookie) – steuert Tasting-Anlage und Verwaltung
+$benutzerAktiv = aktuellerBenutzer($daten);
 
 /** Alle Bewertungen zu einem Champagner. */
 function bewertungenFuer(array $daten, string $cid): array
@@ -3261,15 +3459,108 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </span>
           </a>
         <?php endforeach; ?>
-        <div class="card" style="margin-top:1rem;">
-          <h2>Neues Tasting anlegen</h2>
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="tasting_anlegen">
-            <input type="text" name="titel" placeholder="Titel, z. B. Champagne-Tour Tag 2" maxlength="60" required>
-            <button class="knopf" type="submit">Anlegen</button>
-          </form>
-        </div>
+        <?php if (darfTastingsAnlegen($benutzerAktiv)): ?>
+          <div class="card" style="margin-top:1rem;">
+            <h2>Neues Tasting anlegen</h2>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="tasting_anlegen">
+              <input type="text" name="titel" placeholder="Titel, z. B. Champagne-Tour Tag 2" maxlength="60" required>
+              <button class="knopf" type="submit">Anlegen</button>
+            </form>
+          </div>
+        <?php elseif ($benutzerAktiv !== null): ?>
+          <div class="card" style="margin-top:1rem;">
+            <h2>Neues Tasting anlegen</h2>
+            <p style="color:var(--muted); font-style:italic;">Dein Konto darf noch keine Tastings anlegen – der Administrator kann dich in der Benutzerverwaltung freischalten.</p>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($benutzerAktiv === null): ?>
+          <div class="card" style="margin-top:1rem;">
+            <h2>👤 Benutzerkonto</h2>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Tastings anlegen und verwalten können nur angemeldete Benutzer. Die Anmeldung läuft nicht ab.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_login">
+              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
+              <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
+              <button class="knopf zweit" type="submit">Als Benutzer anmelden</button>
+            </form>
+          </div>
+        <?php else: ?>
+          <div class="card" style="margin-top:1rem;">
+            <h2>👤 Benutzerkonto</h2>
+            <p>Angemeldet als <b><?= e(trim((string)($benutzerAktiv['vorname'] ?? '') . ' ' . (string)($benutzerAktiv['name'] ?? ''))) ?></b>
+              <span class="anzahl">(<?= e((string)($benutzerAktiv['email'] ?? '')) ?>)</span>
+              <?php if (!empty($benutzerAktiv['admin'])): ?><span class="bewerter-chip">🛡️ Administrator</span><?php endif; ?>
+            </p>
+            <p class="anzahl" style="margin:0.3rem 0 0.6rem;">Dauerhaft angemeldet – die Anmeldung läuft nicht ab.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_logout">
+              <button class="loeschen" type="submit">Vom Konto abmelden</button>
+            </form>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
+          <details class="card">
+            <summary>🛡️ Benutzerverwaltung</summary>
+            <?php foreach ($daten['benutzer'] as $b): ?>
+              <div style="border-bottom:1px solid var(--border); padding:0.6rem 0;">
+                <p><b><?= e(trim((string)($b['vorname'] ?? '') . ' ' . (string)($b['name'] ?? ''))) ?></b>
+                  <span class="anzahl"><?= e((string)($b['email'] ?? '')) ?></span></p>
+                <p style="margin:0.3rem 0;">
+                  <?php if (!empty($b['admin'])): ?><span class="bewerter-chip">🛡️ Admin</span><?php endif; ?>
+                  <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅ darf Tastings anlegen</span><?php else: ?><span class="bewerter-chip offen">⏳ darf keine Tastings anlegen</span><?php endif; ?>
+                </p>
+                <div class="knopfreihe" style="align-items:center;">
+                  <form method="post" style="display:inline;">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="benutzer_rechte">
+                    <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                    <input type="hidden" name="feld" value="darf_tasting">
+                    <button class="knopf klein zweit" type="submit"><?= !empty($b['darf_tasting']) ? 'Tasting-Recht entziehen' : 'Tastings erlauben' ?></button>
+                  </form>
+                  <?php if ($b['id'] !== $benutzerAktiv['id']): ?>
+                    <form method="post" style="display:inline;">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="benutzer_rechte">
+                      <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                      <input type="hidden" name="feld" value="admin">
+                      <button class="knopf klein zweit" type="submit"><?= !empty($b['admin']) ? 'Admin entziehen' : 'Zum Admin machen' ?></button>
+                    </form>
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Benutzer <?= e($b['vorname'] ?? '') ?> wirklich löschen?');">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="benutzer_loeschen">
+                      <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                      <button class="loeschen" type="submit">löschen</button>
+                    </form>
+                  <?php endif; ?>
+                </div>
+                <form method="post" style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="benutzer_passwort">
+                  <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                  <input type="password" name="passwort" placeholder="Neues Passwort setzen" minlength="6" style="margin-bottom:0; flex:1;" required>
+                  <button class="knopf klein zweit" type="submit">Setzen</button>
+                </form>
+              </div>
+            <?php endforeach; ?>
+            <h2 style="margin-top:1rem;">Neuen Benutzer anlegen</h2>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_anlegen">
+              <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
+              <input type="text" name="name" placeholder="Nachname (optional)" maxlength="40">
+              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" required>
+              <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
+              <label style="display:block; margin-bottom:0.7rem;"><input type="checkbox" name="darf_tasting" value="1" style="width:auto; margin-right:0.4rem;"> Darf eigene Tastings anlegen</label>
+              <button class="knopf" type="submit">Benutzer anlegen</button>
+            </form>
+          </details>
+        <?php endif; ?>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
