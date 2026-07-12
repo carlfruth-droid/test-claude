@@ -588,6 +588,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung von ' . $person . ' gelöscht.'));
     }
 
+    if ($aktion === 'foto_analysieren') {
+        // Ein nicht zugeordnetes Album-Foto per Etikett + GPS auswerten
+        $datei = basename((string)($_POST['datei'] ?? ''));
+        if (!preg_match('/^div-.*\.(jpe?g|png|gif|webp)$/i', $datei) || !is_file(BILDER_DIR . '/' . $datei)) {
+            zurueck('?fotos=1&fehler=' . rawurlencode('Foto nicht gefunden.'));
+        }
+        $vorschlagC = '';   // Champagner-ID
+        $vorschlagW = '';   // Weingut-ID
+        $hinweise = [];
+        // Etikett lesen und mit vorhandenen Champagnern abgleichen
+        $erkannt = etikettErkennen($datei);
+        if ($erkannt['name'] !== '') {
+            $best = null; $bestScore = 0;
+            foreach (datenLaden()['champagner'] as $c) {
+                similar_text(mb_strtolower($c['name']), mb_strtolower($erkannt['name']), $proz);
+                if ($proz > $bestScore) { $bestScore = $proz; $best = $c; }
+            }
+            if ($best !== null && $bestScore >= 55) {
+                $vorschlagC = $best['id'];
+                $hinweise[] = '🍾 Etikett „' . $erkannt['name'] . '“ → ' . $best['name'];
+            } elseif ($erkannt['name'] !== '') {
+                $hinweise[] = '🍾 Etikett gelesen: „' . $erkannt['name'] . '“ (kein passender Champagner in der Liste)';
+            }
+        }
+        // GPS mit vorhandenen Weingütern abgleichen
+        $gps = gpsAusFoto(BILDER_DIR . '/' . $datei);
+        if ($gps !== null) {
+            $wg = weingutPerKoordinaten(datenLaden(), $gps[0], $gps[1]);
+            if ($wg !== null) {
+                $vorschlagW = $wg['id'];
+                $hinweise[] = '🍇 Standort → ' . $wg['name'];
+            }
+        }
+        $_SESSION['foto_vorschlag'] = ['datei' => $datei, 'champagner' => $vorschlagC, 'weingut' => $vorschlagW, 'text' => implode(' · ', $hinweise)];
+        if ($vorschlagC === '' && $vorschlagW === '') {
+            zurueck('?fotos=1&fehler=' . rawurlencode('Konnte nichts Passendes erkennen – bitte von Hand am Champagner/Weingut hochladen.'));
+        }
+        zurueck('?fotos=1&ok=' . rawurlencode('Vorschlag: ' . implode(' · ', $hinweise) . ' – unten übernehmen.'));
+    }
+
+    if ($aktion === 'foto_uebernehmen') {
+        $datei = basename((string)($_POST['datei'] ?? ''));
+        $zielC = (string)($_POST['champagner_id'] ?? '');
+        $zielW = (string)($_POST['weingut_id'] ?? '');
+        if (!preg_match('/^div-.*\.(jpe?g|png|gif|webp)$/i', $datei) || !is_file(BILDER_DIR . '/' . $datei)) {
+            zurueck('?fotos=1&fehler=' . rawurlencode('Foto nicht gefunden.'));
+        }
+        $endung = strtolower(pathinfo($datei, PATHINFO_EXTENSION));
+        $neuName = '';
+        if (preg_match('/^[a-f0-9]{8}$/', $zielC) && champagnerHolen(datenLaden(), $zielC) !== null) {
+            $neuName = sprintf('%s-%s-%s.%s', $zielC, date('Ymd-His'), bin2hex(random_bytes(3)), $endung);
+        } elseif (preg_match('/^[a-f0-9]{8}$/', $zielW) && weingutHolen(datenLaden(), $zielW) !== null) {
+            $neuName = sprintf('wg-%s-%s-%s.%s', $zielW, date('Ymd-His'), bin2hex(random_bytes(3)), $endung);
+        }
+        if ($neuName === '') {
+            zurueck('?fotos=1&fehler=' . rawurlencode('Kein gültiges Ziel gewählt.'));
+        }
+        if (rename(BILDER_DIR . '/' . $datei, BILDER_DIR . '/' . $neuName)) {
+            thumbLoeschen($datei);
+            thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+        }
+        unset($_SESSION['foto_vorschlag']);
+        zurueck('?fotos=1&ok=' . rawurlencode('Foto zugeordnet.'));
+    }
+
+    if ($aktion === 'doppelte_entfernen') {
+        // Bild-Duplikate anhand des Inhalts (MD5) finden; jeweils das erste behalten
+        $alle = glob(BILDER_DIR . '/*.{jpg,jpeg,png,gif,webp,JPG,JPEG,PNG,GIF,WEBP}', GLOB_BRACE) ?: [];
+        $gesehen = [];
+        $geloescht = 0;
+        foreach ($alle as $pfad) {
+            $basis = basename($pfad);
+            if (str_starts_with($basis, 'neu-') || str_starts_with($basis, 'wneu-')) {
+                continue; // Zwischendateien nicht anfassen
+            }
+            $hash = md5_file($pfad);
+            if ($hash === false) { continue; }
+            if (isset($gesehen[$hash])) {
+                if (unlink($pfad)) {
+                    thumbLoeschen($basis);
+                    $geloescht++;
+                }
+            } else {
+                $gesehen[$hash] = $basis;
+            }
+        }
+        zurueck('?fotos=1&ok=' . rawurlencode($geloescht . ' doppelte Foto(s) entfernt.'));
+    }
+
     if ($aktion === 'div_foto_upload') {
         [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'div');
         zurueck('?fotos=1&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
@@ -2474,20 +2563,32 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
 
         <?php
-          // Aktiv = hat in diesem Tasting schon bewertet; passiv = nur beigetreten
+          // Aktiv = hat in diesem Tasting schon bewertet (Name kommt in Bewertungen vor)
           $aktivNamen = [];
+          $aktivAnzeige = [];
           foreach ($daten['bewertungen'] as $b) {
               if (($b['tasting_id'] ?? '') === $aktivesTasting['id']) {
-                  $aktivNamen[mb_strtolower($b['person'])] = true;
+                  $ln = mb_strtolower($b['person']);
+                  $aktivNamen[$ln] = true;
+                  $aktivAnzeige[$ln] = $b['person'];
               }
           }
           $teiln = $aktivesTasting['teilnehmer'] ?? [];
-          $anzahlAktiv = 0;
-          foreach ($teiln as $p) { if (isset($aktivNamen[mb_strtolower($p['name'])])) { $anzahlAktiv++; } }
+          $teilnNamen = [];
+          foreach ($teiln as $p) { $teilnNamen[mb_strtolower($p['name'])] = true; }
+          $anzahlAktiv = count($aktivNamen);
+          $passiv = array_filter($teiln, fn($p) => !isset($aktivNamen[mb_strtolower($p['name'])]));
+          // Bewerter, die (noch) nicht in der Teilnehmerliste stehen
+          $externAktiv = array_filter($aktivAnzeige, fn($n, $ln) => !isset($teilnNamen[$ln]), ARRAY_FILTER_USE_BOTH);
         ?>
         <div class="card">
-          <h2>Teilnehmer (<?= count($teiln) ?>)</h2>
-          <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($teiln) - $anzahlAktiv ?> passiv</p>
+          <h2>Teilnehmer</h2>
+          <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($passiv) ?> passiv</p>
+          <?php foreach ($externAktiv as $n): ?>
+            <div class="ergebnis-kategorie" style="align-items:center;">
+              <span>🟢 <b><?= e($n) ?></b> <span class="anzahl">hat bewertet</span></span>
+            </div>
+          <?php endforeach; ?>
           <?php foreach ($teiln as $p): ?>
             <?php $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]); ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
@@ -3222,47 +3323,94 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       </div>
 
       <?php
-        // Alle Fotos der Reise: Flaschen, Weingüter und Album zusammen (neueste zuerst)
+        // Alle Fotos der Reise: getrennt in zugeordnet (Flasche/Weingut) und nicht zugeordnet (div-)
         $alleDateien = glob(BILDER_DIR . '/*.{jpg,jpeg,png,gif,webp,JPG,JPEG,PNG,GIF,WEBP}', GLOB_BRACE) ?: [];
         usort($alleDateien, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
-        $albumFotos = [];
+        $zugeordnet = [];
+        $offen = [];
         foreach ($alleDateien as $pfad) {
             $basis = basename($pfad);
             if (preg_match('/^wg-([a-f0-9]{8})-/', $basis, $m)) {
                 $w = weingutHolen($daten, $m[1]);
-                $albumFotos[] = ['datei' => $basis, 'text' => '🍇 ' . ($w['name'] ?? 'Weingut'), 'link' => '?weingut=' . rawurlencode($m[1]), 'div' => false];
+                $zugeordnet[] = ['datei' => $basis, 'text' => '🍇 ' . ($w['name'] ?? 'Weingut'), 'link' => '?weingut=' . rawurlencode($m[1])];
             } elseif (preg_match('/^([a-f0-9]{8})-/', $basis, $m)) {
                 $c = champagnerHolen($daten, $m[1]);
-                $albumFotos[] = ['datei' => $basis, 'text' => '🍾 ' . ($c['name'] ?? 'Champagner'), 'link' => '?ergebnis=' . rawurlencode($m[1]), 'div' => false];
+                $zugeordnet[] = ['datei' => $basis, 'text' => '🍾 ' . ($c['name'] ?? 'Champagner'), 'link' => '?ergebnis=' . rawurlencode($m[1])];
             } elseif (str_starts_with($basis, 'div-')) {
-                $albumFotos[] = ['datei' => $basis, 'text' => '', 'link' => '', 'div' => true];
+                $offen[] = $basis;
             }
             // neu-/wneu-Zwischendateien bleiben außen vor
         }
+        $vorschlag = $_SESSION['foto_vorschlag'] ?? null;
       ?>
-      <?php if ($albumFotos === []): ?>
+
+      <?php if ($offen !== []): ?>
+        <div class="card" style="border-left:5px solid var(--accent);">
+          <h2>Nicht zugeordnet (<?= count($offen) ?>)</h2>
+          <p class="anzahl" style="margin-bottom:0.8rem;">Diese Fotos gehören noch zu keiner Flasche/keinem Weingut. Tipp auf „Zuordnen“ – die App liest Etikett und Standort und schlägt etwas vor.</p>
+          <?php if ($eingeloggt): ?>
+            <form method="post" style="margin-bottom:1rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="doppelte_entfernen">
+              <button class="knopf zweit" type="submit">🧹 Doppelte Fotos entfernen</button>
+            </form>
+          <?php endif; ?>
+          <div class="foto-galerie album">
+            <?php foreach ($offen as $foto): ?>
+              <?php $hatVorschlag = $vorschlag !== null && $vorschlag['datei'] === $foto; ?>
+              <div class="album-foto">
+                <div class="foto">
+                  <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                    <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
+                  </a>
+                  <?php if ($eingeloggt): ?>
+                    <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="div_foto_loeschen">
+                      <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                      <button type="submit" title="Foto löschen">&#10005;</button>
+                    </form>
+                  <?php endif; ?>
+                </div>
+                <?php if ($eingeloggt): ?>
+                  <?php if ($hatVorschlag && ($vorschlag['champagner'] !== '' || $vorschlag['weingut'] !== '')): ?>
+                    <div class="hinweis ok" style="font-size:0.8rem; padding:0.4rem 0.6rem; margin:4px 0;"><?= e($vorschlag['text']) ?></div>
+                    <form method="post">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="foto_uebernehmen">
+                      <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                      <input type="hidden" name="champagner_id" value="<?= e($vorschlag['champagner']) ?>">
+                      <input type="hidden" name="weingut_id" value="<?= e($vorschlag['weingut']) ?>">
+                      <button class="knopf klein" type="submit">✓ Übernehmen</button>
+                    </form>
+                  <?php else: ?>
+                    <form method="post">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="foto_analysieren">
+                      <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                      <button class="knopf klein zweit" type="submit">🔎 Zuordnen</button>
+                    </form>
+                  <?php endif; ?>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+      <?php endif; ?>
+
+      <?php if ($zugeordnet === [] && $offen === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Fotos – sie sammeln sich hier automatisch, sobald ihr Flaschen und Weingüter fotografiert.</p></div>
-      <?php else: ?>
-        <p class="untertitel"><?= count($albumFotos) ?> Foto(s) – von Flaschen, Weingütern und unterwegs.</p>
+      <?php elseif ($zugeordnet !== []): ?>
+        <p class="untertitel"><?= count($zugeordnet) ?> zugeordnete(s) Foto(s):</p>
         <div class="foto-galerie album" style="margin-bottom:1rem;">
-          <?php foreach ($albumFotos as $af): ?>
+          <?php foreach ($zugeordnet as $af): ?>
             <div class="album-foto">
               <div class="foto">
                 <a href="bilder/<?= e(rawurlencode($af['datei'])) ?>" target="_blank">
                   <img src="<?= e(thumbUrl($af['datei'])) ?>" alt="" loading="lazy">
                 </a>
-                <?php if ($eingeloggt && $af['div']): ?>
-                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="div_foto_loeschen">
-                    <input type="hidden" name="datei" value="<?= e($af['datei']) ?>">
-                    <button type="submit" title="Foto löschen">&#10005;</button>
-                  </form>
-                <?php endif; ?>
               </div>
-              <?php if ($af['text'] !== ''): ?>
-                <a class="album-text" href="<?= e($af['link']) ?>"><?= e($af['text']) ?></a>
-              <?php endif; ?>
+              <a class="album-text" href="<?= e($af['link']) ?>"><?= e($af['text']) ?></a>
             </div>
           <?php endforeach; ?>
         </div>
