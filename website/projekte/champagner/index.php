@@ -2410,6 +2410,14 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         </div>
 
         <div class="card">
+          <h2>👀 Zum Mitschauen (ohne Bewerten)</h2>
+          <p class="anzahl" style="margin-bottom:0.6rem;">Diesen Link kannst du an alle geben, die nur zusehen wollen – Listen, Ergebnisse und Fotos sind sichtbar, bewerten geht damit nicht.</p>
+          <div class="knopfreihe">
+            <button type="button" class="knopf zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?liste=1">Ansehen-Link kopieren</button>
+          </div>
+        </div>
+
+        <div class="card">
           <h2>Teilnehmer (<?= count($aktivesTasting['teilnehmer'] ?? []) ?>)</h2>
           <?php foreach (($aktivesTasting['teilnehmer'] ?? []) as $p): ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
