@@ -256,16 +256,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?fehler=' . rawurlencode('Bitte einen Namen für den Champagner angeben.'));
         }
         $neueId = bin2hex(random_bytes(4));
-        datenAendern(function (array $d) use ($name, $preis, $weingutId, $neueId): array {
+        $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
+        datenAendern(function (array $d) use ($name, $preis, $weingutId, $neueId, $meinTid): array {
             foreach ($d['champagner'] as $c) {
-                if (mb_strtolower($c['name']) === mb_strtolower($name)) {
+                if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
                 }
             }
             if ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'tasting_id' => $meinTid, 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
@@ -321,9 +322,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $neueId = bin2hex(random_bytes(4));
         $neueWeingutId = bin2hex(random_bytes(4));
-        datenAendern(function (array $d) use ($name, $preis, $weingutId, $weingutNeu, $neueId, $neueWeingutId): array {
+        $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
+        datenAendern(function (array $d) use ($name, $preis, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
             foreach ($d['champagner'] as $c) {
-                if (mb_strtolower($c['name']) === mb_strtolower($name)) {
+                if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?neu=2&fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
                 }
             }
@@ -342,16 +344,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'tasting_id' => $meinTid, 'zeit' => time()];
             return $d;
         });
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
         fotosUmhaengen((string)($_SESSION['neu']['praefix'] ?? ''), 'neu', $neueId);
         unset($_SESSION['neu']);
         // Für die eigene Tasting-Gruppe automatisch „ins Glas“ stellen
-        $meins = meinTasting(datenLaden());
-        if ($meins !== null) {
-            $meinTid = $meins['id'];
+        if ($meinTid !== '') {
             datenAendern(function (array $d) use ($meinTid, $neueId): array {
                 foreach ($d['tastings'] as &$t) {
                     if ($t['id'] === $meinTid) {
@@ -1144,13 +1144,21 @@ $fehler  = (string)($_GET['fehler'] ?? '');
 
 $daten = datenLaden();
 
-// Einmalige Migration: alle Bewertungen ohne Tasting-Zuordnung dem
-// bestehenden „Champagne 26“ zuschlagen (bzw. es anlegen).
+// Einmalige Migration: alle Bewertungen und Champagner ohne Tasting-Zuordnung
+// dem bestehenden „Champagne 26“ zuschlagen (bzw. es anlegen).
 $brauchtMigration = false;
 foreach ($daten['bewertungen'] as $b) {
     if (!isset($b['tasting_id'])) {
         $brauchtMigration = true;
         break;
+    }
+}
+if (!$brauchtMigration) {
+    foreach ($daten['champagner'] as $c) {
+        if (!isset($c['tasting_id'])) {
+            $brauchtMigration = true;
+            break;
+        }
     }
 }
 if ($brauchtMigration) {
@@ -1177,10 +1185,35 @@ if ($brauchtMigration) {
                 $b['tasting_id'] = $zielId;
             }
         }
+        unset($b);
+        // Champagner erben das Tasting ihrer Bewertungen, sonst das Ziel-Tasting
+        foreach ($d['champagner'] as &$c) {
+            if (!isset($c['tasting_id'])) {
+                $cTid = '';
+                foreach ($d['bewertungen'] as $bw) {
+                    if ($bw['champagner_id'] === $c['id'] && (string)($bw['tasting_id'] ?? '') !== '') {
+                        $cTid = (string)$bw['tasting_id'];
+                        break;
+                    }
+                }
+                $c['tasting_id'] = $cTid !== '' ? $cTid : $zielId;
+            }
+        }
+        unset($c);
         return $d;
     });
     $daten = datenLaden();
 }
+
+/** Gehört ein Champagner zum angegebenen Tasting? (Einträge ohne Zuordnung zählen überall mit.) */
+function champagnerInTasting(array $c, string $tid): bool
+{
+    $ct = (string)($c['tasting_id'] ?? '');
+    return $ct === '' || $tid === '' || $ct === $tid;
+}
+
+// Tasting-Blick des Betrachters (per Cookie, sonst neuestes) – filtert die Listen
+$blickTastingId = (string)(meinTasting($daten)['id'] ?? '');
 
 /** Alle Bewertungen zu einem Champagner. */
 function bewertungenFuer(array $daten, string $cid): array
@@ -2474,7 +2507,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <span class="k-icon">🍇</span>
             <?php endif; ?>
             <span class="k-text"><b><?= e($w['name']) ?></b>
-              <small><?= count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id'])) ?> Champagner erfasst</small>
+              <small><?= count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id'] && champagnerInTasting($c, $blickTastingId))) ?> Champagner erfasst</small>
             </span>
           </a>
         <?php endforeach; ?>
@@ -2500,7 +2533,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php
         $hierChampagner = array_values(array_filter(
             $daten['champagner'],
-            fn($c) => $kontextOhne ? trim((string)($c['weingut_id'] ?? '')) === '' : ($c['weingut_id'] ?? '') === $kontextWeingut['id']
+            fn($c) => champagnerInTasting($c, $blickTastingId)
+                && ($kontextOhne ? trim((string)($c['weingut_id'] ?? '')) === '' : ($c['weingut_id'] ?? '') === $kontextWeingut['id'])
         ));
         usort($hierChampagner, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
       ?>
@@ -2560,7 +2594,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="aktion" value="glas_setzen">
             <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
             <?php
-              $auswahl = $daten['champagner'];
+              // Nur die Weine dieses Tastings zur Auswahl anbieten
+              $auswahl = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
               usort($auswahl, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
             ?>
             <select name="champagner_id">
@@ -3739,18 +3774,37 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
       <?php else: ?>
       <a class="knopf gross" href="?neu=1">📷&nbsp; Neue Flasche erfassen</a>
+      <?php
+        // Tasting-Umschalter: eigenes Tasting ist Standard, „Alle“ zeigt das Archiv
+        $tidWahl = (string)($_GET['tid'] ?? '');
+        $tidGueltig = $tidWahl === 'alle';
+        foreach ($daten['tastings'] as $t) {
+            if ($t['id'] === $tidWahl) { $tidGueltig = true; break; }
+        }
+        if (!$tidGueltig) {
+            $tidWahl = $blickTastingId !== '' ? $blickTastingId : 'alle';
+        }
+        $tastingsSortiert = $daten['tastings'];
+        usort($tastingsSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+      ?>
+      <?php if (count($daten['tastings']) > 1): ?>
+        <div class="sortier-leiste">Tasting:
+          <?php foreach ($tastingsSortiert as $t): ?>
+            <a class="<?= $tidWahl === $t['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=<?= e($sortierung) ?>&amp;tid=<?= e(rawurlencode($t['id'])) ?>"><?= e($t['titel']) ?></a>
+          <?php endforeach; ?>
+          <a class="<?= $tidWahl === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=<?= e($sortierung) ?>&amp;tid=alle">Alle</a>
+        </div>
+      <?php endif; ?>
       <div class="sortier-leiste">Sortieren:
-        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=datum">Anlagedatum</a>
-        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=name">Name</a>
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=datum&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=name&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Name</a>
       </div>
       <input type="search" class="filter-feld" placeholder="🔍 Champagner oder Weingut suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
-      <?php if ($daten['champagner'] === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Champagner angelegt – oben auf „Neue Flasche erfassen" tippen!</p></div>
-      <?php endif; ?>
-
       <?php
-        $champagnerListe = $daten['champagner'];
+        $champagnerListe = $tidWahl === 'alle'
+            ? $daten['champagner']
+            : array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, $tidWahl)));
         if ($sortierung === 'name') {
             usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
         } else {
@@ -3758,6 +3812,9 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             usort($champagnerListe, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
         }
       ?>
+      <?php if ($champagnerListe === []): ?>
+        <div class="card"><p style="color:var(--muted); font-style:italic;"><?= $tidWahl === 'alle' ? 'Noch kein Champagner angelegt – oben auf „Neue Flasche erfassen" tippen!' : 'In diesem Tasting ist noch kein Champagner erfasst – oben auf „Neue Flasche erfassen" tippen oder oben auf „Alle" umschalten.' ?></p></div>
+      <?php endif; ?>
       <?php foreach ($champagnerListe as $c): ?>
         <?php
           $bewertungen = bewertungenFuer($daten, $c['id']);
@@ -4043,6 +4100,32 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         if (e.key === 'Escape') { schliessen(); }
       });
     })();
+
+    <?php if (in_array($ansicht, ['verkosten', 'werkstatt', 'tastingplatz', 'ergebnis', 'liste'], true)): ?>
+    // Live-Aktualisierung: alle 20 Sekunden im Hintergrund nachsehen, ob es
+    // Neuigkeiten gibt (Beitritte, Bewertungen, „im Glas“) – dann neu laden.
+    (function () {
+      var letzterStand = document.querySelector('main') ? document.querySelector('main').innerHTML : '';
+      setInterval(function () {
+        if (document.hidden) { return; } // Tab nicht sichtbar → nichts tun
+        var aktiv = document.activeElement;
+        if (aktiv && (aktiv.tagName === 'INPUT' || aktiv.tagName === 'TEXTAREA' || aktiv.tagName === 'SELECT')) { return; }
+        var tippt = false;
+        document.querySelectorAll('.filter-feld').forEach(function (f) { if (f.value.trim() !== '') { tippt = true; } });
+        if (tippt) { return; } // Suchfilter in Benutzung → nicht wegreloaden
+        var overlay = document.getElementById('overlay');
+        var gross = document.getElementById('grossansicht');
+        if ((overlay && !overlay.hidden) || (gross && !gross.hidden)) { return; }
+        var u = new URL(location.href);
+        u.searchParams.set('_live', Date.now());
+        fetch(u.toString(), { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+          var doc = new DOMParser().parseFromString(html, 'text/html');
+          var main = doc.querySelector('main');
+          if (main && main.innerHTML !== letzterStand) { location.reload(); }
+        }).catch(function () { /* offline o. ä. – nächster Versuch in 20 s */ });
+      }, 20000);
+    })();
+    <?php endif; ?>
 
     // Beim Absenden sichtbar machen, dass gearbeitet wird (v. a. Foto-Upload)
     document.querySelectorAll('form').forEach(function (form) {
