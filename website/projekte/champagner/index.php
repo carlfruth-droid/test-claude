@@ -1838,11 +1838,11 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <h1>Fotoalbum 📸</h1>
       <p class="untertitel">Diverse Fotos rund um Champagne 26.</p>
     <?php elseif ($ansicht === 'neu'): ?>
-      <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck zur Liste</a></p>
+      <p class="zurueck"><a href="<?= isset($_GET['vk']) ? '?vk=' . e(rawurlencode((string)$_GET['vk'])) : '?liste=1' ?>">&larr; Zur&uuml;ck</a></p>
       <h1>Neue Flasche 📷</h1>
       <p class="untertitel">Fotografieren – erkennen – bewerten.</p>
     <?php elseif ($ansicht === 'wneu'): ?>
-      <p class="zurueck"><a href="?weingueter=1">&larr; Zur&uuml;ck zur Weingut-Liste</a></p>
+      <p class="zurueck"><a href="<?= isset($_GET['vkmodus']) ? './' : '?weingueter=1' ?>">&larr; Zur&uuml;ck</a></p>
       <h1>Neues Weingut 📷</h1>
       <p class="untertitel">Fotografieren – Standort erkennen – anlegen.</p>
     <?php elseif ($ansicht === 'weingut'): ?>
