@@ -49,6 +49,203 @@ $KATEGORIEN = [
     'trinkfreude'   => ['Trinkfreude',   'Wie gerne würdest du ein zweites Glas trinken oder die Flasche kaufen?'],
 ];
 
+/**
+ * Bewertungs-Konfiguration je Getränkeart. Die 8 Kategorie-Schlüssel sind für
+ * alle Typen gleich (gleiche Sterne-Logik); der „perlage“-Platz trägt je Typ
+ * ein passendes Etikett (Tannin, Frische, Schaum) und die Wizard-Fragen folgen
+ * der jeweils üblichen Verkostungs-Systematik (Wein: WSET-Schema Auge–Nase–
+ * Gaumen–Abgang; Bier: Optik/Schaum–Geruch–Antrunk/Rezenz–Nachtrunk).
+ */
+function kategorienFuer(string $typ, array $kategorien): array
+{
+    if ($typ === 'rotwein') {
+        $kategorien['perlage'] = ['Tannin', 'Wie fein und angenehm ist das Tannin (Gerbstoff)?'];
+    } elseif ($typ === 'weisswein') {
+        $kategorien['perlage'] = ['Frische', 'Wie lebendig und frisch wirkt der Wein?'];
+    } elseif ($typ === 'bier') {
+        $kategorien['duft'] = ['Geruch', 'Wie angenehm und interessant riecht das Bier?'];
+        $kategorien['perlage'] = ['Schaum & Rezenz', 'Wie sind Schaum und Kohlensäure?'];
+        $kategorien['trinkfreude'] = ['Trinkfreude', 'Wie gerne würdest du noch eins bestellen?'];
+    }
+    return $kategorien;
+}
+
+/** Wizard-Schritte (Fragen mit Antwort-Kacheln) je Getränkeart. */
+function wizardSchritte(string $typ): array
+{
+    $smiley = [['top', '😍', 'Klasse'], ['gut', '🙂', 'Gut'], ['ok', '😐', 'Okay'], ['geht', '🙁', 'Schwach']];
+    $balance = [['perfekt', '⚖️', 'Perfekt rund'], ['stimmig', '👍', 'Stimmig'], ['unrund', '😕', 'Etwas unrund'], ['schlecht', '👎', 'Unausgewogen']];
+    $abgang = [['kurz', '⏱', 'Kurz (&lt;5&nbsp;Sek.)'], ['mittel', '⏱⏱', 'Mittel (5–15&nbsp;Sek.)'], ['lang', '⏱⏱⏱', 'Lang (&gt;15&nbsp;Sek.)']];
+    $charakter = [['unverwechselbar', '🌟', 'Unverwechselbar'], ['hatwas', '👌', 'Hat was'], ['austauschbar', '😶', 'Austauschbar']];
+
+    if ($typ === 'rotwein') {
+        return [
+            ['titel' => '👁 Das Auge', 'fragen' => [
+                ['frage' => 'Welche Farbe hat er? (Purpur = jung, Ziegel = reif)', 'feld' => 'farbe', 'optionen' => [
+                    ['purpur', '🟣', 'Purpurrot'], ['rubin', '❤️', 'Rubinrot'], ['granat', '🟥', 'Granatrot'], ['ziegel', '🧱', 'Ziegelrot'],
+                ]],
+                ['frage' => 'Wie dicht ist die Farbe?', 'feld' => 'tiefe', 'optionen' => [
+                    ['blass', '💧', 'Blass'], ['mittel', '🌗', 'Mittel'], ['tief', '🌑', 'Tief & dicht'],
+                ]],
+            ]],
+            ['titel' => '👃 Die Nase', 'fragen' => [
+                ['frage' => 'Riecht er sauber?', 'feld' => 'sauber', 'optionen' => [
+                    ['ja', '✅', 'Sauber'], ['kork', '🚫', 'Kork / muffig'],
+                ]],
+                ['frage' => 'Welche Aromen erkennst du? <small>(mehrere)</small>', 'feld' => 'aromen', 'mehrfach' => true, 'block' => true, 'optionen' => [
+                    ['kirsche', '🍒', 'Kirsche'], ['dunkle_beeren', '🫐', 'Dunkle Beeren'], ['rote_beeren', '🍓', 'Rote Beeren'],
+                    ['pflaume', '🍑', 'Pflaume/Dörrobst'], ['pfeffer', '🌶️', 'Pfeffer/Gewürz'], ['vanille', '🍦', 'Vanille'],
+                    ['schoko', '🍫', 'Schokolade/Kaffee'], ['tabak', '🍂', 'Tabak/Leder'], ['kraeuter', '🌿', 'Kräuter'],
+                    ['veilchen', '🌸', 'Veilchen/Blüten'], ['holz', '🪵', 'Holz/Rauch'], ['erdig', '🍄', 'Erdig/Waldboden'], ['lakritz', '⚫', 'Lakritz'],
+                ]],
+                ['frage' => 'Wie gefällt dir der Duft?', 'feld' => 'duft', 'block' => true, 'optionen' => $smiley],
+            ]],
+            ['titel' => '👅 Der Mund', 'fragen' => [
+                ['frage' => 'Wie ist das Tannin? (das leicht pelzige Gefühl am Zahnfleisch)', 'feld' => 'perlage', 'optionen' => [
+                    ['fein', '🪶', 'Samtig & fein'], ['mittel', '🧤', 'Spürbar, passt'], ['grob', '🧱', 'Hart/pelzig'],
+                ]],
+                ['frage' => 'Wie ist der Körper?', 'feld' => 'koerper', 'optionen' => [
+                    ['leicht', '🎈', 'Leicht'], ['mittel', '🌗', 'Mittel'], ['voll', '💪', 'Voll & kräftig'],
+                ]],
+                ['frage' => 'Wirkt alles ausgewogen? (Frucht, Säure, Tannin, Alkohol)', 'feld' => 'balance', 'optionen' => $balance],
+                ['frage' => 'Wie schmeckt er dir insgesamt?', 'feld' => 'geschmack', 'optionen' => $smiley],
+            ]],
+            ['titel' => '⏱ Der Abgang', 'fragen' => [
+                ['frage' => 'Wie lange bleibt der Geschmack nach dem Schlucken?', 'feld' => 'abgang', 'optionen' => $abgang],
+                ['frage' => 'Hat er Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
+                ['frage' => 'Noch ein Glas?', 'feld' => 'nochmal', 'optionen' => [
+                    ['sofort', '🍷', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
+                ]],
+            ]],
+        ];
+    }
+
+    if ($typ === 'weisswein') {
+        return [
+            ['titel' => '👁 Das Auge', 'fragen' => [
+                ['frage' => 'Welche Farbe hat er? (Grüngelb = jung, Gold = reif/Holz)', 'feld' => 'farbe', 'optionen' => [
+                    ['gruengelb', '🟢', 'Grüngelb'], ['stroh', '🌾', 'Strohgelb'], ['gold', '✨', 'Goldgelb'], ['bernstein', '🟠', 'Bernstein'],
+                ]],
+            ]],
+            ['titel' => '👃 Die Nase', 'fragen' => [
+                ['frage' => 'Riecht er sauber?', 'feld' => 'sauber', 'optionen' => [
+                    ['ja', '✅', 'Sauber'], ['kork', '🚫', 'Kork / muffig'],
+                ]],
+                ['frage' => 'Welche Aromen erkennst du? <small>(mehrere)</small>', 'feld' => 'aromen', 'mehrfach' => true, 'block' => true, 'optionen' => [
+                    ['zitrus', '🍋', 'Zitrus'], ['apfel', '🍏', 'Apfel/Birne'], ['steinobst', '🍑', 'Pfirsich/Aprikose'],
+                    ['exotisch', '🍍', 'Exotisch'], ['stachelbeere', '🥝', 'Stachelbeere/Kiwi'], ['blueten', '🌼', 'Blüten'],
+                    ['kraeuter', '🌿', 'Kräuter/Gras'], ['mineralisch', '⚗️', 'Mineralisch'], ['honig', '🍯', 'Honig'],
+                    ['butter', '🧈', 'Butter/Karamell'], ['nuss', '🥜', 'Nuss/Mandel'], ['holz', '🪵', 'Holz/Vanille'],
+                ]],
+                ['frage' => 'Wie gefällt dir der Duft?', 'feld' => 'duft', 'block' => true, 'optionen' => $smiley],
+            ]],
+            ['titel' => '👅 Der Mund', 'fragen' => [
+                ['frage' => 'Wie frisch und lebendig wirkt er? (Säure = Speichelfluss)', 'feld' => 'perlage', 'optionen' => [
+                    ['fein', '⚡', 'Lebendig & frisch'], ['mittel', '🙂', 'Angenehm'], ['grob', '😴', 'Müde/flach'],
+                ]],
+                ['frage' => 'Wie ist die Süße?', 'feld' => 'suesse', 'optionen' => [
+                    ['trocken', '🏜️', 'Trocken'], ['feinherb', '🌗', 'Feinherb'], ['suess', '🍯', 'Süß'],
+                ]],
+                ['frage' => 'Wirkt alles ausgewogen? (Säure, Frucht, Süße, Körper)', 'feld' => 'balance', 'optionen' => $balance],
+                ['frage' => 'Wie schmeckt er dir insgesamt?', 'feld' => 'geschmack', 'optionen' => $smiley],
+            ]],
+            ['titel' => '⏱ Der Abgang', 'fragen' => [
+                ['frage' => 'Wie lange bleibt der Geschmack nach dem Schlucken?', 'feld' => 'abgang', 'optionen' => $abgang],
+                ['frage' => 'Hat er Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
+                ['frage' => 'Noch ein Glas?', 'feld' => 'nochmal', 'optionen' => [
+                    ['sofort', '🥂', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
+                ]],
+            ]],
+        ];
+    }
+
+    if ($typ === 'bier') {
+        return [
+            ['titel' => '👁 Das Auge', 'fragen' => [
+                ['frage' => 'Welche Farbe hat es?', 'feld' => 'farbe', 'optionen' => [
+                    ['hell', '🌕', 'Hell/Stroh'], ['gold', '✨', 'Golden'], ['bernstein', '🟠', 'Bernstein'], ['dunkel', '🟤', 'Dunkel'], ['schwarz', '⚫', 'Schwarz'],
+                ]],
+                ['frage' => 'Wie ist der Schaum? (feinporig & stabil = top)', 'feld' => 'perlage', 'optionen' => [
+                    ['fein', '☁️', 'Feinporig & stabil'], ['mittel', '🫧', 'Okay'], ['grob', '💨', 'Schnell weg/grob'],
+                ]],
+            ]],
+            ['titel' => '👃 Die Nase', 'fragen' => [
+                ['frage' => 'Riecht es frisch?', 'feld' => 'sauber', 'optionen' => [
+                    ['ja', '✅', 'Frisch'], ['kork', '🚫', 'Alt (Pappe/muffig)'],
+                ]],
+                ['frage' => 'Welche Aromen erkennst du? <small>(mehrere)</small>', 'feld' => 'aromen', 'mehrfach' => true, 'block' => true, 'optionen' => [
+                    ['zitrushopfen', '🍋', 'Zitrus (Hopfen)'], ['blumig', '🌼', 'Blumig (Hopfen)'], ['harzig', '🌲', 'Harzig/grasig'],
+                    ['tropisch', '🍍', 'Tropisch'], ['karamell', '🍬', 'Karamell'], ['brotig', '🍞', 'Brotig/Getreide'],
+                    ['roest', '☕', 'Röst/Kaffee'], ['schoko', '🍫', 'Schokolade'], ['honig', '🍯', 'Honig'],
+                    ['banane', '🍌', 'Banane (Hefe)'], ['nelke', '🌸', 'Nelke/würzig'], ['rauch', '🔥', 'Rauch'], ['nuss', '🥜', 'Nuss'],
+                ]],
+                ['frage' => 'Wie gefällt dir der Geruch?', 'feld' => 'duft', 'block' => true, 'optionen' => $smiley],
+            ]],
+            ['titel' => '👅 Der Mund', 'fragen' => [
+                ['frage' => 'Wie ist der Antrunk?', 'feld' => 'antrunk', 'optionen' => [
+                    ['spritzig', '⚡', 'Spritzig'], ['weich', '☁️', 'Weich & rund'], ['schal', '💤', 'Schal'],
+                ]],
+                ['frage' => 'Sind Malz (Süße) und Hopfen (Bittere) im Gleichgewicht?', 'feld' => 'balance', 'optionen' => $balance],
+                ['frage' => 'Wie schmeckt es dir insgesamt?', 'feld' => 'geschmack', 'optionen' => $smiley],
+            ]],
+            ['titel' => '⏱ Der Abgang', 'fragen' => [
+                ['frage' => 'Wie lange bleibt der Geschmack? Ist die Bittere angenehm?', 'feld' => 'abgang', 'optionen' => $abgang],
+                ['frage' => 'Hat es Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
+                ['frage' => 'Noch eins?', 'feld' => 'nochmal', 'optionen' => [
+                    ['sofort', '🍺', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
+                ]],
+            ]],
+        ];
+    }
+
+    // Champagner (Standard) – exakt die bewährten Fragen und Antwort-Werte
+    return [
+        ['titel' => '👁 Das Auge', 'fragen' => [
+            ['frage' => 'Welche Farbe hat er?', 'feld' => 'farbe', 'optionen' => [
+                ['zitrus', '🍋', 'Zitronengelb'], ['gold', '✨', 'Goldgelb'], ['kupfer', '🟠', 'Kupfer'], ['lachs', '🌸', 'Lachsrosé'], ['himbeer', '🍓', 'Himbeerrot'],
+            ]],
+            ['frage' => 'Wie ist die Perlage?', 'feld' => 'perlage', 'optionen' => [
+                ['fein', '💫', 'Sehr fein'], ['mittel', '🫧', 'Mittel'], ['grob', '⚪', 'Grob'],
+            ]],
+        ]],
+        ['titel' => '👃 Die Nase', 'fragen' => [
+            ['frage' => 'Riecht er sauber?', 'feld' => 'sauber', 'optionen' => [
+                ['ja', '✅', 'Sauber'], ['kork', '🚫', 'Kork / muffig'],
+            ]],
+            ['frage' => 'Welche Aromen erkennst du? <small>(mehrere)</small>', 'feld' => 'aromen', 'mehrfach' => true, 'block' => true, 'optionen' => [
+                ['apfel', '🍏', 'Apfel/Birne'], ['zitrus', '🍋', 'Zitrus'], ['steinobst', '🍑', 'Steinobst'], ['beeren', '🍓', 'Rote Beeren'],
+                ['exotisch', '🍍', 'Exotisch'], ['brioche', '🥐', 'Brioche'], ['toast', '🍞', 'Toast'], ['nuss', '🥜', 'Nuss/Mandel'],
+                ['honig', '🍯', 'Honig'], ['butter', '🧈', 'Butter/Karamell'], ['erdig', '🍄', 'Erdig/reif'], ['blueten', '🌼', 'Blüten'],
+                ['kraeuter', '🌿', 'Kräuter'], ['mineralisch', '⚗️', 'Mineralisch'],
+            ]],
+            ['frage' => 'Wie gefällt dir der Duft?', 'feld' => 'duft', 'block' => true, 'optionen' => $smiley],
+        ]],
+        ['titel' => '👅 Der Mund', 'fragen' => [
+            ['frage' => 'Wie ist die Säure?', 'feld' => 'saeure', 'optionen' => [
+                ['hoch', '🍋🍋🍋', 'Frisch/hoch'], ['mittel', '🍋🍋', 'Mittel'], ['mild', '🍋', 'Mild'],
+            ]],
+            ['frage' => 'Wie ist die Mousse?', 'feld' => 'mousse', 'optionen' => [
+                ['cremig', '☁️', 'Cremig'], ['lebhaft', '🫧', 'Lebhaft'], ['aggressiv', '⚡', 'Prickelig'],
+            ]],
+            ['frage' => 'Wirkt alles ausgewogen?', 'feld' => 'balance', 'optionen' => $balance],
+            ['frage' => 'Wie schmeckt er dir insgesamt?', 'feld' => 'geschmack', 'optionen' => $smiley],
+        ]],
+        ['titel' => '⏱ Der Abgang', 'fragen' => [
+            ['frage' => 'Wie lange bleibt der Geschmack nach dem Schlucken?', 'feld' => 'abgang', 'optionen' => $abgang],
+            ['frage' => 'Hat er Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
+            ['frage' => 'Noch ein Glas?', 'feld' => 'nochmal', 'optionen' => [
+                ['sofort', '🥂', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
+            ]],
+        ]],
+    ];
+}
+
+/** Beschriftung des Sorten-Felds je Getränkeart. */
+function sortenLabel(string $typ): string
+{
+    return $typ === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
+}
+
 if (!isset($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
@@ -251,13 +448,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name = mb_substr($name, 0, 60);
         $preis = trim((string)($_POST['preis'] ?? ''));
         $preis = mb_substr($preis, 0, 20);
+        $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
+        $kat = (string)($_POST['kat'] ?? 'champagner');
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+            $kat = 'champagner';
+        }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
         if ($name === '') {
             zurueck('?fehler=' . rawurlencode('Bitte einen Namen für den Champagner angeben.'));
         }
         $neueId = bin2hex(random_bytes(4));
         $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($name, $preis, $weingutId, $neueId, $meinTid): array {
+        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $kat, $weingutId, $neueId, $meinTid): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
@@ -266,7 +468,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'tasting_id' => $meinTid, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
@@ -301,13 +503,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($vk !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vk)) {
             $vk = '';
         }
-        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'vk' => $vk];
+        $kat = (string)($_POST['kat'] ?? 'champagner');
+        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? ''), 'vk' => $vk, 'kat' => $kat];
         zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
     }
 
     if ($aktion === 'schnell_anlegen') {
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 60);
         $preis = mb_substr(trim((string)($_POST['preis'] ?? '')), 0, 20);
+        $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
+        $kat = (string)($_POST['kat'] ?? 'champagner');
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+            $kat = 'champagner';
+        }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
         $weingutNeu = mb_substr(trim((string)($_POST['weingut_neu'] ?? '')), 0, 60);
         $vk = (string)($_POST['vk'] ?? '');
@@ -323,7 +531,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $neueId = bin2hex(random_bytes(4));
         $neueWeingutId = bin2hex(random_bytes(4));
         $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($name, $preis, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
+        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?neu=2&fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
@@ -344,7 +552,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'tasting_id' => $meinTid, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
             return $d;
         });
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
@@ -379,7 +587,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($erkannt['name'] === '' && $erkannt['weingut'] === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Auf dem Foto war kein Etikett zu erkennen – am besten ein neues Foto direkt vom Etikett hochladen und nochmal versuchen.'));
         }
-        $_SESSION['erkannt'] = ['cid' => $cid, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut']];
+        $_SESSION['erkannt'] = ['cid' => $cid, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? '')];
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Etikett erkannt – die Vorschläge stehen unten in den Bearbeiten-Feldern. Prüfen und speichern!'));
     }
 
@@ -411,25 +619,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name = mb_substr($name, 0, 60);
         $preis = trim((string)($_POST['preis'] ?? ''));
         $preis = mb_substr($preis, 0, 20);
+        $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
+        $kat = (string)($_POST['kat'] ?? '');
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+            $kat = '';
+        }
         if ($name === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Der Name darf nicht leer sein.'));
         }
-        datenAendern(function (array $d) use ($cid, $name, $preis): array {
+        datenAendern(function (array $d) use ($cid, $name, $preis, $rebsorte, $kat): array {
+            $eigenesTasting = (string)(champagnerHolen($d, $cid)['tasting_id'] ?? '');
             foreach ($d['champagner'] as $c) {
-                if ($c['id'] !== $cid && mb_strtolower($c['name']) === mb_strtolower($name)) {
-                    zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Ein anderer Champagner heißt schon so.'));
+                if ($c['id'] !== $cid && mb_strtolower($c['name']) === mb_strtolower($name)
+                    && (string)($c['tasting_id'] ?? '') === $eigenesTasting) {
+                    zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Ein anderes Getränk in diesem Tasting heißt schon so.'));
                 }
             }
             foreach ($d['champagner'] as &$c) {
                 if ($c['id'] === $cid) {
-                    $c['name']  = $name;
-                    $c['preis'] = $preis;
+                    $c['name']     = $name;
+                    $c['preis']    = $preis;
+                    $c['rebsorte'] = $rebsorte;
+                    if ($kat !== '') {
+                        $c['typ'] = $kat;
+                    }
                 }
             }
             return $d;
         });
         unset($_SESSION['erkannt']);
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Name und Preis gespeichert.'));
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Stammdaten gespeichert.'));
     }
 
     if ($aktion === 'foto_upload') {
@@ -1092,7 +1311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $detail = [];
         $rohDetail = json_decode((string)($_POST['detail'] ?? ''), true);
         if (is_array($rohDetail)) {
-            foreach (['farbe', 'perlage', 'duft', 'geschmack', 'saeure', 'mousse', 'balance', 'abgang', 'charakter', 'nochmal', 'sauber'] as $k) {
+            foreach (['farbe', 'perlage', 'duft', 'geschmack', 'saeure', 'mousse', 'balance', 'abgang', 'charakter', 'nochmal', 'sauber', 'tiefe', 'koerper', 'suesse', 'antrunk'] as $k) {
                 if (isset($rohDetail[$k]) && is_string($rohDetail[$k])) {
                     $detail[$k] = mb_substr($rohDetail[$k], 0, 30);
                 }
@@ -1502,7 +1721,7 @@ function uploadText(int $hochgeladen, int $abgelehnt): string
  */
 function etikettErkennen(string $fotoName): array
 {
-    $leer = ['name' => '', 'weingut' => ''];
+    $leer = ['name' => '', 'weingut' => '', 'rebsorte' => ''];
     $keyDatei = __DIR__ . '/daten/apikey.php';
     if (!is_file($keyDatei)) {
         return $leer;
@@ -1524,7 +1743,7 @@ function etikettErkennen(string $fotoName): array
             'role'    => 'user',
             'content' => [
                 ['type' => 'image', 'source' => ['type' => 'base64', 'media_type' => 'image/jpeg', 'data' => $bild]],
-                ['type' => 'text', 'text' => 'Auf dem Foto ist eine Champagner- oder Weinflasche. Lies das Etikett und antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"..."} – weingut ist der Erzeuger bzw. das Champagnerhaus, name die Bezeichnung des Weins (mit Cuvée und Jahrgang, falls lesbar, aber ohne Erzeugername). Was du nicht erkennst, lässt du als leeren String.'],
+                ['type' => 'text', 'text' => 'Auf dem Foto ist eine Getränkeflasche (Champagner, Wein oder Bier). Lies das Etikett und antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut oder Brauerei), name die Bezeichnung des Getränks (mit Cuvée und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil (nur wenn auf dem Etikett lesbar). Was du nicht erkennst, lässt du als leeren String.'],
             ],
         ]],
     ]);
@@ -1551,8 +1770,9 @@ function etikettErkennen(string $fotoName): array
         $e = json_decode($m[0], true);
         if (is_array($e)) {
             return [
-                'name'    => mb_substr(trim((string)($e['name'] ?? '')), 0, 60),
-                'weingut' => mb_substr(trim((string)($e['weingut'] ?? '')), 0, 60),
+                'name'     => mb_substr(trim((string)($e['name'] ?? '')), 0, 60),
+                'weingut'  => mb_substr(trim((string)($e['weingut'] ?? '')), 0, 60),
+                'rebsorte' => mb_substr(trim((string)($e['rebsorte'] ?? '')), 0, 80),
             ];
         }
     }
@@ -1901,8 +2121,16 @@ function loginFormular(string $weiter = ''): string
 
 function preisZeile(array $c): string
 {
+    $teile = [];
+    $rebsorte = trim((string)($c['rebsorte'] ?? ''));
+    if ($rebsorte !== '') {
+        $teile[] = e($rebsorte);
+    }
     $preis = trim((string)($c['preis'] ?? ''));
-    return $preis === '' ? '' : ' &middot; ' . e($preis);
+    if ($preis !== '') {
+        $teile[] = e($preis);
+    }
+    return $teile === [] ? '' : ' &middot; ' . implode(' &middot; ', $teile);
 }
 
 function champagnerHolen(array $daten, string $id): ?array
@@ -2023,9 +2251,9 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
 // Getränke-Kategorien: Champagner ist aktiv, die anderen sind vorbereitet
 $KATEGORIEN_GETRAENKE = [
     'champagner' => ['🍾', 'Champagner', true],
-    'rotwein'    => ['🍷', 'Rotwein', false],
-    'weisswein'  => ['🥂', 'Weißwein', false],
-    'bier'       => ['🍺', 'Bier', false],
+    'rotwein'    => ['🍷', 'Rotwein', true],
+    'weisswein'  => ['🥂', 'Weißwein', true],
+    'bier'       => ['🍺', 'Bier', true],
 ];
 $kategorie = (string)($_GET['kat'] ?? 'champagner');
 if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
@@ -2638,6 +2866,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php else: ?>
             <p style="color:var(--muted); font-style:italic;">Noch nichts im Glas – wird automatisch gesetzt, sobald jemand eine Flasche erfasst, oder unten von Hand wählen.</p>
           <?php endif; ?>
+          <a class="knopf" href="?neu=1" style="margin-top:0.8rem; display:inline-block;">📷&nbsp; Neues Getränk erfassen</a>
+          <p class="anzahl" style="margin-top:0.3rem;">Etikett fotografieren – das neue Getränk steht danach automatisch „im Glas“.</p>
           <form method="post" style="margin-top:0.8rem;">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="glas_setzen">
@@ -2918,113 +3148,32 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
           <div class="wz-fortschritt"><span id="wz-balken"></span></div>
 
-          <div class="wz-schritt" data-schritt="1">
-            <h2>👁 Das Auge</h2>
-            <p class="wz-frage">Welche Farbe hat er?</p>
-            <div class="wz-kacheln" data-feld="farbe">
-              <button type="button" data-wert="zitrus">🍋<span>Zitronengelb</span></button>
-              <button type="button" data-wert="gold">✨<span>Goldgelb</span></button>
-              <button type="button" data-wert="kupfer">🟠<span>Kupfer</span></button>
-              <button type="button" data-wert="lachs">🌸<span>Lachsrosé</span></button>
-              <button type="button" data-wert="himbeer">🍓<span>Himbeerrot</span></button>
+          <?php
+            $typAktiv = (string)($aktiverChampagner['typ'] ?? 'champagner');
+            $schritte = wizardSchritte($typAktiv);
+            $letzterSchritt = count($schritte) + 1;
+          ?>
+          <?php foreach ($schritte as $sIndex => $schritt): ?>
+            <div class="wz-schritt" data-schritt="<?= $sIndex + 1 ?>"<?= $sIndex > 0 ? ' hidden' : '' ?>>
+              <h2><?= $schritt['titel'] ?></h2>
+              <?php $blockOffen = false; ?>
+              <?php foreach ($schritt['fragen'] as $f): ?>
+                <?php
+                  if (!empty($f['block']) && !$blockOffen) { echo '<div id="aromen-block">'; $blockOffen = true; }
+                  elseif (empty($f['block']) && $blockOffen) { echo '</div>'; $blockOffen = false; }
+                ?>
+                <p class="wz-frage"><?= $f['frage'] ?></p>
+                <div class="wz-kacheln<?= !empty($f['mehrfach']) ? ' mehrfach' : '' ?>" data-feld="<?= e($f['feld']) ?>">
+                  <?php foreach ($f['optionen'] as [$wert, $emoji, $label]): ?>
+                    <button type="button" data-wert="<?= e($wert) ?>"><?= $emoji ?><span><?= $label ?></span></button>
+                  <?php endforeach; ?>
+                </div>
+              <?php endforeach; ?>
+              <?php if ($blockOffen) { echo '</div>'; } ?>
             </div>
-            <p class="wz-frage">Wie ist die Perlage?</p>
-            <div class="wz-kacheln" data-feld="perlage">
-              <button type="button" data-wert="fein">💫<span>Sehr fein</span></button>
-              <button type="button" data-wert="mittel">🫧<span>Mittel</span></button>
-              <button type="button" data-wert="grob">⚪<span>Grob</span></button>
-            </div>
-          </div>
+          <?php endforeach; ?>
 
-          <div class="wz-schritt" data-schritt="2" hidden>
-            <h2>👃 Die Nase</h2>
-            <p class="wz-frage">Riecht er sauber?</p>
-            <div class="wz-kacheln" data-feld="sauber">
-              <button type="button" data-wert="ja">✅<span>Sauber</span></button>
-              <button type="button" data-wert="kork">🚫<span>Kork / muffig</span></button>
-            </div>
-            <div id="aromen-block">
-              <p class="wz-frage">Welche Aromen erkennst du? <small>(mehrere)</small></p>
-              <div class="wz-kacheln mehrfach" data-feld="aromen">
-                <button type="button" data-wert="apfel">🍏<span>Apfel/Birne</span></button>
-                <button type="button" data-wert="zitrus">🍋<span>Zitrus</span></button>
-                <button type="button" data-wert="steinobst">🍑<span>Steinobst</span></button>
-                <button type="button" data-wert="beeren">🍓<span>Rote Beeren</span></button>
-                <button type="button" data-wert="exotisch">🍍<span>Exotisch</span></button>
-                <button type="button" data-wert="brioche">🥐<span>Brioche</span></button>
-                <button type="button" data-wert="toast">🍞<span>Toast</span></button>
-                <button type="button" data-wert="nuss">🥜<span>Nuss/Mandel</span></button>
-                <button type="button" data-wert="honig">🍯<span>Honig</span></button>
-                <button type="button" data-wert="butter">🧈<span>Butter/Karamell</span></button>
-                <button type="button" data-wert="erdig">🍄<span>Erdig/reif</span></button>
-                <button type="button" data-wert="blueten">🌼<span>Blüten</span></button>
-                <button type="button" data-wert="kraeuter">🌿<span>Kräuter</span></button>
-                <button type="button" data-wert="mineralisch">⚗️<span>Mineralisch</span></button>
-              </div>
-              <p class="wz-frage">Wie gefällt dir der Duft?</p>
-              <div class="wz-kacheln" data-feld="duft">
-                <button type="button" data-wert="top">😍<span>Klasse</span></button>
-                <button type="button" data-wert="gut">🙂<span>Gut</span></button>
-                <button type="button" data-wert="ok">😐<span>Okay</span></button>
-                <button type="button" data-wert="geht">🙁<span>Schwach</span></button>
-              </div>
-            </div>
-          </div>
-
-          <div class="wz-schritt" data-schritt="3" hidden>
-            <h2>👅 Der Mund</h2>
-            <p class="wz-frage">Wie ist die Säure?</p>
-            <div class="wz-kacheln" data-feld="saeure">
-              <button type="button" data-wert="hoch">🍋🍋🍋<span>Frisch/hoch</span></button>
-              <button type="button" data-wert="mittel">🍋🍋<span>Mittel</span></button>
-              <button type="button" data-wert="mild">🍋<span>Mild</span></button>
-            </div>
-            <p class="wz-frage">Wie ist die Mousse?</p>
-            <div class="wz-kacheln" data-feld="mousse">
-              <button type="button" data-wert="cremig">☁️<span>Cremig</span></button>
-              <button type="button" data-wert="lebhaft">🫧<span>Lebhaft</span></button>
-              <button type="button" data-wert="aggressiv">⚡<span>Prickelig</span></button>
-            </div>
-            <p class="wz-frage">Wirkt alles ausgewogen?</p>
-            <div class="wz-kacheln" data-feld="balance">
-              <button type="button" data-wert="perfekt">⚖️<span>Perfekt rund</span></button>
-              <button type="button" data-wert="stimmig">👍<span>Stimmig</span></button>
-              <button type="button" data-wert="unrund">😕<span>Etwas unrund</span></button>
-              <button type="button" data-wert="schlecht">👎<span>Unausgewogen</span></button>
-            </div>
-            <p class="wz-frage">Wie schmeckt er dir insgesamt?</p>
-            <div class="wz-kacheln" data-feld="geschmack">
-              <button type="button" data-wert="top">😍<span>Klasse</span></button>
-              <button type="button" data-wert="gut">🙂<span>Gut</span></button>
-              <button type="button" data-wert="ok">😐<span>Okay</span></button>
-              <button type="button" data-wert="geht">🙁<span>Schwach</span></button>
-            </div>
-          </div>
-
-          <div class="wz-schritt" data-schritt="4" hidden>
-            <h2>⏱ Der Abgang</h2>
-            <p class="wz-frage">Wie lange bleibt der Geschmack nach dem Schlucken?</p>
-            <div class="wz-kacheln" data-feld="abgang">
-              <button type="button" data-wert="kurz">⏱<span>Kurz (&lt;5&nbsp;Sek.)</span></button>
-              <button type="button" data-wert="mittel">⏱⏱<span>Mittel (5–15&nbsp;Sek.)</span></button>
-              <button type="button" data-wert="lang">⏱⏱⏱<span>Lang (&gt;15&nbsp;Sek.)</span></button>
-            </div>
-            <p class="wz-frage">Hat er Charakter / Wiedererkennungswert?</p>
-            <div class="wz-kacheln" data-feld="charakter">
-              <button type="button" data-wert="unverwechselbar">🌟<span>Unverwechselbar</span></button>
-              <button type="button" data-wert="hatwas">👌<span>Hat was</span></button>
-              <button type="button" data-wert="austauschbar">😶<span>Austauschbar</span></button>
-            </div>
-            <p class="wz-frage">Noch ein Glas?</p>
-            <div class="wz-kacheln" data-feld="nochmal">
-              <button type="button" data-wert="sofort">🥂<span>Sofort!</span></button>
-              <button type="button" data-wert="gerne">🙂<span>Gerne</span></button>
-              <button type="button" data-wert="muss_nicht">🤷<span>Muss nicht</span></button>
-              <button type="button" data-wert="nein">🙅<span>Nein</span></button>
-            </div>
-          </div>
-
-          <div class="wz-schritt" data-schritt="5" hidden>
+          <div class="wz-schritt" data-schritt="<?= $letzterSchritt ?>" hidden>
             <h2>✅ Fertig!</h2>
             <label class="wz-label">Dein Name</label>
             <input type="text" id="wz-person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40">
@@ -3048,6 +3197,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             'detail' => $vorhandene['detail'] ?? new stdClass(),
             'werte'  => $vorhandene['werte'] ?? new stdClass(),
             'kategorien' => array_keys($KATEGORIEN),
+            'titel' => array_map(fn(array $i): string => $i[0], kategorienFuer($typAktiv, $KATEGORIEN)),
         ], JSON_UNESCAPED_UNICODE) ?></script>
       <?php endif; ?>
 
@@ -3056,7 +3206,9 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php
         $bewertungen = bewertungenFuer($daten, $aktiverChampagner['id']);
         $gesamt      = gesamtSchnitt($bewertungen);
-        $schnitte    = kategorieSchnitte($bewertungen, $KATEGORIEN);
+        $typAktiv    = (string)($aktiverChampagner['typ'] ?? 'champagner');
+        $KATS_TYP    = kategorienFuer($typAktiv, $KATEGORIEN);
+        $schnitte    = kategorieSchnitte($bewertungen, $KATS_TYP);
       ?>
       <?php $flaschenGesamt = array_sum(array_map(fn($b) => (int)($b['flaschen'] ?? 0), $bewertungen)); ?>
       <div class="card">
@@ -3075,7 +3227,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       ?>
       <?php if ($eingeloggt): ?>
         <div class="card">
-          <h2>Name &amp; Preis bearbeiten</h2>
+          <h2>Stammdaten bearbeiten</h2>
           <?php if ($fotos !== []): ?>
             <form method="post" style="margin-bottom:0.9rem;">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -3100,7 +3252,13 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="aktion" value="champagner_bearbeiten">
             <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
             <input type="text" name="name" value="<?= e($erkanntVorschlag !== null && $erkanntVorschlag['name'] !== '' ? $erkanntVorschlag['name'] : $aktiverChampagner['name']) ?>" maxlength="60" required>
+            <input type="text" name="rebsorte" value="<?= e($erkanntVorschlag !== null && ($erkanntVorschlag['rebsorte'] ?? '') !== '' ? $erkanntVorschlag['rebsorte'] : (string)($aktiverChampagner['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($typAktiv)) ?>" maxlength="80">
             <input type="text" name="preis" value="<?= e((string)($aktiverChampagner['preis'] ?? '')) ?>" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
+            <select name="kat">
+              <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kI, $kN]): ?>
+                <option value="<?= e($kS) ?>"<?= $typAktiv === $kS ? ' selected' : '' ?>><?= $kI ?> <?= e($kN) ?></option>
+              <?php endforeach; ?>
+            </select>
             <button class="knopf zweit" type="submit">Speichern</button>
           </form>
         </div>
@@ -3163,7 +3321,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php if ($bewertungen !== []): ?>
         <div class="card">
           <h2>Durchschnitt je Kategorie</h2>
-          <?php foreach ($KATEGORIEN as $schluessel => [$titel, $frage]): ?>
+          <?php foreach ($KATS_TYP as $schluessel => [$titel, $frage]): ?>
             <div class="ergebnis-kategorie">
               <span><?= e($titel) ?></span>
               <?= sterneAnzeige($schnitte[$schluessel]) ?>
@@ -3188,7 +3346,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <thead>
                 <tr>
                   <th>Person</th>
-                  <?php foreach ($KATEGORIEN as [$titel, $frage]): ?>
+                  <?php foreach ($KATS_TYP as [$titel, $frage]): ?>
                     <th><?= e(mb_substr($titel, 0, 4)) ?>.</th>
                   <?php endforeach; ?>
                   <th>Ø</th>
@@ -3339,6 +3497,12 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php elseif ($neu['foto'] !== ''): ?>
           <div class="hinweis ok">Foto gespeichert. Trag Name und Weingut ein – dann geht es direkt zur Bewertung.</div>
         <?php endif; ?>
+        <?php
+          $neuKat = (string)($neu['kat'] ?? ($_GET['kat'] ?? 'champagner'));
+          if (!isset($KATEGORIEN_GETRAENKE[$neuKat])) {
+              $neuKat = 'champagner';
+          }
+        ?>
         <form method="post" class="card">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="schnell_anlegen">
@@ -3347,8 +3511,14 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php if ($neu['foto'] !== ''): ?>
             <img src="<?= e(thumbUrl($neu['foto'])) ?>" alt="" style="max-width:180px; border-radius:10px; border:1px solid var(--border); display:block; margin-bottom:1rem;">
           <?php endif; ?>
-          <h2>Champagner</h2>
-          <input type="text" name="name" value="<?= e($neu['name']) ?>" placeholder="Name des Champagners" maxlength="60" required>
+          <h2>Getränk</h2>
+          <select name="kat">
+            <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kI, $kN]): ?>
+              <option value="<?= e($kS) ?>"<?= $neuKat === $kS ? ' selected' : '' ?>><?= $kI ?> <?= e($kN) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <input type="text" name="name" value="<?= e($neu['name']) ?>" placeholder="Name des Getränks" maxlength="60" required>
+          <input type="text" name="rebsorte" value="<?= e((string)($neu['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($neuKat)) ?>" maxlength="80">
           <input type="text" name="preis" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
           <h2>Weingut</h2>
           <?php if ($daten['weingueter'] !== []): ?>
@@ -3370,6 +3540,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="schnell_foto">
           <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
+          <input type="hidden" name="kat" value="<?= e(isset($KATEGORIEN_GETRAENKE[(string)($_GET['kat'] ?? '')]) ? (string)$_GET['kat'] : 'champagner') ?>">
           <h2>1. Etikett fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach ein Foto vom Etikett – oder wähl ein vorhandenes Bild aus. Danach geht es automatisch weiter.</p>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="foto-kamera" style="display:none;">
@@ -3377,7 +3548,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <div class="knopfreihe">
             <label class="knopf" for="foto-kamera" id="kamera-label">📷&nbsp; Foto aufnehmen</label>
             <label class="knopf zweit" for="foto-galerie" id="galerie-label">🖼️&nbsp; Aus Galerie wählen</label>
-            <a class="knopf zweit" href="?neu=2<?= isset($_GET['vk']) ? '&amp;vk=' . e(rawurlencode((string)$_GET['vk'])) : '' ?>">Ohne Foto</a>
+            <a class="knopf zweit" href="?neu=2<?= isset($_GET['vk']) ? '&amp;vk=' . e(rawurlencode((string)$_GET['vk'])) : '' ?><?= isset($_GET['kat']) ? '&amp;kat=' . e(rawurlencode((string)$_GET['kat'])) : '' ?>">Ohne Foto</a>
           </div>
           <noscript>
             <p style="margin-top:0.8rem;">Bitte Datei oben wählen und dann:</p>
@@ -3853,7 +4024,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <p>Die Kategorie ist schon vorbereitet – die Verkostung startet hier, sobald ihr sie braucht. Bis dahin: <a href="?liste=1">zurück zum Champagner</a>. 🥂</p>
         </div>
       <?php else: ?>
-      <a class="knopf gross" href="?neu=1">📷&nbsp; Neue Flasche erfassen</a>
+      <a class="knopf gross" href="?neu=1&amp;kat=<?= e($kategorie) ?>">📷&nbsp; Neue Flasche erfassen</a>
       <?php
         // Tasting-Umschalter: eigenes Tasting ist Standard, „Alle“ zeigt das Archiv
         $tidWahl = (string)($_GET['tid'] ?? '');
@@ -3870,21 +4041,22 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php if (count($daten['tastings']) > 1): ?>
         <div class="sortier-leiste">Tasting:
           <?php foreach ($tastingsSortiert as $t): ?>
-            <a class="<?= $tidWahl === $t['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=<?= e($sortierung) ?>&amp;tid=<?= e(rawurlencode($t['id'])) ?>"><?= e($t['titel']) ?></a>
+            <a class="<?= $tidWahl === $t['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=<?= e(rawurlencode($t['id'])) ?>"><?= e($t['titel']) ?></a>
           <?php endforeach; ?>
-          <a class="<?= $tidWahl === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=<?= e($sortierung) ?>&amp;tid=alle">Alle</a>
+          <a class="<?= $tidWahl === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=alle">Alle</a>
         </div>
       <?php endif; ?>
       <div class="sortier-leiste">Sortieren:
-        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=datum&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Anlagedatum</a>
-        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=name&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Name</a>
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=datum&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=name&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Name</a>
       </div>
       <input type="search" class="filter-feld" placeholder="🔍 Champagner oder Weingut suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php
-        $champagnerListe = $tidWahl === 'alle'
-            ? $daten['champagner']
-            : array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, $tidWahl)));
+        $champagnerListe = array_values(array_filter(
+            $daten['champagner'],
+            fn($c) => ($c['typ'] ?? 'champagner') === $kategorie && ($tidWahl === 'alle' || champagnerInTasting($c, $tidWahl))
+        ));
         if ($sortierung === 'name') {
             usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
         } else {
@@ -3892,8 +4064,9 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             usort($champagnerListe, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
         }
       ?>
+      <?php $katName = $KATEGORIEN_GETRAENKE[$kategorie][1]; ?>
       <?php if ($champagnerListe === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;"><?= $tidWahl === 'alle' ? 'Noch kein Champagner angelegt – oben auf „Neue Flasche erfassen" tippen!' : 'In diesem Tasting ist noch kein Champagner erfasst – oben auf „Neue Flasche erfassen" tippen oder oben auf „Alle" umschalten.' ?></p></div>
+        <div class="card"><p style="color:var(--muted); font-style:italic;"><?= $tidWahl === 'alle' ? 'Noch kein ' . e($katName) . ' angelegt – oben auf „Neue Flasche erfassen" tippen!' : 'In diesem Tasting ist noch kein ' . e($katName) . ' erfasst – oben auf „Neue Flasche erfassen" tippen oder oben auf „Alle" umschalten.' ?></p></div>
       <?php endif; ?>
       <?php foreach ($champagnerListe as $c): ?>
         <?php
@@ -3903,6 +4076,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $wg          = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
           $meta        = [];
           if ($wg !== null) { $meta[] = $wg['name']; }
+          if (trim((string)($c['rebsorte'] ?? '')) !== '') { $meta[] = (string)$c['rebsorte']; }
           if (trim((string)($c['preis'] ?? '')) !== '') { $meta[] = (string)$c['preis']; }
         ?>
         <div class="card flasche filterbar">
@@ -4118,7 +4292,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           trinkfreude: ({ sofort: 5, gerne: 4, muss_nicht: 3, nein: 1 })[d.nochmal] || 3
         };
       }
-      var TITEL = { duft: 'Duft', perlage: 'Perlage', geschmack: 'Geschmack', balance: 'Balance', komplexitaet: 'Komplexität', abgang: 'Abgang', besonderheit: 'Besonderheit', trinkfreude: 'Trinkfreude' };
+      var TITEL = vor.titel || { duft: 'Duft', perlage: 'Perlage', geschmack: 'Geschmack', balance: 'Balance', komplexitaet: 'Komplexität', abgang: 'Abgang', besonderheit: 'Besonderheit', trinkfreude: 'Trinkfreude' };
       function aktuelleSterne() {
         var abg = sterneAusDetailJS(antwort);
         KAT.forEach(function (k) { if (justiert[k]) { abg[k] = justiert[k]; } });
@@ -4184,7 +4358,16 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       }
       function oeffne() { box.hidden = false; document.body.style.overflow = 'hidden'; }
       function zu() { box.hidden = true; document.body.style.overflow = ''; }
-      waehle(<?= json_encode($kategorie) ?>);
+      <?php
+        // Passende Anleitung vorwählen: beim Bewerten/Ergebnis die des Getränks, sonst die Liste-Kategorie
+        $anleitungArt = in_array($ansicht, ['bewerten', 'ergebnis'], true) && $aktiverChampagner !== null
+            ? (string)($aktiverChampagner['typ'] ?? 'champagner')
+            : $kategorie;
+        if (!isset($KATEGORIEN_GETRAENKE[$anleitungArt])) {
+            $anleitungArt = 'champagner';
+        }
+      ?>
+      waehle(<?= json_encode($anleitungArt) ?>);
       box.querySelectorAll('.anleitung-chips button').forEach(function (b) {
         b.addEventListener('click', function () { waehle(b.dataset.art); });
       });
