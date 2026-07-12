@@ -886,11 +886,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($person === '') {
             zurueck('?bewerten=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte deinen Namen eintragen.'));
         }
+        // Geführte Bewertung: Detail-Antworten übernehmen
+        $detail = [];
+        $rohDetail = json_decode((string)($_POST['detail'] ?? ''), true);
+        if (is_array($rohDetail)) {
+            foreach (['farbe', 'perlage', 'duft', 'geschmack', 'saeure', 'mousse', 'balance', 'abgang', 'charakter', 'nochmal', 'sauber'] as $k) {
+                if (isset($rohDetail[$k]) && is_string($rohDetail[$k])) {
+                    $detail[$k] = mb_substr($rohDetail[$k], 0, 30);
+                }
+            }
+            if (isset($rohDetail['aromen']) && is_array($rohDetail['aromen'])) {
+                $detail['aromen'] = array_slice(array_map(fn($a) => mb_substr((string)$a, 0, 30), $rohDetail['aromen']), 0, 20);
+            }
+        }
+        // Sterne: entweder direkt (justiert) oder aus den Detail-Antworten abgeleitet
         $werte = [];
+        $abgeleitet = sterneAusDetail($detail);
         foreach ($KATEGORIEN as $schluessel => $info) {
             $v = (int)($_POST[$schluessel] ?? 0);
             if ($v < 1 || $v > 5) {
-                zurueck('?bewerten=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte in jeder Kategorie 1–5 Sterne vergeben.'));
+                $v = $abgeleitet[$schluessel] ?? 0;
+            }
+            if ($v < 1 || $v > 5) {
+                zurueck('?bewerten=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Bewertung war unvollständig – bitte nochmal durchgehen.'));
             }
             $werte[$schluessel] = $v;
         }
@@ -902,7 +920,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vk = '';
         }
         $_SESSION['person'] = $person;
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $detail): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -924,6 +942,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'werte'         => $werte,
                 'notiz'         => $notiz,
                 'flaschen'      => $flaschen,
+                'detail'        => $detail,
                 'zeit'          => time(),
             ];
             return $d;
@@ -1601,6 +1620,31 @@ function champagnerHolen(array $daten, string $id): ?array
     return null;
 }
 
+/**
+ * Leitet aus den geführten Detail-Antworten die 8 Kategorie-Sterne (1–5) ab.
+ * Muss deckungsgleich mit der JS-Vorschau (sterneAusDetailJS) sein.
+ */
+function sterneAusDetail(array $d): array
+{
+    $smiley = ['top' => 5, 'gut' => 4, 'ok' => 3, 'geht' => 2];
+    $anzahlAromen = is_array($d['aromen'] ?? null) ? count($d['aromen']) : 0;
+    // Korkfehler → alles Minimum
+    if (($d['sauber'] ?? '') === 'kork') {
+        return array_fill_keys(['duft','perlage','geschmack','balance','komplexitaet','abgang','besonderheit','trinkfreude'], 1);
+    }
+    $komplex = $anzahlAromen >= 8 ? 5 : ($anzahlAromen >= 6 ? 4 : ($anzahlAromen >= 3 ? 3 : ($anzahlAromen >= 1 ? 2 : 3)));
+    return [
+        'duft'         => $smiley[$d['duft'] ?? ''] ?? 3,
+        'perlage'      => ['fein' => 5, 'mittel' => 4, 'grob' => 2][$d['perlage'] ?? ''] ?? 3,
+        'geschmack'    => $smiley[$d['geschmack'] ?? ''] ?? 3,
+        'balance'      => ['perfekt' => 5, 'stimmig' => 4, 'unrund' => 3, 'schlecht' => 2][$d['balance'] ?? ''] ?? 3,
+        'komplexitaet' => $komplex,
+        'abgang'       => ['lang' => 5, 'mittel' => 4, 'kurz' => 2][$d['abgang'] ?? ''] ?? 3,
+        'besonderheit' => ['unverwechselbar' => 5, 'hatwas' => 4, 'austauschbar' => 2][$d['charakter'] ?? ''] ?? 3,
+        'trinkfreude'  => ['sofort' => 5, 'gerne' => 4, 'muss_nicht' => 3, 'nein' => 1][$d['nochmal'] ?? ''] ?? 3,
+    ];
+}
+
 // Welche Ansicht?
 $ansicht = 'verkosten'; // Startseite: Wo verkostest du?
 $aktiverChampagner = null;
@@ -1857,6 +1901,35 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     @keyframes pulsieren { 50% { opacity: 0.4; } }
     button.laedt { animation: pulsieren 1s infinite; }
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
+
+    /* ---------- Geführte Bewertung ---------- */
+    .wz-fortschritt { height: 6px; background: var(--border); border-radius: 4px; margin-bottom: 1.2rem; overflow: hidden; }
+    #wz-balken { display: block; height: 100%; width: 20%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
+    .wz-schritt h2 { font-size: 1.35rem; margin-bottom: 0.3rem; }
+    .wz-frage { font-weight: 600; margin: 1.1rem 0 0.5rem; }
+    .wz-frage small { font-weight: 400; color: var(--muted); }
+    .wz-kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 0.5rem; }
+    .wz-kacheln button {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      background: var(--card); border: 2px solid var(--border); border-radius: 14px;
+      padding: 0.7rem 0.4rem; cursor: pointer; font-size: 1.4rem; color: var(--text);
+      font-family: inherit; -webkit-tap-highlight-color: transparent; min-height: 74px;
+    }
+    .wz-kacheln button span { font-size: 0.72rem; line-height: 1.15; text-align: center; }
+    .wz-kacheln button:active { transform: scale(0.95); }
+    .wz-kacheln button.gewaehlt { border-color: var(--accent); background: var(--accent-hell); }
+    .wz-label { display: block; font-weight: 600; margin: 0.9rem 0 0.3rem; }
+    .wz-label small { font-weight: 400; color: var(--muted); }
+    .wz-nav { display: flex; gap: 0.6rem; margin-top: 1.6rem; }
+    .wz-nav .knopf { flex: 1; }
+    #wz-sterne-vorschau .wz-stern-zeile {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+      padding: 0.45rem 0; border-bottom: 1px solid var(--border);
+    }
+    #wz-sterne-vorschau .wz-stern-zeile:last-child { border-bottom: none; }
+    #wz-sterne-vorschau .wz-sterne { font-size: 1.5rem; letter-spacing: 2px; white-space: nowrap; cursor: pointer; }
+    #wz-sterne-vorschau .wz-sterne .an { color: var(--stern); }
+    #wz-sterne-vorschau .wz-sterne .aus { color: var(--border); }
 
     .filter-feld { margin-bottom: 0.7rem; }
     input[type="password"], input[type="text"], input[type="number"], input[type="search"], input[type="file"], textarea, select {
@@ -2311,44 +2384,151 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
           }
         ?>
         <?php if ($vorhandene !== null): ?>
-          <div class="hinweis ok">Du änderst die bestehende Bewertung von <b><?= e($vorhandene['person']) ?></b> – Sterne, Notiz und Flaschen sind vorausgefüllt.</div>
+          <div class="hinweis ok">Du änderst die Bewertung von <b><?= e($vorhandene['person']) ?></b> – die Antworten sind vorbelegt.</div>
         <?php endif; ?>
-        <form method="post" class="card">
+        <form method="post" id="wizard-form">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="bewerten">
           <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
           <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
-          <h2>Wer bewertet?</h2>
-          <input type="text" name="person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40" required>
-
-          <h2>Persönliche Notiz <span style="color:var(--muted); font-style:italic; font-size:0.9rem;">(optional)</span></h2>
-          <textarea name="notiz" placeholder="z. B. erinnert an Brioche und grünen Apfel …" maxlength="500" rows="3"><?= e((string)($vorhandene['notiz'] ?? '')) ?></textarea>
-
-          <h2>Flaschen <span style="color:var(--muted); font-style:italic; font-size:0.9rem;">(wie viele nimmst du mit / hast du gekauft?)</span></h2>
-          <input type="number" name="flaschen" min="0" max="99" inputmode="numeric" value="<?= (int)($vorhandene['flaschen'] ?? 0) ?>">
-
-          <?php foreach ($KATEGORIEN as $schluessel => [$titel, $frage]): ?>
-            <?php $vorbelegt = (int)($vorhandene['werte'][$schluessel] ?? 0); ?>
-            <div class="kategorie">
-              <div class="frage">
-                <b><?= e($titel) ?></b>
-                <small><?= e($frage) ?></small>
-              </div>
-              <div class="sterne">
-                <?php for ($i = 5; $i >= 1; $i--): ?>
-                  <input type="radio" id="<?= e($schluessel) ?><?= $i ?>" name="<?= e($schluessel) ?>" value="<?= $i ?>"<?= $vorbelegt === $i ? ' checked' : '' ?> required>
-                  <label for="<?= e($schluessel) ?><?= $i ?>" title="<?= $i ?> Sterne">★</label>
-                <?php endfor; ?>
-              </div>
-            </div>
+          <input type="hidden" name="detail" id="detail-feld" value="">
+          <?php foreach ($KATEGORIEN as $schluessel => $info): ?>
+            <input type="hidden" name="<?= e($schluessel) ?>" id="stern-<?= e($schluessel) ?>" value="">
           <?php endforeach; ?>
 
-          <div class="knopfreihe" style="margin-top:1.2rem;">
-            <button class="knopf" type="submit"><?= $vorhandene !== null ? 'Änderungen speichern' : 'Bewertung speichern' ?></button>
-            <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Abbrechen</a>
+          <div class="wz-fortschritt"><span id="wz-balken"></span></div>
+
+          <div class="wz-schritt" data-schritt="1">
+            <h2>👁 Das Auge</h2>
+            <p class="wz-frage">Welche Farbe hat er?</p>
+            <div class="wz-kacheln" data-feld="farbe">
+              <button type="button" data-wert="zitrus">🍋<span>Zitronengelb</span></button>
+              <button type="button" data-wert="gold">✨<span>Goldgelb</span></button>
+              <button type="button" data-wert="kupfer">🟠<span>Kupfer</span></button>
+              <button type="button" data-wert="lachs">🌸<span>Lachsrosé</span></button>
+              <button type="button" data-wert="himbeer">🍓<span>Himbeerrot</span></button>
+            </div>
+            <p class="wz-frage">Wie ist die Perlage?</p>
+            <div class="wz-kacheln" data-feld="perlage">
+              <button type="button" data-wert="fein">💫<span>Sehr fein</span></button>
+              <button type="button" data-wert="mittel">🫧<span>Mittel</span></button>
+              <button type="button" data-wert="grob">⚪<span>Grob</span></button>
+            </div>
           </div>
-          <p class="abmelden">Pro Person zählt immer nur die neueste Bewertung – du kannst also jederzeit ändern.</p>
+
+          <div class="wz-schritt" data-schritt="2" hidden>
+            <h2>👃 Die Nase</h2>
+            <p class="wz-frage">Riecht er sauber?</p>
+            <div class="wz-kacheln" data-feld="sauber">
+              <button type="button" data-wert="ja">✅<span>Sauber</span></button>
+              <button type="button" data-wert="kork">🚫<span>Kork / muffig</span></button>
+            </div>
+            <div id="aromen-block">
+              <p class="wz-frage">Welche Aromen erkennst du? <small>(mehrere)</small></p>
+              <div class="wz-kacheln mehrfach" data-feld="aromen">
+                <button type="button" data-wert="apfel">🍏<span>Apfel/Birne</span></button>
+                <button type="button" data-wert="zitrus">🍋<span>Zitrus</span></button>
+                <button type="button" data-wert="steinobst">🍑<span>Steinobst</span></button>
+                <button type="button" data-wert="beeren">🍓<span>Rote Beeren</span></button>
+                <button type="button" data-wert="exotisch">🍍<span>Exotisch</span></button>
+                <button type="button" data-wert="brioche">🥐<span>Brioche</span></button>
+                <button type="button" data-wert="toast">🍞<span>Toast</span></button>
+                <button type="button" data-wert="nuss">🥜<span>Nuss/Mandel</span></button>
+                <button type="button" data-wert="honig">🍯<span>Honig</span></button>
+                <button type="button" data-wert="butter">🧈<span>Butter/Karamell</span></button>
+                <button type="button" data-wert="erdig">🍄<span>Erdig/reif</span></button>
+                <button type="button" data-wert="blueten">🌼<span>Blüten</span></button>
+                <button type="button" data-wert="kraeuter">🌿<span>Kräuter</span></button>
+                <button type="button" data-wert="mineralisch">⚗️<span>Mineralisch</span></button>
+              </div>
+              <p class="wz-frage">Wie gefällt dir der Duft?</p>
+              <div class="wz-kacheln" data-feld="duft">
+                <button type="button" data-wert="top">😍<span>Klasse</span></button>
+                <button type="button" data-wert="gut">🙂<span>Gut</span></button>
+                <button type="button" data-wert="ok">😐<span>Okay</span></button>
+                <button type="button" data-wert="geht">🙁<span>Schwach</span></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="wz-schritt" data-schritt="3" hidden>
+            <h2>👅 Der Mund</h2>
+            <p class="wz-frage">Wie ist die Säure?</p>
+            <div class="wz-kacheln" data-feld="saeure">
+              <button type="button" data-wert="hoch">🍋🍋🍋<span>Frisch/hoch</span></button>
+              <button type="button" data-wert="mittel">🍋🍋<span>Mittel</span></button>
+              <button type="button" data-wert="mild">🍋<span>Mild</span></button>
+            </div>
+            <p class="wz-frage">Wie ist die Mousse?</p>
+            <div class="wz-kacheln" data-feld="mousse">
+              <button type="button" data-wert="cremig">☁️<span>Cremig</span></button>
+              <button type="button" data-wert="lebhaft">🫧<span>Lebhaft</span></button>
+              <button type="button" data-wert="aggressiv">⚡<span>Prickelig</span></button>
+            </div>
+            <p class="wz-frage">Wirkt alles ausgewogen?</p>
+            <div class="wz-kacheln" data-feld="balance">
+              <button type="button" data-wert="perfekt">⚖️<span>Perfekt rund</span></button>
+              <button type="button" data-wert="stimmig">👍<span>Stimmig</span></button>
+              <button type="button" data-wert="unrund">😕<span>Etwas unrund</span></button>
+              <button type="button" data-wert="schlecht">👎<span>Unausgewogen</span></button>
+            </div>
+            <p class="wz-frage">Wie schmeckt er dir insgesamt?</p>
+            <div class="wz-kacheln" data-feld="geschmack">
+              <button type="button" data-wert="top">😍<span>Klasse</span></button>
+              <button type="button" data-wert="gut">🙂<span>Gut</span></button>
+              <button type="button" data-wert="ok">😐<span>Okay</span></button>
+              <button type="button" data-wert="geht">🙁<span>Schwach</span></button>
+            </div>
+          </div>
+
+          <div class="wz-schritt" data-schritt="4" hidden>
+            <h2>⏱ Der Abgang</h2>
+            <p class="wz-frage">Wie lange bleibt der Geschmack nach dem Schlucken?</p>
+            <div class="wz-kacheln" data-feld="abgang">
+              <button type="button" data-wert="kurz">⏱<span>Kurz (&lt;5&nbsp;Sek.)</span></button>
+              <button type="button" data-wert="mittel">⏱⏱<span>Mittel (5–15&nbsp;Sek.)</span></button>
+              <button type="button" data-wert="lang">⏱⏱⏱<span>Lang (&gt;15&nbsp;Sek.)</span></button>
+            </div>
+            <p class="wz-frage">Hat er Charakter / Wiedererkennungswert?</p>
+            <div class="wz-kacheln" data-feld="charakter">
+              <button type="button" data-wert="unverwechselbar">🌟<span>Unverwechselbar</span></button>
+              <button type="button" data-wert="hatwas">👌<span>Hat was</span></button>
+              <button type="button" data-wert="austauschbar">😶<span>Austauschbar</span></button>
+            </div>
+            <p class="wz-frage">Noch ein Glas?</p>
+            <div class="wz-kacheln" data-feld="nochmal">
+              <button type="button" data-wert="sofort">🥂<span>Sofort!</span></button>
+              <button type="button" data-wert="gerne">🙂<span>Gerne</span></button>
+              <button type="button" data-wert="muss_nicht">🤷<span>Muss nicht</span></button>
+              <button type="button" data-wert="nein">🙅<span>Nein</span></button>
+            </div>
+          </div>
+
+          <div class="wz-schritt" data-schritt="5" hidden>
+            <h2>✅ Fertig!</h2>
+            <label class="wz-label">Dein Name</label>
+            <input type="text" id="wz-person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40">
+            <label class="wz-label">Flaschen mitgenommen/gekauft</label>
+            <input type="number" id="wz-flaschen" min="0" max="99" inputmode="numeric" value="<?= (int)($vorhandene['flaschen'] ?? 0) ?>">
+            <label class="wz-label">Notiz <small>(optional)</small></label>
+            <textarea id="wz-notiz" placeholder="Eigene Eindrücke …" maxlength="500" rows="2"><?= e((string)($vorhandene['notiz'] ?? '')) ?></textarea>
+            <p class="wz-frage" style="margin-top:1rem;">Daraus ergibt sich deine Wertung – antippen zum Feinjustieren:</p>
+            <div id="wz-sterne-vorschau"></div>
+          </div>
+
+          <div class="wz-nav">
+            <button type="button" class="knopf zweit" id="wz-zurueck" hidden>Zurück</button>
+            <button type="button" class="knopf" id="wz-weiter">Weiter</button>
+            <button type="submit" class="knopf" id="wz-fertig" hidden>💾 Speichern</button>
+          </div>
+          <p class="abmelden" style="text-align:center;"><a href="#" id="wz-ueberspringen">Diesen Schritt überspringen</a></p>
         </form>
+
+        <script id="wz-vorbelegt" type="application/json"><?= json_encode([
+            'detail' => $vorhandene['detail'] ?? new stdClass(),
+            'werte'  => $vorhandene['werte'] ?? new stdClass(),
+            'kategorien' => array_keys($KATEGORIEN),
+        ], JSON_UNESCAPED_UNICODE) ?></script>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'ergebnis'): ?>
@@ -3130,6 +3310,127 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       function zu() { overlay.hidden = true; document.body.style.overflow = ''; }
       overlay.querySelector('.blatt-kopf button').addEventListener('click', zu);
       overlay.addEventListener('click', function (e) { if (e.target === overlay) { zu(); } });
+    })();
+
+    // Geführte Bewertung (Wizard)
+    (function () {
+      var form = document.getElementById('wizard-form');
+      if (!form) { return; }
+      var vor = JSON.parse(document.getElementById('wz-vorbelegt').textContent);
+      var KAT = vor.kategorien;
+      var antwort = { aromen: [] };
+      // Vorbelegung aus bestehender Bewertung
+      if (vor.detail && typeof vor.detail === 'object') {
+        Object.keys(vor.detail).forEach(function (k) { antwort[k] = vor.detail[k]; });
+        if (!Array.isArray(antwort.aromen)) { antwort.aromen = []; }
+      }
+      var schritte = form.querySelectorAll('.wz-schritt');
+      var aktiv = 1, maxSchritt = schritte.length;
+      var justiert = {}; // von Hand justierte Sterne
+
+      // Kachel-Auswahl
+      form.querySelectorAll('.wz-kacheln').forEach(function (gruppe) {
+        var feld = gruppe.dataset.feld;
+        var mehrfach = gruppe.classList.contains('mehrfach');
+        gruppe.querySelectorAll('button').forEach(function (b) {
+          // Vorbelegung anzeigen
+          if (mehrfach ? (antwort[feld] || []).indexOf(b.dataset.wert) !== -1 : antwort[feld] === b.dataset.wert) {
+            b.classList.add('gewaehlt');
+          }
+          b.addEventListener('click', function () {
+            if (mehrfach) {
+              var arr = antwort[feld] || [];
+              var i = arr.indexOf(b.dataset.wert);
+              if (i === -1) { arr.push(b.dataset.wert); b.classList.add('gewaehlt'); }
+              else { arr.splice(i, 1); b.classList.remove('gewaehlt'); }
+              antwort[feld] = arr;
+            } else {
+              gruppe.querySelectorAll('button').forEach(function (x) { x.classList.remove('gewaehlt'); });
+              b.classList.add('gewaehlt');
+              antwort[feld] = b.dataset.wert;
+              if (feld === 'sauber') { aromenSichtbar(); }
+            }
+          });
+        });
+      });
+      function aromenSichtbar() {
+        var block = document.getElementById('aromen-block');
+        if (block) { block.style.display = antwort.sauber === 'kork' ? 'none' : ''; }
+      }
+      aromenSichtbar();
+
+      // Sterne-Ableitung (deckungsgleich mit PHP sterneAusDetail)
+      function sterneAusDetailJS(d) {
+        var sm = { top: 5, gut: 4, ok: 3, geht: 2 };
+        var n = (d.aromen || []).length;
+        if (d.sauber === 'kork') {
+          var r = {}; KAT.forEach(function (k) { r[k] = 1; }); return r;
+        }
+        var komplex = n >= 8 ? 5 : n >= 6 ? 4 : n >= 3 ? 3 : n >= 1 ? 2 : 3;
+        return {
+          duft: sm[d.duft] || 3,
+          perlage: ({ fein: 5, mittel: 4, grob: 2 })[d.perlage] || 3,
+          geschmack: sm[d.geschmack] || 3,
+          balance: ({ perfekt: 5, stimmig: 4, unrund: 3, schlecht: 2 })[d.balance] || 3,
+          komplexitaet: komplex,
+          abgang: ({ lang: 5, mittel: 4, kurz: 2 })[d.abgang] || 3,
+          besonderheit: ({ unverwechselbar: 5, hatwas: 4, austauschbar: 2 })[d.charakter] || 3,
+          trinkfreude: ({ sofort: 5, gerne: 4, muss_nicht: 3, nein: 1 })[d.nochmal] || 3
+        };
+      }
+      var TITEL = { duft: 'Duft', perlage: 'Perlage', geschmack: 'Geschmack', balance: 'Balance', komplexitaet: 'Komplexität', abgang: 'Abgang', besonderheit: 'Besonderheit', trinkfreude: 'Trinkfreude' };
+      function aktuelleSterne() {
+        var abg = sterneAusDetailJS(antwort);
+        KAT.forEach(function (k) { if (justiert[k]) { abg[k] = justiert[k]; } });
+        return abg;
+      }
+      function vorschauZeichnen() {
+        var s = aktuelleSterne();
+        var html = '';
+        KAT.forEach(function (k) {
+          html += '<div class="wz-stern-zeile"><span>' + TITEL[k] + '</span><span class="wz-sterne" data-kat="' + k + '">';
+          for (var i = 1; i <= 5; i++) { html += '<span class="' + (i <= s[k] ? 'an' : 'aus') + '" data-n="' + i + '">★</span>'; }
+          html += '</span></div>';
+        });
+        var box = document.getElementById('wz-sterne-vorschau');
+        box.innerHTML = html;
+        box.querySelectorAll('.wz-sterne span').forEach(function (st) {
+          st.addEventListener('click', function () {
+            var zeile = st.parentNode;
+            justiert[zeile.dataset.kat] = parseInt(st.dataset.n, 10);
+            vorschauZeichnen();
+          });
+        });
+      }
+
+      function zeige(n) {
+        schritte.forEach(function (s) { s.hidden = parseInt(s.dataset.schritt, 10) !== n; });
+        document.getElementById('wz-balken').style.width = Math.round(n / maxSchritt * 100) + '%';
+        document.getElementById('wz-zurueck').hidden = n === 1;
+        document.getElementById('wz-weiter').hidden = n === maxSchritt;
+        document.getElementById('wz-fertig').hidden = n !== maxSchritt;
+        document.getElementById('wz-ueberspringen').parentNode.style.display = n === maxSchritt ? 'none' : '';
+        if (n === maxSchritt) { vorschauZeichnen(); }
+        window.scrollTo(0, 0);
+      }
+      document.getElementById('wz-weiter').addEventListener('click', function () { if (aktiv < maxSchritt) { aktiv++; zeige(aktiv); } });
+      document.getElementById('wz-zurueck').addEventListener('click', function () { if (aktiv > 1) { aktiv--; zeige(aktiv); } });
+      document.getElementById('wz-ueberspringen').addEventListener('click', function (e) { e.preventDefault(); if (aktiv < maxSchritt) { aktiv++; zeige(aktiv); } });
+
+      form.addEventListener('submit', function (e) {
+        var name = document.getElementById('wz-person').value.trim();
+        if (!name) { e.preventDefault(); alert('Bitte trag noch deinen Namen ein.'); return; }
+        var verstecktPerson = document.createElement('input');
+        verstecktPerson.type = 'hidden'; verstecktPerson.name = 'person'; verstecktPerson.value = name;
+        form.appendChild(verstecktPerson);
+        var vn = document.createElement('input'); vn.type = 'hidden'; vn.name = 'notiz'; vn.value = document.getElementById('wz-notiz').value; form.appendChild(vn);
+        var vf = document.createElement('input'); vf.type = 'hidden'; vf.name = 'flaschen'; vf.value = document.getElementById('wz-flaschen').value; form.appendChild(vf);
+        document.getElementById('detail-feld').value = JSON.stringify(antwort);
+        var s = aktuelleSterne();
+        KAT.forEach(function (k) { document.getElementById('stern-' + k).value = s[k]; });
+      });
+
+      zeige(1);
     })();
 
     // Suchfilter über Listen: tippen filtert die Einträge sofort
