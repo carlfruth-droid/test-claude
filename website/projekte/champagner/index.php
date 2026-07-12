@@ -2542,7 +2542,7 @@ $KATEGORIEN_GETRAENKE = [
     'bier'       => ['🍺', 'Bier', true],
 ];
 $kategorie = (string)($_GET['kat'] ?? 'champagner');
-if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
+if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     $kategorie = 'champagner';
 }
 ?>
@@ -3009,7 +3009,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <p class="untertitel">Du wurdest zu einem Tasting eingeladen.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
-      <p class="untertitel">Alle verkosteten Champagner im Überblick.</p>
+      <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
@@ -3224,9 +3224,9 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $tastingWeingutIds = array_unique(array_filter(array_map(fn($c) => trim((string)($c['weingut_id'] ?? '')), $tastingWeine)));
         ?>
         <p class="untertitel" style="margin-top:1.4rem;">Alles zu diesem Tasting:</p>
-        <a class="kachel" href="?liste=1&amp;tid=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
+        <a class="kachel" href="?liste=1&amp;kat=alle&amp;tid=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
           <span class="k-icon">🍾</span>
-          <span class="k-text"><b>Unsere Weine (<?= count($tastingWeine) ?>)</b><small>Alle verkosteten Flaschen mit Bewertungen und Fotos</small></span>
+          <span class="k-text"><b>Unsere Getränke (<?= count($tastingWeine) ?>)</b><small>Alle verkosteten Flaschen mit Bewertungen und Fotos</small></span>
         </a>
         <?php
           // Getränke aus anderen Tastings, die man hierher holen kann
@@ -3284,7 +3284,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         </div>
 
-        <?php $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1'; ?>
+        <?php $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($aktivesTasting['id']); ?>
         <div class="card" style="text-align:center;">
           <h2>👀 Zum Mitschauen (ohne Bewerten)</h2>
           <p class="anzahl" style="margin-bottom:0.8rem;">QR abfotografieren oder Link teilen – Listen, Ergebnisse und Fotos sind sichtbar, bewerten geht damit nicht.</p>
@@ -4505,18 +4505,19 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       </div>
 
       <div class="sortier-leiste" style="margin-bottom:0.9rem;">
+        <a class="<?= $kategorie === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=alle">⭐ Alle</a>
         <?php foreach ($KATEGORIEN_GETRAENKE as $kSchluessel => [$kIcon, $kName, $kAktiviert]): ?>
           <a class="<?= $kategorie === $kSchluessel ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kSchluessel) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
         <?php endforeach; ?>
       </div>
 
-      <?php if (!$KATEGORIEN_GETRAENKE[$kategorie][2]): ?>
+      <?php if ($kategorie !== 'alle' && !$KATEGORIEN_GETRAENKE[$kategorie][2]): ?>
         <div class="card">
           <h2><?= $KATEGORIEN_GETRAENKE[$kategorie][0] ?> <?= e($KATEGORIEN_GETRAENKE[$kategorie][1]) ?> – bald verfügbar</h2>
           <p>Die Kategorie ist schon vorbereitet – die Verkostung startet hier, sobald ihr sie braucht. Bis dahin: <a href="?liste=1">zurück zum Champagner</a>. 🥂</p>
         </div>
       <?php else: ?>
-      <a class="knopf gross" href="?neu=1&amp;kat=<?= e($kategorie) ?>">📷&nbsp; Neue Flasche erfassen</a>
+      <a class="knopf gross" href="?neu=1&amp;kat=<?= e($kategorie === 'alle' ? 'champagner' : $kategorie) ?>">📷&nbsp; Neue Flasche erfassen</a>
       <?php
         // Tasting-Umschalter: eigenes Tasting ist Standard, „Alle“ zeigt das Archiv
         $tidWahl = (string)($_GET['tid'] ?? '');
@@ -4547,7 +4548,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php
         $champagnerListe = array_values(array_filter(
             $daten['champagner'],
-            fn($c) => ($c['typ'] ?? 'champagner') === $kategorie && ($tidWahl === 'alle' || champagnerInTasting($c, $tidWahl))
+            fn($c) => ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)
+                && ($tidWahl === 'alle' || champagnerInTasting($c, $tidWahl))
         ));
         if ($sortierung === 'name') {
             usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
@@ -4556,7 +4558,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             usort($champagnerListe, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
         }
       ?>
-      <?php $katName = $KATEGORIEN_GETRAENKE[$kategorie][1]; ?>
+      <?php $katName = $kategorie === 'alle' ? 'Getränk' : $KATEGORIEN_GETRAENKE[$kategorie][1]; ?>
       <?php if ($champagnerListe === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;"><?= $tidWahl === 'alle' ? 'Noch kein ' . e($katName) . ' angelegt – oben auf „Neue Flasche erfassen" tippen!' : 'In diesem Tasting ist noch kein ' . e($katName) . ' erfasst – oben auf „Neue Flasche erfassen" tippen oder oben auf „Alle" umschalten.' ?></p></div>
       <?php endif; ?>
@@ -4576,10 +4578,10 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <?php if ($fotos !== []): ?>
               <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
             <?php else: ?>
-              <span class="thumb platzhalter">🍾</span>
+              <span class="thumb platzhalter"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
             <?php endif; ?>
             <span class="flasche-info">
-              <span class="f-name"><?= e($c['name']) ?></span>
+              <span class="f-name"><?= $kategorie === 'alle' ? ($KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '') . ' ' : '' ?><?= e($c['name']) ?></span>
               <?php if ($meta !== []): ?>
                 <span class="f-meta"><?= e(implode(' · ', $meta)) ?></span>
               <?php endif; ?>
