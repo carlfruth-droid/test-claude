@@ -354,6 +354,7 @@ if (isset($_GET['einladung'])) {
             'expires' => time() + 60 * 60 * 24 * 3650, // läuft praktisch nie ab
             'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
         ]);
+        tastingWaehlen($einladungsTasting['id']);
         $_SESSION['tasting_ok'] = true;
         $_SESSION['person'] = $teilnehmer['name'];
         header('Location: ./?ok=' . rawurlencode('Willkommen, ' . $teilnehmer['name'] . '! Du bist angemeldet für „' . $einladungsTasting['titel'] . '“. 🥂'));
@@ -376,9 +377,21 @@ if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['einladung']))
 
 $eingeloggt = ($_SESSION['tasting_ok'] ?? false) === true;
 
-/** Das Tasting des aktuellen Nutzers (per Cookie), sonst das neueste. */
+/**
+ * Das Tasting des aktuellen Nutzers: zuerst das ausdrücklich gewählte
+ * (zuletzt geöffnet/beigetreten/angelegt), sonst das der Einladung,
+ * sonst das neueste.
+ */
 function meinTasting(array $daten): ?array
 {
+    $gewaehlt = (string)($_COOKIE['tasting_aktuell'] ?? '');
+    if (preg_match('/^[a-f0-9]{8}$/', $gewaehlt)) {
+        foreach ($daten['tastings'] as $t) {
+            if ($t['id'] === $gewaehlt) {
+                return $t;
+            }
+        }
+    }
     $treffer = teilnehmerZuToken($daten, (string)($_COOKIE['einladung'] ?? ''));
     if ($treffer !== null) {
         return $treffer[0];
@@ -386,6 +399,16 @@ function meinTasting(array $daten): ?array
     $ts = $daten['tastings'];
     usort($ts, static fn(array $a, array $b): int => ((int)($b['zeit'] ?? 0)) <=> ((int)($a['zeit'] ?? 0)));
     return $ts[0] ?? null;
+}
+
+/** Ein Tasting zum „aktuellen“ machen – Header, Listen und Neuanlagen folgen. */
+function tastingWaehlen(string $tid): void
+{
+    setcookie('tasting_aktuell', $tid, [
+        'expires' => time() + 60 * 60 * 24 * 3650,
+        'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+    ]);
+    $_COOKIE['tasting_aktuell'] = $tid; // gilt sofort, schon für diese Seite
 }
 
 function zurueck(string $query = ''): void
@@ -540,6 +563,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'expires' => time() + 60 * 60 * 24 * 3650, // läuft praktisch nie ab
             'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
         ]);
+        tastingWaehlen($ziel['id']);
         $_SESSION['tasting_ok'] = true;
         $_SESSION['person'] = $name;
         zurueck('?ok=' . rawurlencode('Willkommen, ' . $name . '! Du bist dabei bei „' . $ziel['titel'] . '“. 🥂'));
@@ -1444,6 +1468,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'besitzer' => $besitzerId, 'zeit' => time()];
             return $d;
         });
+        tastingWaehlen($neueId);
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
     }
 
@@ -2665,6 +2690,10 @@ if (isset($_GET['bewerten'])) {
                 break;
             }
         }
+    }
+    // Ein geöffnetes Tasting wird zum „aktuellen“ – Header und Listen folgen
+    if ($aktivesTasting !== null && (string)($_COOKIE['tasting_aktuell'] ?? '') !== $aktivesTasting['id']) {
+        tastingWaehlen($aktivesTasting['id']);
     }
     // Ältere Tastings ohne Beitritts-Code nachrüsten
     if ($aktivesTasting !== null && ($aktivesTasting['beitritt'] ?? '') === '') {
