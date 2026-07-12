@@ -2073,6 +2073,11 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
       gap: 0.6rem;
     }
+    .album-foto .album-text {
+      display: block; margin-top: 2px;
+      font-size: 0.72rem; color: var(--muted); text-decoration: none;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .foto {
       position: relative; border: 1px solid var(--border); border-radius: 8px;
       overflow: hidden; aspect-ratio: 1; background: var(--bg);
@@ -3138,23 +3143,47 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <a class="knopf" href="?fotos=1">Fotos</a>
       </div>
 
-      <?php $fotos = divFotos(); ?>
-      <?php if ($fotos === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Fotos im Album – unten das erste hochladen!</p></div>
+      <?php
+        // Alle Fotos der Reise: Flaschen, Weingüter und Album zusammen (neueste zuerst)
+        $alleDateien = glob(BILDER_DIR . '/*.{jpg,jpeg,png,gif,webp,JPG,JPEG,PNG,GIF,WEBP}', GLOB_BRACE) ?: [];
+        usort($alleDateien, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
+        $albumFotos = [];
+        foreach ($alleDateien as $pfad) {
+            $basis = basename($pfad);
+            if (preg_match('/^wg-([a-f0-9]{8})-/', $basis, $m)) {
+                $w = weingutHolen($daten, $m[1]);
+                $albumFotos[] = ['datei' => $basis, 'text' => '🍇 ' . ($w['name'] ?? 'Weingut'), 'link' => '?weingut=' . rawurlencode($m[1]), 'div' => false];
+            } elseif (preg_match('/^([a-f0-9]{8})-/', $basis, $m)) {
+                $c = champagnerHolen($daten, $m[1]);
+                $albumFotos[] = ['datei' => $basis, 'text' => '🍾 ' . ($c['name'] ?? 'Champagner'), 'link' => '?ergebnis=' . rawurlencode($m[1]), 'div' => false];
+            } elseif (str_starts_with($basis, 'div-')) {
+                $albumFotos[] = ['datei' => $basis, 'text' => '', 'link' => '', 'div' => true];
+            }
+            // neu-/wneu-Zwischendateien bleiben außen vor
+        }
+      ?>
+      <?php if ($albumFotos === []): ?>
+        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Fotos – sie sammeln sich hier automatisch, sobald ihr Flaschen und Weingüter fotografiert.</p></div>
       <?php else: ?>
-        <div class="foto-galerie" style="margin-bottom:1rem;">
-          <?php foreach ($fotos as $foto): ?>
-            <div class="foto">
-              <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
-              </a>
-              <?php if ($eingeloggt): ?>
-                <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
-                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                  <input type="hidden" name="aktion" value="div_foto_loeschen">
-                  <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                  <button type="submit" title="Foto löschen">&#10005;</button>
-                </form>
+        <p class="untertitel"><?= count($albumFotos) ?> Foto(s) – von Flaschen, Weingütern und unterwegs.</p>
+        <div class="foto-galerie album" style="margin-bottom:1rem;">
+          <?php foreach ($albumFotos as $af): ?>
+            <div class="album-foto">
+              <div class="foto">
+                <a href="bilder/<?= e(rawurlencode($af['datei'])) ?>" target="_blank">
+                  <img src="<?= e(thumbUrl($af['datei'])) ?>" alt="" loading="lazy">
+                </a>
+                <?php if ($eingeloggt && $af['div']): ?>
+                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="div_foto_loeschen">
+                    <input type="hidden" name="datei" value="<?= e($af['datei']) ?>">
+                    <button type="submit" title="Foto löschen">&#10005;</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+              <?php if ($af['text'] !== ''): ?>
+                <a class="album-text" href="<?= e($af['link']) ?>"><?= e($af['text']) ?></a>
               <?php endif; ?>
             </div>
           <?php endforeach; ?>
