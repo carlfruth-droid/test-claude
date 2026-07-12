@@ -1903,6 +1903,23 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
 
     /* ---------- Geführte Bewertung ---------- */
+    .wz-kopf { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.8rem; }
+    .wz-kopf .wz-titel { font-size: 1.05rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #wz-info-knopf {
+      flex-shrink: 0; background: var(--accent-hell); color: var(--accent);
+      border: none; border-radius: 999px; padding: 0.4rem 0.9rem;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    #wz-info { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
+    #wz-info[hidden] { display: none; }
+    #wz-info .blatt {
+      background: var(--bg); width: 100%; max-width: 46rem; max-height: 90dvh;
+      overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 18px 18px 0 0; padding: 1rem 1.2rem 3rem;
+    }
+    #wz-info .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
+    #wz-info .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
+    .anleitung h3 { margin: 1.1rem 0 0.2rem; font-size: 1.1rem; color: var(--accent); }
+    .anleitung p { margin-bottom: 0.4rem; }
     .wz-fortschritt { height: 6px; background: var(--border); border-radius: 4px; margin-bottom: 1.2rem; overflow: hidden; }
     #wz-balken { display: block; height: 100%; width: 20%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
     .wz-schritt h2 { font-size: 1.35rem; margin-bottom: 0.3rem; }
@@ -2386,6 +2403,10 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <?php if ($vorhandene !== null): ?>
           <div class="hinweis ok">Du änderst die Bewertung von <b><?= e($vorhandene['person']) ?></b> – die Antworten sind vorbelegt.</div>
         <?php endif; ?>
+        <div class="wz-kopf">
+          <span class="wz-titel"><?= e($aktiverChampagner['name']) ?></span>
+          <button type="button" id="wz-info-knopf" aria-label="Verkostungs-Tipps">ℹ️ So geht's</button>
+        </div>
         <form method="post" id="wizard-form">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="bewerten">
@@ -2523,6 +2544,32 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
           </div>
           <p class="abmelden" style="text-align:center;"><a href="#" id="wz-ueberspringen">Diesen Schritt überspringen</a></p>
         </form>
+
+        <div id="wz-info" hidden>
+          <div class="blatt">
+            <div class="blatt-kopf">
+              <b>🥂 Champagner richtig verkosten</b>
+              <button type="button" aria-label="Schließen">&#10005;</button>
+            </div>
+            <div class="anleitung">
+              <p>Nimm dir kurz Zeit und geh in Ruhe durch die vier Sinne – die App führt dich Schritt für Schritt.</p>
+
+              <h3>👁 Das Auge</h3>
+              <p>Halte das Glas gegen einen hellen Hintergrund. <b>Farbe:</b> von zartem Zitronengelb (jung) über Gold (gereift) bis Kupfer; Rosé von Lachs bis Himbeer. <b>Perlage</b> sind die Bläschen – je feiner und beständiger, desto edler das Mundgefühl. (Die reine Bläschen-<i>Menge</i> sagt übrigens wenig über die Qualität.)</p>
+
+              <h3>👃 Die Nase</h3>
+              <p>Zuerst <b>ohne Schwenken</b> schnuppern, dann leicht schwenken – so öffnen sich die Aromen. Zwischendurch die Nase kurz ausruhen. <b>Sauber?</b> Riecht es nach feuchtem Karton/Keller, hat der Wein einen Korkfehler. <b>Aromen:</b> Wähl alles, was du erkennst – Frucht (Apfel, Zitrus, Beeren), Hefe &amp; Gebäck (Brioche, Toast, Nuss), Reife (Honig, Butter). Faustregel: 5–7 Aromen = komplex, 8+ = sehr komplex.</p>
+
+              <h3>👅 Der Mund</h3>
+              <p>Ein mittelgroßer Schluck, mit der Zunge im ganzen Mund verteilen. <b>Säure</b> erkennst du am Speichelfluss – sie macht den Champagner frisch. <b>Mousse</b> ist das Prickeln: cremig-fein ist feiner als aggressiv. <b>Balance:</b> Passen Säure, Frucht, Kraft und Süße harmonisch zusammen?</p>
+
+              <h3>⏱ Der Abgang</h3>
+              <p>Nach dem Schlucken innerlich zählen, wie lange der Geschmack angenehm nachklingt: unter 5 Sek. = kurz, 5–15 = mittel, über 15 = lang. <b>Charakter:</b> Hat der Wein etwas Eigenes, Unverwechselbares? Und ganz ehrlich: <b>Würdest du ein zweites Glas nehmen?</b></p>
+
+              <p style="color:var(--muted);">Am Ende rechnet die App aus deinen Antworten eine Sterne-Wertung – die kannst du mit einem Tipp noch anpassen. Es gibt kein „falsch": Dein Eindruck zählt. 🍾</p>
+            </div>
+          </div>
+        </div>
 
         <script id="wz-vorbelegt" type="application/json"><?= json_encode([
             'detail' => $vorhandene['detail'] ?? new stdClass(),
@@ -3429,6 +3476,16 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         var s = aktuelleSterne();
         KAT.forEach(function (k) { document.getElementById('stern-' + k).value = s[k]; });
       });
+
+      // Info-Overlay
+      var infoKnopf = document.getElementById('wz-info-knopf');
+      var infoBox = document.getElementById('wz-info');
+      if (infoKnopf && infoBox) {
+        function infoZu() { infoBox.hidden = true; document.body.style.overflow = ''; }
+        infoKnopf.addEventListener('click', function () { infoBox.hidden = false; document.body.style.overflow = 'hidden'; });
+        infoBox.querySelector('.blatt-kopf button').addEventListener('click', infoZu);
+        infoBox.addEventListener('click', function (e) { if (e.target === infoBox) { infoZu(); } });
+      }
 
       zeige(1);
     })();
