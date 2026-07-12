@@ -246,6 +246,31 @@ function sortenLabel(string $typ): string
     return $typ === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
 }
 
+/** Gängige Rebsorten bzw. Bierstile je Getränkeart – zum Antippen statt Tippen. */
+function sortenVorschlaege(string $typ): array
+{
+    return match ($typ) {
+        'rotwein'   => ['Spätburgunder', 'Merlot', 'Cabernet Sauvignon', 'Syrah/Shiraz', 'Tempranillo', 'Primitivo', 'Sangiovese', 'Nebbiolo', 'Garnacha', 'Malbec', 'Blaufränkisch', 'Zweigelt', 'Dornfelder', 'Cuvée'],
+        'weisswein' => ['Riesling', 'Chardonnay', 'Sauvignon Blanc', 'Grauburgunder', 'Weißburgunder', 'Grüner Veltliner', 'Gewürztraminer', 'Silvaner', 'Müller-Thurgau', 'Chenin Blanc', 'Albariño', 'Viognier', 'Verdejo', 'Cuvée'],
+        'bier'      => ['Pils', 'Helles', 'Weizen', 'IPA', 'Pale Ale', 'Lager', 'Dunkles', 'Bock', 'Stout', 'Porter', 'Kellerbier', 'Kölsch', 'Altbier', 'Sauerbier'],
+        default     => ['Chardonnay', 'Pinot Noir', 'Meunier', 'Blanc de Blancs', 'Blanc de Noirs', 'Rosé', 'Cuvée'],
+    };
+}
+
+/** Antipp-Chips für Rebsorte/Stil: füllen das Textfeld, umschaltbar je Getränkeart. */
+function sortenChips(string $zielId, string $aktiveKat): string
+{
+    $html = '<div class="sorten-chips" data-ziel="' . e($zielId) . '">';
+    foreach (['champagner', 'rotwein', 'weisswein', 'bier'] as $k) {
+        $html .= '<div class="sorten-set" data-kat="' . $k . '"' . ($k === $aktiveKat ? '' : ' hidden') . '>';
+        foreach (sortenVorschlaege($k) as $s) {
+            $html .= '<button type="button" class="sorte">' . e($s) . '</button>';
+        }
+        $html .= '</div>';
+    }
+    return $html . '</div>';
+}
+
 /**
  * Foto-Upload als direkte Knöpfe: „Foto aufnehmen“ öffnet die Kamera,
  * „Aus Galerie wählen“ den Bild-Picker – nach der Auswahl lädt das Formular
@@ -2540,6 +2565,23 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       border-radius: 999px; padding: 0.4rem 0.85rem; font-size: 0.9rem; cursor: pointer; font-family: inherit;
     }
     .anleitung-chips button.gewaehlt { background: var(--accent-hell); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+    .bewerter-chip {
+      display: inline-block; background: var(--accent-hell); color: var(--text);
+      border-radius: 999px; padding: 0.25rem 0.75rem; margin: 0 0.3rem 0.35rem 0; font-size: 0.92rem;
+    }
+    .bewerter-chip.offen { background: var(--card); border: 1px dashed var(--border); color: var(--muted); }
+    .sorten-chips { margin: -0.3rem 0 0.8rem; }
+    .sorten-chips button.sorte {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      border-radius: 999px; padding: 0.35rem 0.8rem; margin: 0 0.35rem 0.4rem 0;
+      font-size: 0.9rem; cursor: pointer; font-family: inherit;
+    }
+    .sorten-chips button.sorte.gewaehlt { background: var(--accent-hell); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+    details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
+    details.card summary::-webkit-details-marker { display: none; }
+    details.card summary::before { content: '▸ '; }
+    details.card[open] summary { margin-bottom: 0.8rem; }
+    details.card[open] summary::before { content: '▾ '; }
     #info-knopf {
       flex-shrink: 0; background: var(--accent-hell); color: var(--accent);
       border: none; border-radius: 999px; width: 34px; height: 34px;
@@ -2932,8 +2974,27 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <h2>🥂 Gerade im Glas</h2>
           <?php if ($glasChampagner !== null): ?>
             <p style="font-size:1.1rem;"><b><?= e($glasChampagner['name']) ?></b></p>
+            <?php
+              // Wer hat das Glas schon bewertet, wer fehlt noch? (aktualisiert sich live)
+              $glasBewertungen = bewertungenFuer($daten, $glasChampagner['id']);
+              $glasBewertetVon = array_map(fn($b) => mb_strtolower(trim((string)$b['person'])), $glasBewertungen);
+            ?>
+            <p style="margin:0.5rem 0 0.2rem;">
+              <?php foreach ($glasBewertungen as $gb): ?>
+                <span class="bewerter-chip">✅ <?= e($gb['person']) ?></span>
+              <?php endforeach; ?>
+              <?php foreach (($aktivesTasting['teilnehmer'] ?? []) as $p): ?>
+                <?php if (!in_array(mb_strtolower(trim((string)$p['name'])), $glasBewertetVon, true)): ?>
+                  <span class="bewerter-chip offen">⏳ <?= e($p['name']) ?></span>
+                <?php endif; ?>
+              <?php endforeach; ?>
+              <?php if ($glasBewertungen === [] && ($aktivesTasting['teilnehmer'] ?? []) === []): ?>
+                <span class="anzahl">Noch keine Bewertung.</span>
+              <?php endif; ?>
+            </p>
             <div class="knopfreihe" style="margin-top:0.5rem;">
               <a class="knopf" href="?bewerten=<?= e(rawurlencode($glasChampagner['id'])) ?>">Jetzt bewerten</a>
+              <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($glasChampagner['id'])) ?>">Ergebnis ansehen</a>
             </div>
           <?php else: ?>
             <p style="color:var(--muted); font-style:italic;">Noch nichts im Glas – wird automatisch gesetzt, sobald jemand eine Flasche erfasst, oder unten von Hand wählen.</p>
@@ -3318,6 +3379,36 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?= sterneAnzeige($gesamt) ?>
           <span class="anzahl"><?= count($bewertungen) ?> Bewertung(en)<?= $flaschenGesamt > 0 ? ' &middot; ' . $flaschenGesamt . ' Flasche(n)' : '' ?></span>
         </div>
+        <?php
+          // Sofort sichtbar: wer hat schon bewertet, wer aus dem Tasting fehlt noch?
+          $bewertetVon = array_map(fn($b) => mb_strtolower(trim((string)$b['person'])), $bewertungen);
+          $getraenkTasting = null;
+          foreach ($daten['tastings'] as $t) {
+              if ($t['id'] === (string)($aktiverChampagner['tasting_id'] ?? '')) {
+                  $getraenkTasting = $t;
+                  break;
+              }
+          }
+        ?>
+        <p style="margin-top:0.7rem;">
+          <?php foreach ($bewertungen as $b): ?>
+            <?php $s = 0; foreach ($KATEGORIEN as $bk => $bi) { $s += (int)($b['werte'][$bk] ?? 0); } ?>
+            <span class="bewerter-chip">✅ <?= e($b['person']) ?> <b><?= number_format($s / count($KATEGORIEN), 1, ',', '') ?></b></span>
+          <?php endforeach; ?>
+          <?php if ($getraenkTasting !== null): ?>
+            <?php foreach (($getraenkTasting['teilnehmer'] ?? []) as $p): ?>
+              <?php if (!in_array(mb_strtolower(trim((string)$p['name'])), $bewertetVon, true)): ?>
+                <span class="bewerter-chip offen">⏳ <?= e($p['name']) ?></span>
+              <?php endif; ?>
+            <?php endforeach; ?>
+          <?php endif; ?>
+          <?php if ($bewertungen === [] && $getraenkTasting === null): ?>
+            <span class="anzahl">Noch keine Bewertungen – sei die/der Erste!</span>
+          <?php endif; ?>
+        </p>
+        <div class="knopfreihe" style="margin-top:0.4rem;">
+          <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Jetzt selbst bewerten</a>
+        </div>
       </div>
 
       <?php
@@ -3327,106 +3418,6 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             $erkanntVorschlag = $_SESSION['erkannt'];
         }
       ?>
-      <?php if ($eingeloggt): ?>
-        <div class="card">
-          <h2>Stammdaten bearbeiten</h2>
-          <?php if ($fotos !== []): ?>
-            <form method="post" style="margin-bottom:0.9rem;">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="erkennen_bestehend">
-              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-              <?php if (count($fotos) > 1): ?>
-                <p class="anzahl" style="margin-bottom:0.4rem;">Welches Foto zeigt das Etikett? Antippen:</p>
-                <div class="foto-wahl">
-                  <?php foreach ($fotos as $i => $f): ?>
-                    <label class="foto-wahl-item">
-                      <input type="radio" name="foto" value="<?= e($f) ?>"<?= $i === 0 ? ' checked' : '' ?>>
-                      <img src="<?= e(thumbUrl($f)) ?>" alt="">
-                    </label>
-                  <?php endforeach; ?>
-                </div>
-              <?php endif; ?>
-              <button class="knopf zweit" type="submit">📷&nbsp; Etikett vom Foto erkennen</button>
-            </form>
-          <?php endif; ?>
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="champagner_bearbeiten">
-            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-            <input type="text" name="name" value="<?= e($erkanntVorschlag !== null && $erkanntVorschlag['name'] !== '' ? $erkanntVorschlag['name'] : $aktiverChampagner['name']) ?>" maxlength="60" required>
-            <input type="text" name="rebsorte" value="<?= e($erkanntVorschlag !== null && ($erkanntVorschlag['rebsorte'] ?? '') !== '' ? $erkanntVorschlag['rebsorte'] : (string)($aktiverChampagner['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($typAktiv)) ?>" maxlength="80">
-            <input type="text" name="preis" value="<?= e((string)($aktiverChampagner['preis'] ?? '')) ?>" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
-            <select name="kat">
-              <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kI, $kN]): ?>
-                <option value="<?= e($kS) ?>"<?= $typAktiv === $kS ? ' selected' : '' ?>><?= $kI ?> <?= e($kN) ?></option>
-              <?php endforeach; ?>
-            </select>
-            <?php if ($daten['tastings'] !== []): ?>
-              <select name="tasting_id">
-                <option value="">👥 ohne Tasting</option>
-                <?php foreach ($daten['tastings'] as $t): ?>
-                  <option value="<?= e($t['id']) ?>"<?= (string)($aktiverChampagner['tasting_id'] ?? '') === $t['id'] ? ' selected' : '' ?>>👥 <?= e($t['titel']) ?></option>
-                <?php endforeach; ?>
-              </select>
-            <?php endif; ?>
-            <button class="knopf zweit" type="submit">Speichern</button>
-          </form>
-        </div>
-      <?php endif; ?>
-      <div class="card">
-        <h2>Fotos</h2>
-        <?php if ($fotos === []): ?>
-          <p style="color:var(--muted); font-style:italic;">Noch keine Fotos zu diesem Champagner.</p>
-        <?php else: ?>
-          <?php $titelbildAktuell = (string)($aktiverChampagner['titelbild'] ?? ''); ?>
-          <div class="foto-galerie">
-            <?php foreach ($fotos as $i => $foto): ?>
-              <?php $istTitelbild = $titelbildAktuell !== '' ? $foto === $titelbildAktuell : $i === 0; ?>
-              <div class="foto">
-                <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                  <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
-                </a>
-                <?php if ($istTitelbild): ?>
-                  <span class="titelbild-marke" title="Titelbild – erscheint als Vorschau in den Listen">⭐</span>
-                <?php elseif ($eingeloggt): ?>
-                  <form method="post" class="titelbild-form">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="titelbild_setzen">
-                    <input type="hidden" name="typ" value="champagner">
-                    <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
-                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                    <button type="submit" title="Als Titelbild festlegen">☆</button>
-                  </form>
-                <?php endif; ?>
-                <?php if ($eingeloggt): ?>
-                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="foto_loeschen">
-                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                    <button type="submit" title="Foto löschen">&#10005;</button>
-                  </form>
-                <?php endif; ?>
-              </div>
-            <?php endforeach; ?>
-          </div>
-          <?php if ($eingeloggt && count($fotos) > 1): ?>
-            <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (Vorschau in den Listen). Mit ☆ legst du ein anderes fest.</p>
-          <?php endif; ?>
-        <?php endif; ?>
-        <?php if ($eingeloggt): ?>
-          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="foto_upload">
-            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-            <?= fotoUploadFelder('c-up') ?>
-          </form>
-        <?php else: ?>
-          <div style="margin-top:1rem;">
-            <?= loginFormular('?ergebnis=' . rawurlencode($aktiverChampagner['id'])) ?>
-          </div>
-        <?php endif; ?>
-      </div>
-
       <?php if ($bewertungen !== []): ?>
         <div class="card">
           <h2>Durchschnitt je Kategorie</h2>
@@ -3489,8 +3480,110 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               </tbody>
             </table>
           </div>
-          <p class="anzahl" style="margin-top:0.5rem;">Spalten: <?php $t = []; foreach ($KATEGORIEN as [$titel, $frage]) { $t[] = mb_substr($titel, 0, 4) . '. = ' . $titel; } echo e(implode(', ', $t)); ?>, Fl. = Flaschen</p>
+          <p class="anzahl" style="margin-top:0.5rem;">Spalten: <?php $t = []; foreach ($KATS_TYP as [$titel, $frage]) { $t[] = mb_substr($titel, 0, 4) . '. = ' . $titel; } echo e(implode(', ', $t)); ?>, Fl. = Flaschen</p>
         </div>
+      <?php endif; ?>
+
+      <div class="card">
+        <h2>Fotos</h2>
+        <?php if ($fotos === []): ?>
+          <p style="color:var(--muted); font-style:italic;">Noch keine Fotos zu diesem Getränk.</p>
+        <?php else: ?>
+          <?php $titelbildAktuell = (string)($aktiverChampagner['titelbild'] ?? ''); ?>
+          <div class="foto-galerie">
+            <?php foreach ($fotos as $i => $foto): ?>
+              <?php $istTitelbild = $titelbildAktuell !== '' ? $foto === $titelbildAktuell : $i === 0; ?>
+              <div class="foto">
+                <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                  <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
+                </a>
+                <?php if ($istTitelbild): ?>
+                  <span class="titelbild-marke" title="Titelbild – erscheint als Vorschau in den Listen">⭐</span>
+                <?php elseif ($eingeloggt): ?>
+                  <form method="post" class="titelbild-form">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="titelbild_setzen">
+                    <input type="hidden" name="typ" value="champagner">
+                    <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Als Titelbild festlegen">☆</button>
+                  </form>
+                <?php endif; ?>
+                <?php if ($eingeloggt): ?>
+                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="foto_loeschen">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Foto löschen">&#10005;</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+          <?php if ($eingeloggt && count($fotos) > 1): ?>
+            <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (Vorschau in den Listen). Mit ☆ legst du ein anderes fest.</p>
+          <?php endif; ?>
+        <?php endif; ?>
+        <?php if ($eingeloggt): ?>
+          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="foto_upload">
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+            <?= fotoUploadFelder('c-up') ?>
+          </form>
+        <?php else: ?>
+          <div style="margin-top:1rem;">
+            <?= loginFormular('?ergebnis=' . rawurlencode($aktiverChampagner['id'])) ?>
+          </div>
+        <?php endif; ?>
+      </div>
+
+      <?php if ($eingeloggt): ?>
+        <details class="card"<?= $erkanntVorschlag !== null ? ' open' : '' ?>>
+          <summary>✏️ Stammdaten bearbeiten</summary>
+          <?php if ($fotos !== []): ?>
+            <form method="post" style="margin-bottom:0.9rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="erkennen_bestehend">
+              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+              <?php if (count($fotos) > 1): ?>
+                <p class="anzahl" style="margin-bottom:0.4rem;">Welches Foto zeigt das Etikett? Antippen:</p>
+                <div class="foto-wahl">
+                  <?php foreach ($fotos as $i => $f): ?>
+                    <label class="foto-wahl-item">
+                      <input type="radio" name="foto" value="<?= e($f) ?>"<?= $i === 0 ? ' checked' : '' ?>>
+                      <img src="<?= e(thumbUrl($f)) ?>" alt="">
+                    </label>
+                  <?php endforeach; ?>
+                </div>
+              <?php endif; ?>
+              <button class="knopf zweit" type="submit">📷&nbsp; Etikett vom Foto erkennen</button>
+            </form>
+          <?php endif; ?>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="champagner_bearbeiten">
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+            <input type="text" name="name" value="<?= e($erkanntVorschlag !== null && $erkanntVorschlag['name'] !== '' ? $erkanntVorschlag['name'] : $aktiverChampagner['name']) ?>" maxlength="60" required>
+            <select name="kat">
+              <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kI, $kN]): ?>
+                <option value="<?= e($kS) ?>"<?= $typAktiv === $kS ? ' selected' : '' ?>><?= $kI ?> <?= e($kN) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <input type="text" name="rebsorte" id="rebsorte-edit" value="<?= e($erkanntVorschlag !== null && ($erkanntVorschlag['rebsorte'] ?? '') !== '' ? $erkanntVorschlag['rebsorte'] : (string)($aktiverChampagner['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($typAktiv)) ?>" maxlength="80">
+            <?= sortenChips('rebsorte-edit', $typAktiv) ?>
+            <input type="text" name="preis" value="<?= e((string)($aktiverChampagner['preis'] ?? '')) ?>" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
+            <?php if ($daten['tastings'] !== []): ?>
+              <select name="tasting_id">
+                <option value="">👥 ohne Tasting</option>
+                <?php foreach ($daten['tastings'] as $t): ?>
+                  <option value="<?= e($t['id']) ?>"<?= (string)($aktiverChampagner['tasting_id'] ?? '') === $t['id'] ? ' selected' : '' ?>>👥 <?= e($t['titel']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php endif; ?>
+            <button class="knopf zweit" type="submit">Speichern</button>
+          </form>
+        </details>
       <?php endif; ?>
 
       <?php $recherche = trim((string)($aktiverChampagner['recherche'] ?? '')); ?>
@@ -3627,7 +3720,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <?php endforeach; ?>
           </select>
           <input type="text" name="name" value="<?= e($neu['name']) ?>" placeholder="Name des Getränks" maxlength="60" required>
-          <input type="text" name="rebsorte" value="<?= e((string)($neu['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($neuKat)) ?>" maxlength="80">
+          <input type="text" name="rebsorte" id="rebsorte-neu" value="<?= e((string)($neu['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($neuKat)) ?>" maxlength="80">
+          <?= sortenChips('rebsorte-neu', $neuKat) ?>
           <input type="text" name="preis" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
           <h2>Weingut</h2>
           <?php if ($daten['weingueter'] !== []): ?>
@@ -4504,6 +4598,37 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           el.style.display = el.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
         });
       });
+    });
+
+    // Rebsorten/Stile antippen statt tippen: Chips füllen das Textfeld
+    document.querySelectorAll('.sorten-chips').forEach(function (box) {
+      var ziel = document.getElementById(box.dataset.ziel);
+      if (!ziel) { return; }
+      var form = box.closest('form');
+      var katWahl = form ? form.querySelector('select[name="kat"]') : null;
+      function markiere() {
+        var teile = ziel.value.split(',').map(function (t) { return t.trim().toLowerCase(); });
+        box.querySelectorAll('button.sorte').forEach(function (b) {
+          b.classList.toggle('gewaehlt', teile.indexOf(b.textContent.trim().toLowerCase()) !== -1);
+        });
+      }
+      box.querySelectorAll('button.sorte').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var wert = b.textContent.trim();
+          var teile = ziel.value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+          var i = teile.map(function (t) { return t.toLowerCase(); }).indexOf(wert.toLowerCase());
+          if (i === -1) { teile.push(wert); } else { teile.splice(i, 1); }
+          ziel.value = teile.join(', ');
+          markiere();
+        });
+      });
+      if (katWahl) {
+        katWahl.addEventListener('change', function () {
+          box.querySelectorAll('.sorten-set').forEach(function (s) { s.hidden = s.dataset.kat !== katWahl.value; });
+          ziel.placeholder = katWahl.value === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
+        });
+      }
+      markiere();
     });
 
     // Direkte Foto-Upload-Knöpfe: nach der Auswahl sofort hochladen
