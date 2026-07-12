@@ -246,6 +246,23 @@ function sortenLabel(string $typ): string
     return $typ === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
 }
 
+/**
+ * Foto-Upload als direkte Knöpfe: „Foto aufnehmen“ öffnet die Kamera,
+ * „Aus Galerie wählen“ den Bild-Picker – nach der Auswahl lädt das Formular
+ * automatisch hoch (kein totes „Hochladen“ ohne gewählte Datei mehr).
+ */
+function fotoUploadFelder(string $prefix): string
+{
+    $p = htmlspecialchars($prefix, ENT_QUOTES, 'UTF-8');
+    return '<input type="file" name="fotos[]" accept="image/*" capture="environment" id="' . $p . '-kamera" class="upload-direkt" style="display:none;">'
+        . '<input type="file" name="fotos[]" accept="image/*" multiple id="' . $p . '-galerie" class="upload-direkt" style="display:none;">'
+        . '<div class="knopfreihe">'
+        . '<label class="knopf" for="' . $p . '-kamera">📷&nbsp; Foto aufnehmen</label>'
+        . '<label class="knopf zweit" for="' . $p . '-galerie">🖼️&nbsp; Aus Galerie wählen</label>'
+        . '</div>'
+        . '<noscript><button class="knopf" type="submit" style="margin-top:0.6rem;">Hochladen</button></noscript>';
+}
+
 if (!isset($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
@@ -624,10 +641,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
             $kat = '';
         }
+        $neuesTasting = null; // null = Feld nicht mitgeschickt, '' = „ohne Tasting“
+        if (array_key_exists('tasting_id', $_POST)) {
+            $neuesTasting = (string)$_POST['tasting_id'];
+            if ($neuesTasting !== '') {
+                $gefunden = false;
+                foreach (datenLaden()['tastings'] as $t) {
+                    if ($t['id'] === $neuesTasting) {
+                        $gefunden = true;
+                        break;
+                    }
+                }
+                if (!$gefunden) {
+                    $neuesTasting = null;
+                }
+            }
+        }
         if ($name === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Der Name darf nicht leer sein.'));
         }
-        datenAendern(function (array $d) use ($cid, $name, $preis, $rebsorte, $kat): array {
+        datenAendern(function (array $d) use ($cid, $name, $preis, $rebsorte, $kat, $neuesTasting): array {
             $eigenesTasting = (string)(champagnerHolen($d, $cid)['tasting_id'] ?? '');
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] !== $cid && mb_strtolower($c['name']) === mb_strtolower($name)
@@ -642,6 +675,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $c['rebsorte'] = $rebsorte;
                     if ($kat !== '') {
                         $c['typ'] = $kat;
+                    }
+                    if ($neuesTasting !== null) {
+                        $c['tasting_id'] = $neuesTasting;
                     }
                 }
             }
@@ -1261,6 +1297,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             return $d;
         });
         zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($cid === '' ? 'Glas geleert.' : 'Steht jetzt für alle „im Glas“. 🥂'));
+    }
+
+    if ($aktion === 'tasting_zuordnen') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $d0 = datenLaden();
+        $zielTasting = null;
+        foreach ($d0['tastings'] as $t) {
+            if ($t['id'] === $tid) {
+                $zielTasting = $t;
+                break;
+            }
+        }
+        $getraenk = champagnerHolen($d0, $cid);
+        if ($zielTasting === null || $getraenk === null) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Getränk oder Tasting nicht gefunden.'));
+        }
+        datenAendern(function (array $d) use ($tid, $cid): array {
+            foreach ($d['champagner'] as &$c) {
+                if ($c['id'] === $cid) {
+                    $c['tasting_id'] = $tid;
+                }
+            }
+            unset($c);
+            return $d;
+        });
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('„' . $getraenk['name'] . '“ gehört jetzt zu „' . $zielTasting['titel'] . '“.'));
     }
 
     if ($aktion === 'weingut_kontakt') {
@@ -2732,7 +2795,16 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php else: ?>
       <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck zur Liste</a></p>
       <h1><?= e($aktiverChampagner['name']) ?></h1>
-      <p class="untertitel">Ergebnis der Verkostung<?= preisZeile($aktiverChampagner) ?></p>
+      <?php
+        $cTastingTitel = '';
+        foreach ($daten['tastings'] as $t) {
+            if ($t['id'] === (string)($aktiverChampagner['tasting_id'] ?? '')) {
+                $cTastingTitel = $t['titel'];
+                break;
+            }
+        }
+      ?>
+      <p class="untertitel">Ergebnis der Verkostung<?= preisZeile($aktiverChampagner) ?><?= $cTastingTitel !== '' ? ' &middot; 👥 ' . e($cTastingTitel) : '' ?></p>
     <?php endif; ?>
 
     <?php if ($meldung !== ''): ?>
@@ -2897,6 +2969,37 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <span class="k-icon">🍾</span>
           <span class="k-text"><b>Unsere Weine (<?= count($tastingWeine) ?>)</b><small>Alle verkosteten Flaschen mit Bewertungen und Fotos</small></span>
         </a>
+        <?php
+          // Getränke aus anderen Tastings, die man hierher holen kann
+          $fremdeGetraenke = array_values(array_filter(
+              $daten['champagner'],
+              fn($c) => (string)($c['tasting_id'] ?? '') !== (string)$aktivesTasting['id']
+          ));
+          usort($fremdeGetraenke, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+          $tastingTitel = [];
+          foreach ($daten['tastings'] as $t) {
+              $tastingTitel[$t['id']] = $t['titel'];
+          }
+        ?>
+        <?php if ($fremdeGetraenke !== []): ?>
+          <div class="card">
+            <h2>➕ Getränk diesem Tasting zuordnen</h2>
+            <p class="anzahl" style="margin-bottom:0.6rem;">Ein bereits erfasstes Getränk aus einem anderen Tasting hierher holen:</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="tasting_zuordnen">
+              <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+              <select name="champagner_id" required>
+                <option value="">– Getränk wählen –</option>
+                <?php foreach (array_slice($fremdeGetraenke, 0, 60) as $fg): ?>
+                  <?php $herkunft = $tastingTitel[(string)($fg['tasting_id'] ?? '')] ?? 'ohne Tasting'; ?>
+                  <option value="<?= e($fg['id']) ?>"><?= e($fg['name']) ?> (<?= e($herkunft) ?>)</option>
+                <?php endforeach; ?>
+              </select>
+              <button class="knopf zweit" type="submit">Hierher holen</button>
+            </form>
+          </div>
+        <?php endif; ?>
         <a class="kachel" href="?weingueter=1">
           <span class="k-icon">🍇</span>
           <span class="k-text"><b>Weingüter<?= $tastingWeingutIds !== [] ? ' (' . count($tastingWeingutIds) . ' besucht)' : '' ?></b><small>Kontakte, Notizen und Bilder der Weingüter</small></span>
@@ -2960,8 +3063,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="tasting_foto_upload">
             <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <input type="file" name="fotos[]" accept="image/*" capture="environment" multiple required>
-            <button class="knopf" type="submit">Foto hochladen</button>
+            <?= fotoUploadFelder('ts-up') ?>
           </form>
         </div>
 
@@ -3259,6 +3361,14 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <option value="<?= e($kS) ?>"<?= $typAktiv === $kS ? ' selected' : '' ?>><?= $kI ?> <?= e($kN) ?></option>
               <?php endforeach; ?>
             </select>
+            <?php if ($daten['tastings'] !== []): ?>
+              <select name="tasting_id">
+                <option value="">👥 ohne Tasting</option>
+                <?php foreach ($daten['tastings'] as $t): ?>
+                  <option value="<?= e($t['id']) ?>"<?= (string)($aktiverChampagner['tasting_id'] ?? '') === $t['id'] ? ' selected' : '' ?>>👥 <?= e($t['titel']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php endif; ?>
             <button class="knopf zweit" type="submit">Speichern</button>
           </form>
         </div>
@@ -3308,8 +3418,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="foto_upload">
             <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-            <input type="file" name="fotos[]" accept="image/*" multiple required>
-            <button class="knopf" type="submit">Fotos hochladen</button>
+            <?= fotoUploadFelder('c-up') ?>
           </form>
         <?php else: ?>
           <div style="margin-top:1rem;">
@@ -3766,8 +3875,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="div_foto_upload">
-            <input type="file" name="fotos[]" accept="image/*" multiple required>
-            <button class="knopf" type="submit">Hochladen</button>
+            <?= fotoUploadFelder('div-up') ?>
           </form>
           <p class="abmelden">Mehrere Fotos auf einmal möglich (max. 25&nbsp;MB pro Foto).</p>
         <?php else: ?>
@@ -3963,8 +4071,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="weingut_foto_upload">
             <input type="hidden" name="weingut_id" value="<?= e($aktivesWeingut['id']) ?>">
-            <input type="file" name="fotos[]" accept="image/*" multiple required>
-            <button class="knopf" type="submit">Bilder hochladen</button>
+            <?= fotoUploadFelder('wg-up') ?>
           </form>
         <?php endif; ?>
       </div>
@@ -4399,6 +4506,21 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       });
     });
 
+    // Direkte Foto-Upload-Knöpfe: nach der Auswahl sofort hochladen
+    document.querySelectorAll('.upload-direkt').forEach(function (input) {
+      input.addEventListener('change', function () {
+        if (!input.files || input.files.length === 0) { return; }
+        var form = input.closest('form');
+        if (!form) { return; }
+        var labels = form.querySelectorAll('label.knopf');
+        labels.forEach(function (l, i) {
+          if (i === 0) { l.textContent = 'Wird hochgeladen …'; l.classList.add('laedt'); }
+          else { l.style.display = 'none'; }
+        });
+        form.submit();
+      });
+    });
+
     // Einladungslinks in die Zwischenablage kopieren
     document.querySelectorAll('.link-kopieren').forEach(function (k) {
       k.addEventListener('click', function () {
@@ -4455,7 +4577,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         if (aktiv && (aktiv.tagName === 'INPUT' || aktiv.tagName === 'TEXTAREA' || aktiv.tagName === 'SELECT')) { return; }
         var tippt = false;
         document.querySelectorAll('.filter-feld').forEach(function (f) { if (f.value.trim() !== '') { tippt = true; } });
-        if (tippt) { return; } // Suchfilter in Benutzung → nicht wegreloaden
+        document.querySelectorAll('input[type="file"]').forEach(function (f) { if (f.files && f.files.length > 0) { tippt = true; } });
+        if (tippt) { return; } // Suchfilter oder gewähltes Foto → nicht wegreloaden
         var overlay = document.getElementById('overlay');
         var gross = document.getElementById('grossansicht');
         var anleitung = document.getElementById('anleitung-box');
