@@ -1476,7 +1476,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Benutzerverwaltung: nur für Administratoren
         $admin = aktuellerBenutzer(datenLaden());
         if ($admin === null || empty($admin['admin'])) {
-            zurueck('?tasting=1&fehler=' . rawurlencode('Die Benutzerverwaltung ist nur für Administratoren.'));
+            zurueck('?verwaltung=1&fehler=' . rawurlencode('Die Benutzerverwaltung ist nur für Administratoren.'));
         }
 
         if ($aktion === 'benutzer_anlegen') {
@@ -1486,10 +1486,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pw = (string)($_POST['passwort'] ?? '');
             $darfTasting = (string)($_POST['darf_tasting'] ?? '') === '1';
             if ($vorname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                zurueck('?tasting=1&fehler=' . rawurlencode('Bitte mindestens Vorname und eine gültige E-Mail angeben.'));
+                zurueck('?verwaltung=1&fehler=' . rawurlencode('Bitte mindestens Vorname und eine gültige E-Mail angeben.'));
             }
             if (mb_strlen($pw) < 6) {
-                zurueck('?tasting=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+                zurueck('?verwaltung=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
             }
             $neuerBenutzer = [
                 'id' => bin2hex(random_bytes(4)),
@@ -1505,23 +1505,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
                 foreach ($d['benutzer'] as $b) {
                     if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
-                        zurueck('?tasting=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Benutzerkonto.'));
+                        zurueck('?verwaltung=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Benutzerkonto.'));
                     }
                 }
                 $d['benutzer'][] = $neuerBenutzer;
                 return $d;
             });
-            zurueck('?tasting=1&ok=' . rawurlencode('Benutzer „' . $vorname . '“ angelegt' . ($darfTasting ? ' – darf Tastings anlegen.' : '.')));
+            zurueck('?verwaltung=1&ok=' . rawurlencode('Benutzer „' . $vorname . '“ angelegt' . ($darfTasting ? ' – darf Tastings anlegen.' : '.')));
         }
 
         if ($aktion === 'benutzer_rechte') {
             $bid = (string)($_POST['id'] ?? '');
             $feld = (string)($_POST['feld'] ?? '');
             if (!in_array($feld, ['darf_tasting', 'admin'], true)) {
-                zurueck('?tasting=1');
+                zurueck('?verwaltung=1');
             }
             if ($feld === 'admin' && $bid === (string)$admin['id']) {
-                zurueck('?tasting=1&fehler=' . rawurlencode('Du kannst dir nicht selbst die Admin-Rechte entziehen.'));
+                zurueck('?verwaltung=1&fehler=' . rawurlencode('Du kannst dir nicht selbst die Admin-Rechte entziehen.'));
             }
             datenAendern(function (array $d) use ($bid, $feld): array {
                 foreach ($d['benutzer'] as &$b) {
@@ -1532,14 +1532,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 unset($b);
                 return $d;
             });
-            zurueck('?tasting=1&ok=' . rawurlencode('Rechte aktualisiert.'));
+            zurueck('?verwaltung=1&ok=' . rawurlencode('Rechte aktualisiert.'));
         }
 
         if ($aktion === 'benutzer_passwort') {
             $bid = (string)($_POST['id'] ?? '');
             $pw = (string)($_POST['passwort'] ?? '');
             if (mb_strlen($pw) < 6) {
-                zurueck('?tasting=1&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
+                zurueck('?verwaltung=1&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
             }
             $hash = password_hash($pw, PASSWORD_DEFAULT);
             datenAendern(function (array $d) use ($bid, $hash): array {
@@ -1551,19 +1551,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 unset($b);
                 return $d;
             });
-            zurueck('?tasting=1&ok=' . rawurlencode('Passwort neu gesetzt.'));
+            zurueck('?verwaltung=1&ok=' . rawurlencode('Passwort neu gesetzt.'));
         }
 
         if ($aktion === 'benutzer_loeschen') {
             $bid = (string)($_POST['id'] ?? '');
             if ($bid === (string)$admin['id']) {
-                zurueck('?tasting=1&fehler=' . rawurlencode('Du kannst dein eigenes Konto nicht löschen.'));
+                zurueck('?verwaltung=1&fehler=' . rawurlencode('Du kannst dein eigenes Konto nicht löschen.'));
             }
             datenAendern(function (array $d) use ($bid): array {
                 $d['benutzer'] = array_values(array_filter($d['benutzer'], fn($b) => $b['id'] !== $bid));
                 return $d;
             });
-            zurueck('?tasting=1&ok=' . rawurlencode('Benutzer gelöscht.'));
+            zurueck('?verwaltung=1&ok=' . rawurlencode('Benutzer gelöscht.'));
         }
     }
 
@@ -1647,7 +1647,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . "Tipp einfach auf diesen Link – damit bist du angemeldet und kannst sofort mitbewerten (kein Passwort nötig):\n"
             . $link . "\n\nBis gleich! 🥂";
         $ok = @mail($person['email'], $betreff, $text,
-            "From: Tasting fruthzeug.de <post@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
+            "From: Tasting fruthzeug.de <tasting@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
         if ($ok) {
             zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Einladung an ' . $person['email'] . ' verschickt.'));
         }
@@ -2726,12 +2726,14 @@ if (isset($_GET['bewerten'])) {
     }
 } elseif (isset($_GET['beitritt'])) {
     $ansicht = 'beitreten';
+} elseif (isset($_GET['verwaltung'])) {
+    $ansicht = 'verwaltung';
 }
 
 // Bereich für die Tab-Leiste unten
 $bereich = match ($ansicht) {
     'verkosten', 'werkstatt', 'neu', 'wneu', 'bewerten' => 'verkosten',
-    'tastingplatz', 'beitreten' => 'tasting',
+    'tastingplatz', 'beitreten', 'verwaltung' => 'tasting',
     default => 'entdecken',
 };
 
@@ -3218,6 +3220,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?weingueter=1">🍇 Weingüter</a>
       <a href="?fotos=1">📸 Fotoalbum</a>
       <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
+      <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
+        <a href="?verwaltung=1">🛠️ Verwaltung</a>
+      <?php endif; ?>
+      <a href="mailto:tasting@fruthzeug.de">✉️ Kontakt</a>
       <a href="#" id="neu-laden">&#10227; Neu laden</a>
       <a href="/">fruthzeug.de</a>
     </nav>
@@ -3243,6 +3249,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'beitreten'): ?>
       <h1>Mitmachen 🥂</h1>
       <p class="untertitel">Du wurdest zu einem Tasting eingeladen.</p>
+    <?php elseif ($ansicht === 'verwaltung'): ?>
+      <p class="zurueck"><a href="?tasting=1">&larr; Zur Tasting-&Uuml;bersicht</a></p>
+      <h1>Verwaltung 🛠️</h1>
+      <p class="untertitel">Benutzer, Getränke und Weingüter – nur für Administratoren.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
@@ -3776,62 +3786,193 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php endif; ?>
 
         <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
-          <details class="card">
-            <summary>🛡️ Benutzerverwaltung</summary>
-            <?php foreach ($daten['benutzer'] as $b): ?>
-              <div style="border-bottom:1px solid var(--border); padding:0.6rem 0;">
-                <p><b><?= e(trim((string)($b['vorname'] ?? '') . ' ' . (string)($b['name'] ?? ''))) ?></b>
-                  <span class="anzahl"><?= e((string)($b['email'] ?? '')) ?></span></p>
-                <p style="margin:0.3rem 0;">
-                  <?php if (!empty($b['admin'])): ?><span class="bewerter-chip">🛡️ Admin</span><?php endif; ?>
-                  <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅ darf Tastings anlegen</span><?php else: ?><span class="bewerter-chip offen">⏳ darf keine Tastings anlegen</span><?php endif; ?>
-                </p>
-                <div class="knopfreihe" style="align-items:center;">
+          <a class="kachel" href="?verwaltung=1">
+            <span class="k-icon">🛠️</span>
+            <span class="k-text"><b>Verwaltung</b><small>Benutzer, alle Getränke und Weingüter – mit Filtern</small></span>
+          </a>
+        <?php endif; ?>
+      <?php endif; ?>
+
+    <?php elseif ($ansicht === 'verwaltung'): ?>
+      <!-- ==================== VERWALTUNG (nur Admin) ==================== -->
+      <?php if ($benutzerAktiv === null || empty($benutzerAktiv['admin'])): ?>
+        <div class="card">
+          <p style="margin-bottom:0.8rem;">Die Verwaltung ist nur für Administratoren. Melde dich auf der Tasting-Seite mit deinem Benutzerkonto an.</p>
+          <a class="knopf" href="?tasting=1">Zur Tasting-Seite</a>
+        </div>
+      <?php else: ?>
+
+        <details class="card" open>
+          <summary>🛡️ Benutzer (<?= count($daten['benutzer']) ?>)</summary>
+          <?php foreach ($daten['benutzer'] as $b): ?>
+            <div style="border-bottom:1px solid var(--border); padding:0.6rem 0;">
+              <p><b><?= e(trim((string)($b['vorname'] ?? '') . ' ' . (string)($b['name'] ?? ''))) ?></b>
+                <span class="anzahl"><?= e((string)($b['email'] ?? '')) ?></span></p>
+              <p style="margin:0.3rem 0;">
+                <?php if (!empty($b['admin'])): ?><span class="bewerter-chip">🛡️ Admin</span><?php endif; ?>
+                <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅ darf Tastings anlegen</span><?php else: ?><span class="bewerter-chip offen">⏳ darf keine Tastings anlegen</span><?php endif; ?>
+              </p>
+              <div class="knopfreihe" style="align-items:center;">
+                <form method="post" style="display:inline;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="benutzer_rechte">
+                  <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                  <input type="hidden" name="feld" value="darf_tasting">
+                  <button class="knopf klein zweit" type="submit"><?= !empty($b['darf_tasting']) ? 'Tasting-Recht entziehen' : 'Tastings erlauben' ?></button>
+                </form>
+                <?php if ($b['id'] !== $benutzerAktiv['id']): ?>
                   <form method="post" style="display:inline;">
                     <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                     <input type="hidden" name="aktion" value="benutzer_rechte">
                     <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                    <input type="hidden" name="feld" value="darf_tasting">
-                    <button class="knopf klein zweit" type="submit"><?= !empty($b['darf_tasting']) ? 'Tasting-Recht entziehen' : 'Tastings erlauben' ?></button>
+                    <input type="hidden" name="feld" value="admin">
+                    <button class="knopf klein zweit" type="submit"><?= !empty($b['admin']) ? 'Admin entziehen' : 'Zum Admin machen' ?></button>
                   </form>
-                  <?php if ($b['id'] !== $benutzerAktiv['id']): ?>
-                    <form method="post" style="display:inline;">
-                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                      <input type="hidden" name="aktion" value="benutzer_rechte">
-                      <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                      <input type="hidden" name="feld" value="admin">
-                      <button class="knopf klein zweit" type="submit"><?= !empty($b['admin']) ? 'Admin entziehen' : 'Zum Admin machen' ?></button>
-                    </form>
-                    <form method="post" style="display:inline;" onsubmit="return confirm('Benutzer <?= e($b['vorname'] ?? '') ?> wirklich löschen?');">
-                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                      <input type="hidden" name="aktion" value="benutzer_loeschen">
-                      <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                      <button class="loeschen" type="submit">löschen</button>
-                    </form>
-                  <?php endif; ?>
-                </div>
-                <form method="post" style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center;">
+                  <form method="post" style="display:inline;" onsubmit="return confirm('Benutzer <?= e($b['vorname'] ?? '') ?> wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="benutzer_loeschen">
+                    <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                    <button class="loeschen" type="submit">löschen</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+              <form method="post" style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="benutzer_passwort">
+                <input type="hidden" name="id" value="<?= e($b['id']) ?>">
+                <input type="password" name="passwort" placeholder="Neues Passwort setzen" minlength="6" style="margin-bottom:0; flex:1;" required>
+                <button class="knopf klein zweit" type="submit">Setzen</button>
+              </form>
+            </div>
+          <?php endforeach; ?>
+          <h2 style="margin-top:1rem;">Neuen Benutzer anlegen</h2>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="benutzer_anlegen">
+            <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
+            <input type="text" name="name" placeholder="Nachname (optional)" maxlength="40">
+            <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" required>
+            <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
+            <label style="display:block; margin-bottom:0.7rem;"><input type="checkbox" name="darf_tasting" value="1" style="width:auto; margin-right:0.4rem;"> Darf eigene Tastings anlegen</label>
+            <button class="knopf" type="submit">Benutzer anlegen</button>
+          </form>
+        </details>
+
+        <?php
+          // ---------- Alle Getränke mit Filtern ----------
+          $vtid  = (string)($_GET['vtid'] ?? 'alle');
+          $vkat  = (string)($_GET['vkat'] ?? 'alle');
+          $vsort = (string)($_GET['vsort'] ?? 'datum');
+          $tastingTitelListe = [];
+          foreach ($daten['tastings'] as $t) {
+              $tastingTitelListe[$t['id']] = $t['titel'];
+          }
+          $vLink = fn(array $aend): string => '?verwaltung=1&amp;vtid=' . e(rawurlencode($aend['vtid'] ?? $vtid)) . '&amp;vkat=' . e(rawurlencode($aend['vkat'] ?? $vkat)) . '&amp;vsort=' . e(rawurlencode($aend['vsort'] ?? $vsort));
+          $vGetraenke = array_values(array_filter($daten['champagner'], function ($c) use ($vtid, $vkat) {
+              if ($vtid !== 'alle' && (string)($c['tasting_id'] ?? '') !== ($vtid === 'ohne' ? '' : $vtid)) {
+                  return false;
+              }
+              if ($vkat !== 'alle' && ($c['typ'] ?? 'champagner') !== $vkat) {
+                  return false;
+              }
+              return true;
+          }));
+          if ($vsort === 'name') {
+              usort($vGetraenke, fn($x, $y) => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
+          } elseif ($vsort === 'tasting') {
+              usort($vGetraenke, fn($x, $y) => strcmp($tastingTitelListe[(string)($x['tasting_id'] ?? '')] ?? '~', $tastingTitelListe[(string)($y['tasting_id'] ?? '')] ?? '~') ?: (((int)$y['zeit']) <=> ((int)$x['zeit'])));
+          } elseif ($vsort === 'rebsorte') {
+              usort($vGetraenke, fn($x, $y) => strcmp(mb_strtolower((string)($x['rebsorte'] ?? '~')), mb_strtolower((string)($y['rebsorte'] ?? '~'))));
+          } else {
+              usort($vGetraenke, fn($x, $y) => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+          }
+        ?>
+        <div class="card">
+          <h2>🍾 Alle Getränke (<?= count($vGetraenke) ?> von <?= count($daten['champagner']) ?>)</h2>
+          <div class="sortier-leiste">Tasting:
+            <a class="<?= $vtid === 'alle' ? 'aktiv' : '' ?>" href="<?= $vLink(['vtid' => 'alle']) ?>">Alle</a>
+            <?php foreach ($daten['tastings'] as $t): ?>
+              <a class="<?= $vtid === $t['id'] ? 'aktiv' : '' ?>" href="<?= $vLink(['vtid' => $t['id']]) ?>"><?= e($t['titel']) ?></a>
+            <?php endforeach; ?>
+            <a class="<?= $vtid === 'ohne' ? 'aktiv' : '' ?>" href="<?= $vLink(['vtid' => 'ohne']) ?>">ohne Tasting</a>
+          </div>
+          <div class="sortier-leiste">Kategorie:
+            <a class="<?= $vkat === 'alle' ? 'aktiv' : '' ?>" href="<?= $vLink(['vkat' => 'alle']) ?>">Alle</a>
+            <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kI, $kN]): ?>
+              <a class="<?= $vkat === $kS ? 'aktiv' : '' ?>" href="<?= $vLink(['vkat' => $kS]) ?>"><?= $kI ?> <?= e($kN) ?></a>
+            <?php endforeach; ?>
+          </div>
+          <div class="sortier-leiste">Sortieren:
+            <a class="<?= $vsort === 'datum' ? 'aktiv' : '' ?>" href="<?= $vLink(['vsort' => 'datum']) ?>">Anlagedatum</a>
+            <a class="<?= $vsort === 'name' ? 'aktiv' : '' ?>" href="<?= $vLink(['vsort' => 'name']) ?>">Name</a>
+            <a class="<?= $vsort === 'tasting' ? 'aktiv' : '' ?>" href="<?= $vLink(['vsort' => 'tasting']) ?>">Tasting</a>
+            <a class="<?= $vsort === 'rebsorte' ? 'aktiv' : '' ?>" href="<?= $vLink(['vsort' => 'rebsorte']) ?>">Traube/Stil</a>
+          </div>
+          <input type="search" class="filter-feld" placeholder="🔍 Name, Traube, Weingut suchen …" data-ziel="#vw-getraenke">
+          <div id="vw-getraenke">
+            <?php foreach ($vGetraenke as $c): ?>
+              <?php
+                $vWg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
+                $vTeile = [$KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][1] ?? 'Champagner'];
+                if (trim((string)($c['rebsorte'] ?? '')) !== '') { $vTeile[] = (string)$c['rebsorte']; }
+                if ($vWg !== null) { $vTeile[] = '🍇 ' . $vWg['name']; }
+                $vTeile[] = '👥 ' . ($tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? 'ohne Tasting');
+                $vTeile[] = count(bewertungenFuer($daten, $c['id'])) . ' Bew.';
+              ?>
+              <div class="filterbar" style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.5rem 0;">
+                <span style="flex:1; min-width:0;">
+                  <b><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?> <?= e($c['name']) ?></b><br>
+                  <span class="anzahl"><?= e(implode(' · ', $vTeile)) ?></span>
+                </span>
+                <a class="knopf klein zweit" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">Ansehen</a>
+                <form method="post" onsubmit="return confirm('„<?= e($c['name']) ?>“ samt Bewertungen und Fotos wirklich löschen?');">
                   <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                  <input type="hidden" name="aktion" value="benutzer_passwort">
-                  <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                  <input type="password" name="passwort" placeholder="Neues Passwort setzen" minlength="6" style="margin-bottom:0; flex:1;" required>
-                  <button class="knopf klein zweit" type="submit">Setzen</button>
+                  <input type="hidden" name="aktion" value="champagner_loeschen">
+                  <input type="hidden" name="id" value="<?= e($c['id']) ?>">
+                  <button class="loeschen" type="submit">löschen</button>
                 </form>
               </div>
             <?php endforeach; ?>
-            <h2 style="margin-top:1rem;">Neuen Benutzer anlegen</h2>
-            <form method="post">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="benutzer_anlegen">
-              <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
-              <input type="text" name="name" placeholder="Nachname (optional)" maxlength="40">
-              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" required>
-              <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
-              <label style="display:block; margin-bottom:0.7rem;"><input type="checkbox" name="darf_tasting" value="1" style="width:auto; margin-right:0.4rem;"> Darf eigene Tastings anlegen</label>
-              <button class="knopf" type="submit">Benutzer anlegen</button>
-            </form>
-          </details>
-        <?php endif; ?>
+            <?php if ($vGetraenke === []): ?>
+              <p style="color:var(--muted); font-style:italic;">Kein Getränk passt zu diesen Filtern.</p>
+            <?php endif; ?>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🍇 Alle Weingüter (<?= count($daten['weingueter']) ?>)</h2>
+          <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel="#vw-weingueter">
+          <div id="vw-weingueter">
+            <?php
+              $vwgListe = $daten['weingueter'];
+              usort($vwgListe, fn($x, $y) => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
+            ?>
+            <?php foreach ($vwgListe as $w): ?>
+              <?php
+                $wgGetraenke = array_values(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id']));
+                $wgTastings = array_unique(array_map(fn($c) => $tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? 'ohne', $wgGetraenke));
+              ?>
+              <div class="filterbar" style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.5rem 0;">
+                <span style="flex:1; min-width:0;">
+                  <b>🍇 <?= e($w['name']) ?></b><br>
+                  <span class="anzahl"><?= count($wgGetraenke) ?> Getränk(e)<?= $wgTastings !== [] ? ' · 👥 ' . e(implode(', ', $wgTastings)) : '' ?></span>
+                </span>
+                <a class="knopf klein zweit" href="?weingut=<?= e(rawurlencode($w['id'])) ?>">Ansehen</a>
+                <form method="post" onsubmit="return confirm('„<?= e($w['name']) ?>“ löschen? Die Getränke bleiben, verlieren aber die Zuordnung.');">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="weingut_loeschen">
+                  <input type="hidden" name="id" value="<?= e($w['id']) ?>">
+                  <button class="loeschen" type="submit">löschen</button>
+                </form>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>✉️ Kontakt</h2>
+          <p>Wünsche und Fragen an: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
+        </div>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
@@ -4913,7 +5054,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
   </main>
 
   <footer>
-    <p>&copy; 2026 Carl &middot; <a href="/">Zur&uuml;ck zur Startseite</a></p>
+    <p>&copy; 2026 Carl &middot; <a href="mailto:tasting@fruthzeug.de">✉️ tasting@fruthzeug.de</a> &middot; <a href="/">Zur&uuml;ck zur Startseite</a></p>
   </footer>
 
   <nav class="tab-leiste">
