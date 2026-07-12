@@ -640,7 +640,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $hinweis = 'Im Foto stecken keine GPS-Daten (beim iPhone: im Auswahldialog „Optionen“ → „Standort“ einschalten). Du kannst den Namen unten von Hand eintragen.';
         }
         $vkmodus = (string)($_POST['vkmodus'] ?? '') === '1';
-        $_SESSION['wneu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt, 'alternativen' => $alternativen, 'vkmodus' => $vkmodus];
+        // Kennen wir dieses Weingut schon? (per GPS-Koordinaten oder per Name)
+        $bekanntesId = '';
+        if ($gps !== null) {
+            $treffer = weingutPerKoordinaten(datenLaden(), $gps[0], $gps[1]);
+            if ($treffer !== null) {
+                $bekanntesId = $treffer['id'];
+            }
+        }
+        if ($bekanntesId === '' && $name !== '') {
+            foreach (datenLaden()['weingueter'] as $w) {
+                if (mb_strtolower($w['name']) === mb_strtolower($name)) {
+                    $bekanntesId = $w['id'];
+                    break;
+                }
+            }
+        }
+        $_SESSION['wneu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $name, 'kontakt' => $kontakt, 'alternativen' => $alternativen, 'vkmodus' => $vkmodus, 'bekannt' => $bekanntesId];
         zurueck('?wneu=2' . ($hinweis !== '' ? '&fehler=' . rawurlencode($hinweis) : ''));
     }
 
@@ -1948,7 +1964,12 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     #wz-sterne-vorschau .wz-sterne .an { color: var(--stern); }
     #wz-sterne-vorschau .wz-sterne .aus { color: var(--border); }
 
-    .filter-feld { margin-bottom: 0.7rem; }
+    .filter-feld {
+      margin-bottom: 0.7rem;
+      position: sticky; top: var(--filter-top, 0px); z-index: 5;
+      background: var(--bg);
+      box-shadow: 0 4px 8px -4px rgba(0,0,0,0.15);
+    }
     input[type="password"], input[type="text"], input[type="number"], input[type="search"], input[type="file"], textarea, select {
       width: 100%; padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px;
       background: var(--bg); color: var(--text); font-size: 1rem; margin-bottom: 0.8rem;
@@ -2912,8 +2933,20 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <?php if (!$eingeloggt): ?>
         <div class="card"><?= loginFormular('?wneu=1') ?></div>
       <?php elseif ((int)$_GET['wneu'] === 2): ?>
-        <?php $wneu = $_SESSION['wneu'] ?? ['foto' => '', 'name' => '', 'kontakt' => '', 'alternativen' => []]; ?>
-        <?php if ($wneu['name'] !== ''): ?>
+        <?php
+          $wneu = $_SESSION['wneu'] ?? ['foto' => '', 'name' => '', 'kontakt' => '', 'alternativen' => [], 'bekannt' => ''];
+          $bekanntesWeingut = weingutHolen($daten, (string)($wneu['bekannt'] ?? ''));
+        ?>
+        <?php if ($bekanntesWeingut !== null): ?>
+          <div class="card" style="border-left:5px solid var(--accent);">
+            <h2>Kennst du schon! 🍇</h2>
+            <p>Dieses Weingut hast du bereits erfasst: <b><?= e($bekanntesWeingut['name']) ?></b>.</p>
+            <div class="knopfreihe" style="margin-top:0.6rem;">
+              <a class="knopf" href="?vk=<?= e(rawurlencode($bekanntesWeingut['id'])) ?>">Dort weiterverkosten</a>
+            </div>
+            <p class="anzahl" style="margin-top:0.5rem;">… oder lege es unten trotzdem neu an (nur nötig, wenn es ein anderes ist).</p>
+          </div>
+        <?php elseif ($wneu['name'] !== ''): ?>
           <div class="hinweis ok">Erzeuger am Standort gefunden – bitte kurz prüfen und ggf. korrigieren.</div>
         <?php elseif ($wneu['kontakt'] !== ''): ?>
           <div class="hinweis ok">Standort aus dem Foto erkannt – der Name ließ sich nicht sicher bestimmen, bitte eintragen.</div>
@@ -3490,7 +3523,12 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       zeige(1);
     })();
 
-    // Suchfilter über Listen: tippen filtert die Einträge sofort
+    // Suchfilter über Listen: tippen filtert die Einträge sofort; Feld bleibt oben stehen
+    (function () {
+      var header = document.querySelector('.site-header');
+      var top = header ? header.getBoundingClientRect().height : 0;
+      document.documentElement.style.setProperty('--filter-top', top + 'px');
+    })();
     document.querySelectorAll('.filter-feld').forEach(function (feld) {
       var ziel = document.querySelector(feld.dataset.ziel);
       if (!ziel) { return; }
