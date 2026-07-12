@@ -3263,14 +3263,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       border: none; border-radius: 999px; padding: 0.4rem 0.9rem;
       font-size: 0.9rem; font-weight: 600; cursor: pointer; font-family: inherit;
     }
-    #anleitung-box { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
-    #anleitung-box[hidden] { display: none; }
-    #anleitung-box .blatt {
+    #anleitung-box, #tasting-bild-box { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
+    #anleitung-box [hidden], #tasting-bild-box [hidden] { display: none; }
+    #anleitung-box .blatt, #tasting-bild-box .blatt {
       background: var(--bg); width: 100%; max-width: 46rem; max-height: 90dvh;
       overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 18px 18px 0 0; padding: 1rem 1.2rem 3rem;
     }
-    #anleitung-box .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
-    #anleitung-box .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
+    #anleitung-box .blatt-kopf, #tasting-bild-box .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
+    #anleitung-box .blatt-kopf button, #tasting-bild-box .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
     .anleitung h3 { margin: 1.1rem 0 0.2rem; font-size: 1.1rem; color: var(--accent); }
     .anleitung p { margin-bottom: 0.4rem; }
     .anleitung-chips { display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
@@ -3549,7 +3549,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'tastingplatz'): ?>
       <?php if (($aktivesTasting ?? null) !== null): ?>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
-        <h1><?= e($aktivesTasting['titel']) ?> 👥</h1>
+        <?php $tsKopfFotos = mitTitelbild(tastingFotos($aktivesTasting['id']), (string)($aktivesTasting['titelbild'] ?? '')); ?>
+        <h1 style="display:flex; align-items:center; gap:0.6rem;">
+          <button type="button" id="tasting-bild-knopf" title="Bild & Fotos vom Tasting" style="border:none; background:none; padding:0; cursor:pointer; flex-shrink:0;">
+            <?php if ($tsKopfFotos !== []): ?>
+              <img src="<?= e(thumbUrl($tsKopfFotos[0])) ?>" alt="" style="width:46px; height:46px; border-radius:50%; object-fit:cover; border:2px solid var(--accent); display:block;">
+            <?php else: ?>
+              <span style="width:46px; height:46px; border-radius:50%; border:2px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:1.2rem;">📷</span>
+            <?php endif; ?>
+          </button>
+          <span id="tasting-titel-tipp" style="cursor:pointer;"><?= e($aktivesTasting['titel']) ?> 👥</span>
+        </h1>
         <p class="untertitel">📅 angelegt am <?= date('d.m.Y', (int)($aktivesTasting['zeit'] ?? time())) ?></p>
       <?php else: ?>
         <h1>Tasting 👥</h1>
@@ -3733,23 +3743,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php else: ?>
         <?php
           $glasChampagner = champagnerHolen($daten, (string)($aktivesTasting['aktiv_cid'] ?? ''));
-          // Titelbild des Tastings – direkt oben beim Titel, dort auch änderbar
-          $tsAlleFotos = mitTitelbild(tastingFotos($aktivesTasting['id']), (string)($aktivesTasting['titelbild'] ?? ''));
+          $tsAlleFotos = $tsKopfFotos; // fürs Overlay (oben beim Titel berechnet)
         ?>
-        <div class="card" style="padding:0.9rem;">
-          <?php if ($tsAlleFotos !== []): ?>
-            <img src="<?= e(thumbUrl($tsAlleFotos[0])) ?>" alt="" style="width:100%; max-height:260px; object-fit:cover; border-radius:10px; display:block; margin-bottom:0.7rem;">
-          <?php else: ?>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Gib deinem Tasting ein Gesicht – z. B. ein Gruppenbild oder die Flaschenreihe:</p>
-          <?php endif; ?>
-          <form method="post" enctype="multipart/form-data">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="tasting_foto_upload">
-            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <?= fotoUploadFelder('ts-titel') ?>
-          </form>
-        </div>
-
         <div class="card" style="border-left:5px solid var(--accent);">
           <h2>🥂 Gerade im Glas</h2>
           <?php if ($glasChampagner !== null): ?>
@@ -3878,51 +3873,59 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         </div>
 
-        <?php $tsFotos = $tsAlleFotos; ?>
-        <div class="card">
-          <h2>📸 Fotos vom Tasting</h2>
-          <?php if ($tsFotos === []): ?>
-            <p style="color:var(--muted); font-style:italic;">Noch keine Fotos – z. B. ein Gruppenbild der Runde.</p>
-          <?php else: ?>
-            <?php $tsTitelbild = (string)($aktivesTasting['titelbild'] ?? ''); ?>
-            <div class="foto-galerie">
-              <?php foreach ($tsFotos as $i => $foto): ?>
-                <?php $istTitelbild = $tsTitelbild !== '' ? $foto === $tsTitelbild : $i === 0; ?>
-                <div class="foto">
-                  <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                    <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
-                  </a>
-                  <?php if ($istTitelbild): ?>
-                    <span class="titelbild-marke" title="Titelbild – erscheint oben und in der Tasting-Liste">⭐</span>
-                  <?php else: ?>
-                    <form method="post" class="titelbild-form">
-                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                      <input type="hidden" name="aktion" value="titelbild_setzen">
-                      <input type="hidden" name="typ" value="tasting">
-                      <input type="hidden" name="id" value="<?= e($aktivesTasting['id']) ?>">
-                      <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                      <button type="submit" title="Als Titelbild festlegen">☆</button>
-                    </form>
-                  <?php endif; ?>
-                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="tasting_foto_loeschen">
-                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                    <button type="submit" title="Foto löschen">&#10005;</button>
-                  </form>
-                </div>
-              <?php endforeach; ?>
+        <!-- Overlay: Bild & Fotos des Tastings – öffnet sich per Tipp auf Titel/Avatar -->
+        <div id="tasting-bild-box" hidden>
+          <div class="blatt">
+            <div class="blatt-kopf">
+              <b>📸 Bild &amp; Fotos vom Tasting</b>
+              <button type="button" aria-label="Schließen">&#10005;</button>
             </div>
-            <?php if (count($tsFotos) > 1): ?>
-              <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (oben und in der Tasting-Liste). Mit ☆ legst du ein anderes fest.</p>
+            <?php if ($tsAlleFotos !== []): ?>
+              <img src="<?= e(thumbUrl($tsAlleFotos[0])) ?>" alt="" style="width:100%; max-height:280px; object-fit:cover; border-radius:12px; display:block; margin-bottom:0.8rem;">
+            <?php else: ?>
+              <p class="anzahl" style="margin-bottom:0.8rem;">Noch kein Bild – gib deinem Tasting ein Gesicht, z. B. ein Gruppenbild oder die Flaschenreihe:</p>
             <?php endif; ?>
-          <?php endif; ?>
-          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="tasting_foto_upload">
-            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <?= fotoUploadFelder('ts-up') ?>
-          </form>
+            <form method="post" enctype="multipart/form-data" style="margin-bottom:1rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="tasting_foto_upload">
+              <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+              <?= fotoUploadFelder('ts-titel') ?>
+            </form>
+            <?php if ($tsAlleFotos !== []): ?>
+              <?php $tsTitelbild = (string)($aktivesTasting['titelbild'] ?? ''); ?>
+              <div class="foto-galerie">
+                <?php foreach ($tsAlleFotos as $i => $foto): ?>
+                  <?php $istTitelbild = $tsTitelbild !== '' ? $foto === $tsTitelbild : $i === 0; ?>
+                  <div class="foto">
+                    <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                      <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
+                    </a>
+                    <?php if ($istTitelbild): ?>
+                      <span class="titelbild-marke" title="Titelbild – erscheint beim Titel und in der Tasting-Liste">⭐</span>
+                    <?php else: ?>
+                      <form method="post" class="titelbild-form">
+                        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                        <input type="hidden" name="aktion" value="titelbild_setzen">
+                        <input type="hidden" name="typ" value="tasting">
+                        <input type="hidden" name="id" value="<?= e($aktivesTasting['id']) ?>">
+                        <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                        <button type="submit" title="Als Titelbild festlegen">☆</button>
+                      </form>
+                    <?php endif; ?>
+                    <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="tasting_foto_loeschen">
+                      <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                      <button type="submit" title="Foto löschen">&#10005;</button>
+                    </form>
+                  </div>
+                <?php endforeach; ?>
+              </div>
+              <?php if (count($tsAlleFotos) > 1): ?>
+                <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild. Mit ☆ legst du ein anderes fest.</p>
+              <?php endif; ?>
+            <?php endif; ?>
+          </div>
         </div>
 
         <?php
@@ -5968,6 +5971,19 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       });
     });
 
+    // Tasting-Bild: Tipp auf Titel oder Avatar öffnet das Foto-Overlay
+    (function () {
+      var box = document.getElementById('tasting-bild-box');
+      if (!box) { return; }
+      function zu() { box.hidden = true; document.body.style.overflow = ''; }
+      ['tasting-bild-knopf', 'tasting-titel-tipp'].forEach(function (id) {
+        var k = document.getElementById(id);
+        if (k) { k.addEventListener('click', function () { box.hidden = false; document.body.style.overflow = 'hidden'; }); }
+      });
+      box.querySelector('.blatt-kopf button').addEventListener('click', zu);
+      box.addEventListener('click', function (e) { if (e.target === box) { zu(); } });
+    })();
+
     // Rebsorten/Stile antippen statt tippen: Chips füllen das Textfeld
     document.querySelectorAll('.sorten-chips').forEach(function (box) {
       var ziel = document.getElementById(box.dataset.ziel);
@@ -6077,10 +6093,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         document.querySelectorAll('.filter-feld').forEach(function (f) { if (f.value.trim() !== '') { tippt = true; } });
         document.querySelectorAll('input[type="file"]').forEach(function (f) { if (f.files && f.files.length > 0) { tippt = true; } });
         if (tippt) { return; } // Suchfilter oder gewähltes Foto → nicht wegreloaden
-        var overlay = document.getElementById('overlay');
-        var gross = document.getElementById('grossansicht');
-        var anleitung = document.getElementById('anleitung-box');
-        if ((overlay && !overlay.hidden) || (gross && !gross.hidden) || (anleitung && !anleitung.hidden)) { return; }
+        var offenes = ['overlay', 'grossansicht', 'anleitung-box', 'tasting-bild-box'].some(function (id) {
+          var el = document.getElementById(id);
+          return el && !el.hidden;
+        });
+        if (offenes) { return; }
         var u = new URL(location.href);
         u.searchParams.set('_live', Date.now());
         fetch(u.toString(), { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
