@@ -1844,7 +1844,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $_SESSION['person'] = $person;
         $meinTastingId = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $detail, $meinTastingId): array {
+        // Umfeld der Bewertung: Standort vom Gerät → Ort und Wetter dazu ermitteln
+        $umfeldLat = is_numeric($_POST['geo_lat'] ?? null) ? round((float)$_POST['geo_lat'], 5) : null;
+        $umfeldLon = is_numeric($_POST['geo_lon'] ?? null) ? round((float)$_POST['geo_lon'], 5) : null;
+        $umfeldOrt = '';
+        $umfeldWetter = '';
+        if ($umfeldLat !== null && $umfeldLon !== null && abs($umfeldLat) <= 90 && abs($umfeldLon) <= 180
+            && (abs($umfeldLat) > 0.0001 || abs($umfeldLon) > 0.0001)) {
+            @set_time_limit(60);
+            $umfeldOrt = ortKurz($umfeldLat, $umfeldLon);
+            $umfeldWetter = wetterErmitteln($umfeldLat, $umfeldLon);
+        } else {
+            $umfeldLat = null;
+            $umfeldLon = null;
+        }
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -1856,6 +1870,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
             }
             // Frühere Bewertung derselben Person für diesen Champagner ersetzen
+            $vorherige = null;
+            foreach ($d['bewertungen'] as $b) {
+                if ($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person)) {
+                    $vorherige = $b;
+                    break;
+                }
+            }
             $d['bewertungen'] = array_values(array_filter(
                 $d['bewertungen'],
                 fn($b) => !($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person))
@@ -1868,6 +1889,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'flaschen'      => $flaschen,
                 'detail'        => $detail,
                 'tasting_id'    => $meinTastingId,
+                // Umfeld: Ort und Wetter zum Zeitpunkt der Bewertung
+                'ort'           => $umfeldOrt !== '' ? $umfeldOrt : (string)($vorherige['ort'] ?? ''),
+                'wetter'        => $umfeldWetter !== '' ? $umfeldWetter : (string)($vorherige['wetter'] ?? ''),
+                'lat'           => $umfeldLat ?? ($vorherige['lat'] ?? null),
+                'lon'           => $umfeldLon ?? ($vorherige['lon'] ?? null),
                 'zeit'          => time(),
             ];
             return $d;
@@ -2444,6 +2470,71 @@ function standortErmitteln(float $lat, float $lon): string
         return '';
     }
     return $name !== '' && !str_starts_with($anzeige, $name) ? $name . ', ' . $anzeige : $anzeige;
+}
+
+/** Kurzer Ortsname (Ort, Land) zu Koordinaten; '' wenn nicht ermittelbar. */
+function ortKurz(float $lat, float $lon): string
+{
+    if (!function_exists('curl_init')) {
+        return '';
+    }
+    $url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=12&accept-language=de'
+        . '&lat=' . rawurlencode((string)$lat) . '&lon=' . rawurlencode((string)$lon);
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 6,
+        CURLOPT_HTTPHEADER     => ['User-Agent: fruthzeug.de Champagne26 (tasting@fruthzeug.de)'],
+    ]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return '';
+    }
+    $a = json_decode($antwort, true)['address'] ?? [];
+    $ort = (string)($a['village'] ?? $a['town'] ?? $a['city'] ?? $a['municipality'] ?? $a['county'] ?? '');
+    $land = (string)($a['country'] ?? '');
+    if ($ort === '' && $land === '') {
+        return '';
+    }
+    return $ort . ($ort !== '' && $land !== '' ? ', ' : '') . $land;
+}
+
+/** Aktuelles Wetter am Standort (Open-Meteo, ohne Schlüssel); '' wenn nicht ermittelbar. */
+function wetterErmitteln(float $lat, float $lon): string
+{
+    if (!function_exists('curl_init')) {
+        return '';
+    }
+    $url = 'https://api.open-meteo.com/v1/forecast?latitude=' . rawurlencode((string)$lat)
+        . '&longitude=' . rawurlencode((string)$lon) . '&current=temperature_2m,weather_code';
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5]);
+    $antwort = curl_exec($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        return '';
+    }
+    $j = json_decode($antwort, true);
+    $temp = $j['current']['temperature_2m'] ?? null;
+    if ($temp === null) {
+        return '';
+    }
+    $c = (int)($j['current']['weather_code'] ?? -1);
+    $text = match (true) {
+        $c === 0            => '☀️ klar',
+        $c >= 1 && $c <= 2  => '🌤️ heiter',
+        $c === 3            => '☁️ bewölkt',
+        $c >= 45 && $c <= 48 => '🌫️ neblig',
+        $c >= 51 && $c <= 57 => '🌦️ Niesel',
+        $c >= 61 && $c <= 67 => '🌧️ Regen',
+        $c >= 71 && $c <= 77 => '🌨️ Schnee',
+        $c >= 80 && $c <= 82 => '🌦️ Schauer',
+        $c >= 85 && $c <= 86 => '🌨️ Schneeschauer',
+        $c >= 95            => '⛈️ Gewitter',
+        default             => '🌡️',
+    };
+    return $text . ', ' . round((float)$temp) . ' °C';
 }
 
 /** Gespeicherte Koordinaten eines Weinguts (aus dem Karten-Link im Kontakt) oder null. */
@@ -4089,6 +4180,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     'notiz'   => trim((string)($b['notiz'] ?? '')),
                     'weingut' => $wg !== null ? $wg['name'] : '',
                     'tasting' => $tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? '',
+                    'ort'     => trim((string)($b['ort'] ?? '')),
+                    'wetter'  => trim((string)($b['wetter'] ?? '')),
                 ];
             }
             $eintraege = array_values($eintraege);
@@ -4104,6 +4197,75 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <div class="card" style="border-left:5px solid var(--accent);">
             <p><b>👤 <?= e(trim((string)$_SESSION['person'])) ?></b> – du hast <b><?= count($eintraege) ?></b> Getränk(e) bewertet<?= $flaschenSumme > 0 ? ' und <b>' . $flaschenSumme . '</b> Flasche(n) mitgenommen' : '' ?>. 🥂</p>
           </div>
+
+          <?php if (count($eintraege) >= 2): ?>
+            <?php
+              // 🪞 Selbst-Profil: Wie verkoste ich eigentlich?
+              $meineSumme = 0.0;
+              $meineAnz = 0;
+              $delta = 0.0;
+              $deltaAnz = 0;
+              $sortenZaehler = [];
+              $wgZaehler = [];
+              $ortZaehler = [];
+              $top = null;
+              foreach ($eintraege as $ein) {
+                  if ($ein['sterne'] !== null) {
+                      $meineSumme += $ein['sterne'];
+                      $meineAnz++;
+                      if ($top === null || $ein['sterne'] > $top['sterne']) {
+                          $top = $ein;
+                      }
+                      // Vergleich: Wie bewerten die anderen dieselben Getränke?
+                      $andereSumme = 0.0;
+                      $andereAnz = 0;
+                      foreach (bewertungenFuer($daten, $ein['c']['id']) as $ab) {
+                          if (mb_strtolower(trim((string)$ab['person'])) === $ich) {
+                              continue;
+                          }
+                          foreach ($ab['werte'] as $w) { $andereSumme += (int)$w; $andereAnz++; }
+                      }
+                      if ($andereAnz > 0) {
+                          $delta += $ein['sterne'] - ($andereSumme / $andereAnz);
+                          $deltaAnz++;
+                      }
+                  }
+                  foreach (array_filter(array_map('trim', explode(',', (string)($ein['c']['rebsorte'] ?? '')))) as $sorte) {
+                      $sortenZaehler[$sorte] = ($sortenZaehler[$sorte] ?? 0) + 1;
+                  }
+                  if ($ein['weingut'] !== '') { $wgZaehler[$ein['weingut']] = ($wgZaehler[$ein['weingut']] ?? 0) + 1; }
+                  if ($ein['ort'] !== '') { $ortZaehler[$ein['ort']] = ($ortZaehler[$ein['ort']] ?? 0) + 1; }
+              }
+              arsort($sortenZaehler);
+              arsort($wgZaehler);
+              arsort($ortZaehler);
+              $meinSchnitt = $meineAnz > 0 ? $meineSumme / $meineAnz : null;
+              $deltaSchnitt = $deltaAnz > 0 ? $delta / $deltaAnz : null;
+            ?>
+            <div class="card">
+              <h2>🪞 So verkostest du</h2>
+              <?php if ($meinSchnitt !== null): ?>
+                <p>Deine Durchschnittswertung: <b><?= number_format($meinSchnitt, 1, ',', '') ?> ★</b>
+                <?php if ($deltaSchnitt !== null && abs($deltaSchnitt) >= 0.05): ?>
+                  – du bewertest <b><?= number_format(abs($deltaSchnitt), 1, ',', '') ?> Sterne <?= $deltaSchnitt < 0 ? 'strenger' : 'großzügiger' ?></b> als deine Mitverkoster. <?= $deltaSchnitt < 0 ? '🧐' : '😄' ?>
+                <?php elseif ($deltaSchnitt !== null): ?>
+                  – du liegst fast genau auf Linie deiner Mitverkoster. 🎯
+                <?php endif; ?></p>
+              <?php endif; ?>
+              <?php if ($sortenZaehler !== []): ?>
+                <p>Deine häufigste Traube / dein häufigster Stil: <b><?= e((string)array_key_first($sortenZaehler)) ?></b> (<?= reset($sortenZaehler) ?>×)</p>
+              <?php endif; ?>
+              <?php if ($wgZaehler !== []): ?>
+                <p>Dein meistbesuchtes Weingut: <b>🍇 <?= e((string)array_key_first($wgZaehler)) ?></b> (<?= reset($wgZaehler) ?>×)</p>
+              <?php endif; ?>
+              <?php if ($ortZaehler !== []): ?>
+                <p>Dein häufigster Verkostungsort: <b>📍 <?= e((string)array_key_first($ortZaehler)) ?></b></p>
+              <?php endif; ?>
+              <?php if ($top !== null): ?>
+                <p>Dein Favorit: <b><?= e($top['c']['name']) ?></b> mit <?= number_format((float)$top['sterne'], 1, ',', '') ?> ★</p>
+              <?php endif; ?>
+            </div>
+          <?php endif; ?>
           <?php if ($eintraege !== []): ?>
             <div class="sortier-leiste">Sortieren:
               <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=datum">Datum</a>
@@ -4123,6 +4285,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   if (trim((string)($c['rebsorte'] ?? '')) !== '') { $meta[] = (string)$c['rebsorte']; }
                   if ($ein['weingut'] !== '') { $meta[] = '🍇 ' . $ein['weingut']; }
                   if ($ein['tasting'] !== '') { $meta[] = '👥 ' . $ein['tasting']; }
+                  if ($ein['ort'] !== '') { $meta[] = '📍 ' . $ein['ort']; }
+                  if ($ein['wetter'] !== '') { $meta[] = $ein['wetter']; }
                 ?>
                 <div class="card flasche filterbar">
                   <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
@@ -4183,6 +4347,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
           <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
           <input type="hidden" name="detail" id="detail-feld" value="">
+          <input type="hidden" name="geo_lat" id="geo-lat" value="">
+          <input type="hidden" name="geo_lon" id="geo-lon" value="">
           <?php foreach ($KATEGORIEN as $schluessel => $info): ?>
             <input type="hidden" name="<?= e($schluessel) ?>" id="stern-<?= e($schluessel) ?>" value="">
           <?php endforeach; ?>
@@ -4307,12 +4473,24 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endforeach; ?>
         </div>
 
-        <?php $mitNotiz = array_values(array_filter($bewertungen, fn($b) => trim((string)($b['notiz'] ?? '')) !== '')); ?>
-        <?php if ($mitNotiz !== []): ?>
+        <?php
+          // Notizen und Bewertungs-Umfeld (wann, wo, bei welchem Wetter)
+          $mitUmfeld = array_values(array_filter($bewertungen, fn($b) =>
+              trim((string)($b['notiz'] ?? '')) !== '' || trim((string)($b['ort'] ?? '')) !== '' || trim((string)($b['wetter'] ?? '')) !== ''));
+        ?>
+        <?php if ($mitUmfeld !== []): ?>
           <div class="card">
-            <h2>Notizen</h2>
-            <?php foreach ($mitNotiz as $b): ?>
-              <p class="notiz"><b><?= e($b['person']) ?>:</b> <?= nl2br(e((string)$b['notiz'])) ?></p>
+            <h2>Notizen &amp; Umfeld</h2>
+            <?php foreach ($mitUmfeld as $b): ?>
+              <?php
+                $umfeld = [date('d.m.Y, H:i', (int)($b['zeit'] ?? 0)) . ' Uhr'];
+                if (trim((string)($b['ort'] ?? '')) !== '') { $umfeld[] = '📍 ' . (string)$b['ort']; }
+                if (trim((string)($b['wetter'] ?? '')) !== '') { $umfeld[] = (string)$b['wetter']; }
+              ?>
+              <p class="notiz" style="margin-bottom:0.7rem;">
+                <b><?= e($b['person']) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
+                <?php if (trim((string)($b['notiz'] ?? '')) !== ''): ?><br><?= nl2br(e((string)$b['notiz'])) ?><?php endif; ?>
+              </p>
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
@@ -5457,6 +5635,19 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         var s = aktuelleSterne();
         KAT.forEach(function (k) { document.getElementById('stern-' + k).value = s[k]; });
       });
+
+      // Standort des Geräts leise erfassen – Ort und Wetter kommen in die
+      // Bewertung (das Gerät fragt einmal nach der Erlaubnis)
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(function (pos) {
+          var la = document.getElementById('geo-lat');
+          var lo = document.getElementById('geo-lon');
+          if (la && lo) {
+            la.value = pos.coords.latitude.toFixed(5);
+            lo.value = pos.coords.longitude.toFixed(5);
+          }
+        }, function () { /* abgelehnt oder nicht verfügbar – kein Problem */ }, { timeout: 8000, maximumAge: 600000 });
+      }
 
       zeige(1);
     })();
