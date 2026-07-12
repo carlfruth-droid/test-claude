@@ -676,7 +676,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if ($token === '') {
             if (teilnehmerLimitErreicht($ziel)) {
-                zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Dieses Tasting ist voll: ohne Account sind maximal 2 Teilnehmer möglich. Der Gastgeber kann einen kostenfreien Account anfragen, dann dürfen mehr mitmachen.'));
+                zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Dieses Tasting ist voll (2 Teilnehmer). Für große Runden kann der Administrator den Gastgeber freischalten.'));
             }
             $token = bin2hex(random_bytes(8));
             $tid = $ziel['id'];
@@ -1626,9 +1626,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         });
         tastingWaehlen($neueId);
         if ($istGast) {
-            zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt! Ohne Account gilt: du + 1 eingeladene Person. Für größere Runden: kostenfreien Account anfragen.'));
+            zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt! Es gilt: du + 1 eingeladene Person. Unbegrenzte Runden schaltet der Administrator frei.'));
         }
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
+    }
+
+    if ($aktion === 'benutzer_registrieren') {
+        // Selbst-Registrierung: sofort nutzbar, Tastings bis 2 Personen –
+        // größere Runden schaltet der Administrator frei
+        $vorname = mb_substr(trim((string)($_POST['vorname'] ?? '')), 0, 40);
+        $nachname = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
+        $pw = (string)($_POST['passwort'] ?? '');
+        if ($vorname === '' || $nachname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
+        }
+        if (mb_strlen($pw) < 6) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+        }
+        $neuerBenutzer = [
+            'id' => bin2hex(random_bytes(4)),
+            'vorname' => $vorname,
+            'name' => $nachname,
+            'email' => $email,
+            'pw_hash' => password_hash($pw, PASSWORD_DEFAULT),
+            'admin' => false,
+            'darf_tasting' => false, // = noch keine großen Tastings (unbegrenzt Personen)
+            'token' => bin2hex(random_bytes(16)),
+            'zeit' => time(),
+        ];
+        datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
+            foreach ($d['benutzer'] as $b) {
+                if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
+                    zurueck('?tasting=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
+                }
+            }
+            $d['benutzer'][] = $neuerBenutzer;
+            return $d;
+        });
+        setcookie('benutzer', $neuerBenutzer['token'], [
+            'expires' => time() + 60 * 60 * 24 * 3650,
+            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = $vorname;
+        zurueck('?tasting=1&ok=' . rawurlencode('Willkommen, ' . $vorname . '! Dein Konto ist fertig – du kannst sofort Tastings anlegen (du + 1 Person). Für größere Runden schaltet dich der Administrator frei.'));
     }
 
     if ($aktion === 'konto_anfragen') {
@@ -1831,7 +1873,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         foreach (datenLaden()['tastings'] as $t) {
             if ($t['id'] === $tid && teilnehmerLimitErreicht($t)) {
-                zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Ohne Account sind maximal 2 Teilnehmer möglich (du + 1 Gast). Für Tastings mit mehreren Personen: kostenfreien Account anfragen (Tasting-Übersicht unten).'));
+                zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Dieses Tasting ist auf 2 Teilnehmer begrenzt (du + 1 Gast). Für große Runden kann der Administrator den Ersteller freischalten.'));
             }
         }
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -3889,10 +3931,52 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               $trip[] = ['zeit' => is_file($pfad) ? (int)filemtime($pfad) : 0, 'typ' => 'foto', 'datei' => $tsF];
           }
           usort($trip, fn($x, $y) => $x['zeit'] <=> $y['zeit']);
+
+          // 🗺️ Bewegungsverlauf: alle bekannten Koordinaten in Trip-Reihenfolge
+          // (Weingut-Standorte, Bewertungs-Orte, Foto-GPS) → Google-Maps-Route
+          $route = [];
+          foreach ($trip as $st) {
+              $pt = null;
+              if ($st['typ'] === 'weingut') {
+                  $pt = weingutKoordinaten($st['w']);
+              } elseif ($st['typ'] === 'getraenk') {
+                  foreach ($st['bew'] as $rb) {
+                      if (is_numeric($rb['lat'] ?? null) && is_numeric($rb['lon'] ?? null)) {
+                          $pt = [(float)$rb['lat'], (float)$rb['lon']];
+                          break;
+                      }
+                  }
+              } else {
+                  $pt = gpsAusFoto(BILDER_DIR . '/' . $st['datei']);
+              }
+              if ($pt === null) {
+                  continue;
+              }
+              $letzt = $route === [] ? null : $route[count($route) - 1];
+              if ($letzt !== null && distanzMeter($letzt[0], $letzt[1], $pt[0], $pt[1]) < 100) {
+                  continue; // praktisch derselbe Ort → keine doppelte Station
+              }
+              $route[] = $pt;
+          }
+          if (count($route) > 23) {
+              // Google Maps verkraftet nur begrenzt Wegpunkte → gleichmäßig ausdünnen
+              $schritt = count($route) / 23;
+              $ausgeduennt = [];
+              for ($ri = 0.0; $ri < count($route); $ri += $schritt) {
+                  $ausgeduennt[] = $route[(int)$ri];
+              }
+              $route = $ausgeduennt;
+          }
+          $routeUrl = count($route) >= 2
+              ? 'https://www.google.com/maps/dir/' . implode('/', array_map(fn($pt) => $pt[0] . ',' . $pt[1], $route))
+              : '';
         ?>
         <?php if ($trip !== []): ?>
           <div class="card">
             <h2>📖 Der Trip – euer Verlauf</h2>
+            <?php if ($routeUrl !== ''): ?>
+              <a class="knopf zweit" target="_blank" rel="noopener" href="<?= e($routeUrl) ?>" style="margin:0.2rem 0 0.5rem; display:inline-block;">🗺️ Route in Google Maps öffnen (<?= count($route) ?> Stationen)</a>
+            <?php endif; ?>
             <div class="trip">
               <?php $letzterTag = ''; ?>
               <?php foreach ($trip as $st): ?>
@@ -4260,7 +4344,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <div class="card" style="margin-top:1rem;">
           <h2>Neues Tasting anlegen</h2>
           <?php if (!darfTastingsAnlegen($benutzerAktiv)): ?>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Eigene Tastings kannst du beliebig viele anlegen – ohne Account aber jeweils nur du + 1 eingeladene Person. Für größere Runden gibt es unten den kostenfreien Account.</p>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Du kannst beliebig viele eigene Tastings anlegen – jeweils du + 1 eingeladene Person. Unbegrenzte Runden schaltet der Administrator auf Wunsch frei.</p>
           <?php endif; ?>
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -4273,26 +4357,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php if ($benutzerAktiv === null): ?>
           <div class="card" style="margin-top:1rem;">
             <h2>👤 Benutzerkonto</h2>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Mit Account: beliebig viele Tastings mit beliebig vielen Personen. Kostenfrei. Die Anmeldung läuft nicht ab.</p>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Kostenfrei, Anmeldung läuft nie ab. Registrierte legen sofort Tastings an (du + 1 Person); größere Runden schaltet der Administrator frei.</p>
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="benutzer_login">
               <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
               <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
-              <button class="knopf zweit" type="submit">Als Benutzer anmelden</button>
+              <button class="knopf zweit" type="submit">Anmelden</button>
             </form>
           </div>
           <details class="card">
-            <summary>✍️ Kostenfreien Account anfragen</summary>
-            <p class="anzahl" style="margin:0.5rem 0 0.7rem;">Für Tastings mit mehreren Personen brauchst du einen Account. Fülle deine Stammdaten vollständig aus – der Administrator schaltet dich frei, danach meldest du dich einfach mit E-Mail und Passwort an. Kostet nichts.</p>
+            <summary>✍️ Neu hier? Jetzt registrieren (kostenfrei)</summary>
+            <p class="anzahl" style="margin:0.5rem 0 0.7rem;">Stammdaten vollständig ausfüllen – dein Konto ist sofort nutzbar, ganz ohne Wartezeit.</p>
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="konto_anfragen">
+              <input type="hidden" name="aktion" value="benutzer_registrieren">
               <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
               <input type="text" name="name" placeholder="Nachname" maxlength="40" required>
               <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
-              <input type="password" name="passwort" placeholder="Wunsch-Passwort (mind. 6 Zeichen)" minlength="6" required>
-              <button class="knopf" type="submit">Account anfragen</button>
+              <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
+              <button class="knopf" type="submit">Registrieren &amp; loslegen</button>
             </form>
           </details>
         <?php else: ?>
@@ -4364,7 +4448,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <span class="anzahl"><?= e((string)($b['email'] ?? '')) ?></span></p>
               <p style="margin:0.3rem 0;">
                 <?php if (!empty($b['admin'])): ?><span class="bewerter-chip">🛡️ Admin</span><?php endif; ?>
-                <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅ darf Tastings anlegen</span><?php else: ?><span class="bewerter-chip offen">⏳ darf keine Tastings anlegen</span><?php endif; ?>
+                <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅ große Tastings (unbegrenzt Personen)</span><?php else: ?><span class="bewerter-chip offen">⏳ Tastings bis 2 Personen</span><?php endif; ?>
               </p>
               <div class="knopfreihe" style="align-items:center;">
                 <form method="post" style="display:inline;">
@@ -4372,7 +4456,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   <input type="hidden" name="aktion" value="benutzer_rechte">
                   <input type="hidden" name="id" value="<?= e($b['id']) ?>">
                   <input type="hidden" name="feld" value="darf_tasting">
-                  <button class="knopf klein zweit" type="submit"><?= !empty($b['darf_tasting']) ? 'Tasting-Recht entziehen' : 'Tastings erlauben' ?></button>
+                  <button class="knopf klein zweit" type="submit"><?= !empty($b['darf_tasting']) ? 'Auf 2 Personen begrenzen' : 'Große Tastings erlauben' ?></button>
                 </form>
                 <?php if ($b['id'] !== $benutzerAktiv['id']): ?>
                   <form method="post" style="display:inline;">
