@@ -401,6 +401,12 @@ function darfTastingsAnlegen(?array $b): bool
     return $b !== null && (!empty($b['admin']) || !empty($b['darf_tasting']));
 }
 
+/** Gast-Tasting = ohne Account angelegt: maximal Gastgeber + 1 eingeladene Person. */
+function teilnehmerLimitErreicht(array $t): bool
+{
+    return !empty($t['gast']) && count($t['teilnehmer'] ?? []) >= 2;
+}
+
 // Benutzerkonto-Cookie: dauerhaft angemeldet bleiben (läuft nicht ab)
 if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['benutzer'])) {
     $kontoTreffer = benutzerZuToken(datenLaden(), (string)$_COOKIE['benutzer']);
@@ -493,13 +499,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => []]
-        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -615,6 +621,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         if ($token === '') {
+            if (teilnehmerLimitErreicht($ziel)) {
+                zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Dieses Tasting ist voll: ohne Account sind maximal 2 Teilnehmer möglich. Der Gastgeber kann einen kostenfreien Account anfragen, dann dürfen mehr mitmachen.'));
+            }
             $token = bin2hex(random_bytes(8));
             $tid = $ziel['id'];
             datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
@@ -1521,8 +1530,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'tasting_anlegen') {
         $konto = aktuellerBenutzer(datenLaden());
-        if (!darfTastingsAnlegen($konto)) {
-            zurueck('?tasting=1&fehler=' . rawurlencode('Tastings anlegen dürfen nur freigeschaltete Benutzer – bitte unten mit deinem Benutzerkonto anmelden.'));
+        $mitKonto = darfTastingsAnlegen($konto);
+        if (!$mitKonto) {
+            // Ohne Account: genau EIN eigenes Tasting (am Gerät gemerkt)
+            $gastTid = (string)($_COOKIE['gast_tasting'] ?? '');
+            if (preg_match('/^[a-f0-9]{8}$/', $gastTid)) {
+                foreach (datenLaden()['tastings'] as $t) {
+                    if ($t['id'] === $gastTid) {
+                        zurueck('?tasting=' . rawurlencode($gastTid) . '&fehler=' . rawurlencode('Ohne Account kannst du nur ein eigenes Tasting haben – hier ist deins. Für mehr: kostenfreien Account anfragen (Tasting-Übersicht unten).'));
+                    }
+                }
+            }
         }
         $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
         if ($titel === '') {
@@ -1531,15 +1549,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $neueId = bin2hex(random_bytes(4));
         $beitrittToken = bin2hex(random_bytes(8));
         $besitzerId = (string)($konto['id'] ?? '');
-        datenAendern(function (array $d) use ($titel, $neueId, $beitrittToken, $besitzerId): array {
-            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'besitzer' => $besitzerId, 'zeit' => time()];
+        $istGast = !$mitKonto;
+        datenAendern(function (array $d) use ($titel, $neueId, $beitrittToken, $besitzerId, $istGast): array {
+            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'besitzer' => $besitzerId, 'gast' => $istGast, 'zeit' => time()];
             return $d;
         });
         tastingWaehlen($neueId);
+        if ($istGast) {
+            setcookie('gast_tasting', $neueId, [
+                'expires' => time() + 60 * 60 * 24 * 3650,
+                'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+            ]);
+            $_COOKIE['gast_tasting'] = $neueId;
+            zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt! Ohne Account gilt: du + 1 eingeladene Person. Mehr Personen? Kostenfreien Account anfragen.'));
+        }
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
     }
 
-    if (in_array($aktion, ['benutzer_anlegen', 'benutzer_rechte', 'benutzer_loeschen', 'benutzer_passwort'], true)) {
+    if ($aktion === 'konto_anfragen') {
+        // Kostenfreien Account anfragen – Stammdaten müssen vollständig sein
+        $vorname = mb_substr(trim((string)($_POST['vorname'] ?? '')), 0, 40);
+        $nachname = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
+        $pw = (string)($_POST['passwort'] ?? '');
+        if ($vorname === '' || $nachname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
+        }
+        if (mb_strlen($pw) < 6) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Das Wunsch-Passwort braucht mindestens 6 Zeichen.'));
+        }
+        $anfrage = [
+            'id' => bin2hex(random_bytes(4)),
+            'vorname' => $vorname,
+            'name' => $nachname,
+            'email' => $email,
+            'pw_hash' => password_hash($pw, PASSWORD_DEFAULT),
+            'zeit' => time(),
+        ];
+        datenAendern(function (array $d) use ($anfrage, $email): array {
+            foreach ($d['benutzer'] as $b) {
+                if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
+                    zurueck('?tasting=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Benutzerkonto – einfach unten anmelden.'));
+                }
+            }
+            foreach ($d['kontoanfragen'] as $a) {
+                if (mb_strtolower((string)($a['email'] ?? '')) === $email) {
+                    zurueck('?tasting=1&fehler=' . rawurlencode('Für diese E-Mail liegt schon eine Anfrage vor – der Administrator schaltet dich frei.'));
+                }
+            }
+            $d['kontoanfragen'][] = $anfrage;
+            return $d;
+        });
+        zurueck('?tasting=1&ok=' . rawurlencode('Anfrage gesendet! Der Administrator schaltet dich frei – danach meldest du dich einfach mit E-Mail und Passwort an. Der Account ist kostenfrei.'));
+    }
+
+    if (in_array($aktion, ['benutzer_anlegen', 'benutzer_rechte', 'benutzer_loeschen', 'benutzer_passwort', 'konto_anfrage_entscheiden'], true)) {
         // Benutzerverwaltung: nur für Administratoren
         $admin = aktuellerBenutzer(datenLaden());
         if ($admin === null || empty($admin['admin'])) {
@@ -1632,6 +1696,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             });
             zurueck('?verwaltung=1&ok=' . rawurlencode('Benutzer gelöscht.'));
         }
+
+        if ($aktion === 'konto_anfrage_entscheiden') {
+            $aid = (string)($_POST['id'] ?? '');
+            $annehmen = (string)($_POST['entscheidung'] ?? '') === 'annehmen';
+            $ergebnis = '';
+            datenAendern(function (array $d) use ($aid, $annehmen, &$ergebnis): array {
+                foreach ($d['kontoanfragen'] as $i => $a) {
+                    if ($a['id'] === $aid) {
+                        if ($annehmen) {
+                            $d['benutzer'][] = [
+                                'id' => bin2hex(random_bytes(4)),
+                                'vorname' => (string)$a['vorname'],
+                                'name' => (string)$a['name'],
+                                'email' => (string)$a['email'],
+                                'pw_hash' => (string)$a['pw_hash'],
+                                'admin' => false,
+                                'darf_tasting' => true,
+                                'token' => bin2hex(random_bytes(16)),
+                                'zeit' => time(),
+                            ];
+                            $ergebnis = $a['vorname'] . ' ist freigeschaltet und kann sich jetzt anmelden – Tastings anlegen inklusive.';
+                        } else {
+                            $ergebnis = 'Anfrage von ' . $a['vorname'] . ' abgelehnt.';
+                        }
+                        unset($d['kontoanfragen'][$i]);
+                        $d['kontoanfragen'] = array_values($d['kontoanfragen']);
+                        break;
+                    }
+                }
+                return $d;
+            });
+            zurueck('?verwaltung=1&' . ($ergebnis !== '' ? 'ok=' . rawurlencode($ergebnis) : 'fehler=' . rawurlencode('Anfrage nicht gefunden.')));
+        }
     }
 
     if ($aktion === 'tasting_titel') {
@@ -1666,6 +1763,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
         if ($name === '') {
             zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Bitte einen Namen angeben.'));
+        }
+        foreach (datenLaden()['tastings'] as $t) {
+            if ($t['id'] === $tid && teilnehmerLimitErreicht($t)) {
+                zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Ohne Account sind maximal 2 Teilnehmer möglich (du + 1 Gast). Für Tastings mit mehreren Personen: kostenfreien Account anfragen (Tasting-Übersicht unten).'));
+            }
         }
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Die E-Mail-Adresse sieht nicht gültig aus.'));
@@ -3912,6 +4014,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </a>
           <?php endforeach; ?>
         <?php endforeach; ?>
+        <?php
+          // Gast-Tasting: ohne Account genau ein eigenes Tasting (am Gerät gemerkt)
+          $gastTid = (string)($_COOKIE['gast_tasting'] ?? '');
+          $gastTasting = null;
+          foreach ($daten['tastings'] as $t) {
+              if ($t['id'] === $gastTid) {
+                  $gastTasting = $t;
+                  break;
+              }
+          }
+        ?>
         <?php if (darfTastingsAnlegen($benutzerAktiv)): ?>
           <div class="card" style="margin-top:1rem;">
             <h2>Neues Tasting anlegen</h2>
@@ -3922,17 +4035,29 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <button class="knopf" type="submit">Anlegen</button>
             </form>
           </div>
-        <?php elseif ($benutzerAktiv !== null): ?>
+        <?php elseif ($gastTasting !== null): ?>
+          <div class="card" style="margin-top:1rem;">
+            <h2>Dein eigenes Tasting</h2>
+            <p style="margin-bottom:0.6rem;">Du hast bereits eines: <a href="?tasting=<?= e(rawurlencode($gastTasting['id'])) ?>"><b><?= e($gastTasting['titel']) ?></b></a> (du + 1 Gast).</p>
+            <p class="anzahl">Mehrere Tastings oder mehr Personen? Dafür gibt es den kostenfreien Account – unten anfragen.</p>
+          </div>
+        <?php else: ?>
           <div class="card" style="margin-top:1rem;">
             <h2>Neues Tasting anlegen</h2>
-            <p style="color:var(--muted); font-style:italic;">Dein Konto darf noch keine Tastings anlegen – der Administrator kann dich in der Benutzerverwaltung freischalten.</p>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Ohne Account: ein eigenes Tasting, du + 1 eingeladene Person. Für mehr gibt es unten den kostenfreien Account.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="tasting_anlegen">
+              <input type="text" name="titel" placeholder="Titel, z. B. Abend mit Lisa" maxlength="60" required>
+              <button class="knopf" type="submit">Anlegen</button>
+            </form>
           </div>
         <?php endif; ?>
 
         <?php if ($benutzerAktiv === null): ?>
           <div class="card" style="margin-top:1rem;">
             <h2>👤 Benutzerkonto</h2>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Tastings anlegen und verwalten können nur angemeldete Benutzer. Die Anmeldung läuft nicht ab.</p>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Mit Account: beliebig viele Tastings mit beliebig vielen Personen. Kostenfrei. Die Anmeldung läuft nicht ab.</p>
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="benutzer_login">
@@ -3941,6 +4066,19 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <button class="knopf zweit" type="submit">Als Benutzer anmelden</button>
             </form>
           </div>
+          <details class="card">
+            <summary>✍️ Kostenfreien Account anfragen</summary>
+            <p class="anzahl" style="margin:0.5rem 0 0.7rem;">Für Tastings mit mehreren Personen brauchst du einen Account. Fülle deine Stammdaten vollständig aus – der Administrator schaltet dich frei, danach meldest du dich einfach mit E-Mail und Passwort an. Kostet nichts.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="konto_anfragen">
+              <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
+              <input type="text" name="name" placeholder="Nachname" maxlength="40" required>
+              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
+              <input type="password" name="passwort" placeholder="Wunsch-Passwort (mind. 6 Zeichen)" minlength="6" required>
+              <button class="knopf" type="submit">Account anfragen</button>
+            </form>
+          </details>
         <?php else: ?>
           <div class="card" style="margin-top:1rem;">
             <h2>👤 Benutzerkonto</h2>
@@ -3973,6 +4111,34 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <a class="knopf" href="?tasting=1">Zur Tasting-Seite</a>
         </div>
       <?php else: ?>
+
+        <?php if (($daten['kontoanfragen'] ?? []) !== []): ?>
+          <div class="card" style="border-left:5px solid var(--accent);">
+            <h2>📨 Account-Anfragen (<?= count($daten['kontoanfragen']) ?>)</h2>
+            <?php foreach ($daten['kontoanfragen'] as $a): ?>
+              <div style="border-bottom:1px solid var(--border); padding:0.6rem 0; display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+                <span style="flex:1; min-width:0;">
+                  <b><?= e(trim((string)$a['vorname'] . ' ' . (string)$a['name'])) ?></b><br>
+                  <span class="anzahl"><?= e((string)$a['email']) ?> · angefragt am <?= date('d.m.Y', (int)($a['zeit'] ?? 0)) ?></span>
+                </span>
+                <form method="post" style="display:inline;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="konto_anfrage_entscheiden">
+                  <input type="hidden" name="id" value="<?= e($a['id']) ?>">
+                  <input type="hidden" name="entscheidung" value="annehmen">
+                  <button class="knopf klein" type="submit">✓ Freischalten</button>
+                </form>
+                <form method="post" style="display:inline;" onsubmit="return confirm('Anfrage von <?= e((string)$a['vorname']) ?> wirklich ablehnen?');">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="konto_anfrage_entscheiden">
+                  <input type="hidden" name="id" value="<?= e($a['id']) ?>">
+                  <input type="hidden" name="entscheidung" value="ablehnen">
+                  <button class="loeschen" type="submit">ablehnen</button>
+                </form>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
 
         <details class="card" open>
           <summary>🛡️ Benutzer (<?= count($daten['benutzer']) ?>)</summary>
