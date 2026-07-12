@@ -911,13 +911,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $typ = (string)($_POST['typ'] ?? '');
         $id = (string)($_POST['id'] ?? '');
         $datei = basename((string)($_POST['datei'] ?? ''));
-        $weiter = $typ === 'weingut' ? '?weingut=' . rawurlencode($id) : '?ergebnis=' . rawurlencode($id);
-        $vorhandene = $typ === 'weingut' ? weingutFotos($id) : fotosFuer($id);
+        [$weiter, $vorhandene, $liste] = match ($typ) {
+            'weingut' => ['?weingut=' . rawurlencode($id), weingutFotos($id), 'weingueter'],
+            'tasting' => ['?tasting=' . rawurlencode($id), tastingFotos($id), 'tastings'],
+            default   => ['?ergebnis=' . rawurlencode($id), fotosFuer($id), 'champagner'],
+        };
         if (!in_array($datei, $vorhandene, true)) {
             zurueck($weiter . '&fehler=' . rawurlencode('Dieses Foto wurde nicht gefunden.'));
         }
-        datenAendern(function (array $d) use ($typ, $id, $datei): array {
-            $liste = $typ === 'weingut' ? 'weingueter' : 'champagner';
+        datenAendern(function (array $d) use ($liste, $id, $datei): array {
             foreach ($d[$liste] as &$eintrag) {
                 if ($eintrag['id'] === $id) {
                     $eintrag['titelbild'] = $datei;
@@ -3731,7 +3733,23 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php else: ?>
         <?php
           $glasChampagner = champagnerHolen($daten, (string)($aktivesTasting['aktiv_cid'] ?? ''));
+          // Titelbild des Tastings – direkt oben beim Titel, dort auch änderbar
+          $tsAlleFotos = mitTitelbild(tastingFotos($aktivesTasting['id']), (string)($aktivesTasting['titelbild'] ?? ''));
         ?>
+        <div class="card" style="padding:0.9rem;">
+          <?php if ($tsAlleFotos !== []): ?>
+            <img src="<?= e(thumbUrl($tsAlleFotos[0])) ?>" alt="" style="width:100%; max-height:260px; object-fit:cover; border-radius:10px; display:block; margin-bottom:0.7rem;">
+          <?php else: ?>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Gib deinem Tasting ein Gesicht – z. B. ein Gruppenbild oder die Flaschenreihe:</p>
+          <?php endif; ?>
+          <form method="post" enctype="multipart/form-data">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_foto_upload">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <?= fotoUploadFelder('ts-titel') ?>
+          </form>
+        </div>
+
         <div class="card" style="border-left:5px solid var(--accent);">
           <h2>🥂 Gerade im Glas</h2>
           <?php if ($glasChampagner !== null): ?>
@@ -3860,18 +3878,32 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         </div>
 
-        <?php $tsFotos = tastingFotos($aktivesTasting['id']); ?>
+        <?php $tsFotos = $tsAlleFotos; ?>
         <div class="card">
           <h2>📸 Fotos vom Tasting</h2>
           <?php if ($tsFotos === []): ?>
             <p style="color:var(--muted); font-style:italic;">Noch keine Fotos – z. B. ein Gruppenbild der Runde.</p>
           <?php else: ?>
+            <?php $tsTitelbild = (string)($aktivesTasting['titelbild'] ?? ''); ?>
             <div class="foto-galerie">
-              <?php foreach ($tsFotos as $foto): ?>
+              <?php foreach ($tsFotos as $i => $foto): ?>
+                <?php $istTitelbild = $tsTitelbild !== '' ? $foto === $tsTitelbild : $i === 0; ?>
                 <div class="foto">
                   <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
                     <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
                   </a>
+                  <?php if ($istTitelbild): ?>
+                    <span class="titelbild-marke" title="Titelbild – erscheint oben und in der Tasting-Liste">⭐</span>
+                  <?php else: ?>
+                    <form method="post" class="titelbild-form">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="titelbild_setzen">
+                      <input type="hidden" name="typ" value="tasting">
+                      <input type="hidden" name="id" value="<?= e($aktivesTasting['id']) ?>">
+                      <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                      <button type="submit" title="Als Titelbild festlegen">☆</button>
+                    </form>
+                  <?php endif; ?>
                   <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
                     <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                     <input type="hidden" name="aktion" value="tasting_foto_loeschen">
@@ -3881,6 +3913,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 </div>
               <?php endforeach; ?>
             </div>
+            <?php if (count($tsFotos) > 1): ?>
+              <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (oben und in der Tasting-Liste). Mit ☆ legst du ein anderes fest.</p>
+            <?php endif; ?>
           <?php endif; ?>
           <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -4040,7 +4075,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <p class="untertitel" style="margin:0.8rem 0 0.5rem;"><?= $gruppenTitel ?></p>
           <?php endif; ?>
           <?php foreach ($gruppe as $t): ?>
-            <?php $tFotos = tastingFotos($t['id']); ?>
+            <?php $tFotos = mitTitelbild(tastingFotos($t['id']), (string)($t['titelbild'] ?? '')); ?>
             <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>"<?= $t['id'] === $aktuellesTid ? ' style="border-left:5px solid var(--accent);"' : '' ?>>
               <?php if ($tFotos !== []): ?>
                 <img class="thumb" src="<?= e(thumbUrl($tFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
