@@ -2202,16 +2202,27 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       border: none; border-radius: 999px; padding: 0.4rem 0.9rem;
       font-size: 0.9rem; font-weight: 600; cursor: pointer; font-family: inherit;
     }
-    #wz-info { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
-    #wz-info[hidden] { display: none; }
-    #wz-info .blatt {
+    #anleitung-box { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
+    #anleitung-box[hidden] { display: none; }
+    #anleitung-box .blatt {
       background: var(--bg); width: 100%; max-width: 46rem; max-height: 90dvh;
       overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 18px 18px 0 0; padding: 1rem 1.2rem 3rem;
     }
-    #wz-info .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
-    #wz-info .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
+    #anleitung-box .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
+    #anleitung-box .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
     .anleitung h3 { margin: 1.1rem 0 0.2rem; font-size: 1.1rem; color: var(--accent); }
     .anleitung p { margin-bottom: 0.4rem; }
+    .anleitung-chips { display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .anleitung-chips button {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      border-radius: 999px; padding: 0.4rem 0.85rem; font-size: 0.9rem; cursor: pointer; font-family: inherit;
+    }
+    .anleitung-chips button.gewaehlt { background: var(--accent-hell); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+    #info-knopf {
+      flex-shrink: 0; background: var(--accent-hell); color: var(--accent);
+      border: none; border-radius: 999px; width: 34px; height: 34px;
+      font-size: 1.05rem; cursor: pointer; font-family: inherit;
+    }
     .wz-fortschritt { height: 6px; background: var(--border); border-radius: 4px; margin-bottom: 1.2rem; overflow: hidden; }
     #wz-balken { display: block; height: 100%; width: 20%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
     .wz-schritt h2 { font-size: 1.35rem; margin-bottom: 0.3rem; }
@@ -2394,6 +2405,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 <body data-bereich="<?= e($bereich) ?>"<?= in_array($ansicht, ['liste', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
   <header class="site-header">
     <a class="brand" href="/"><strong>fruthzeug</strong>.de</a>
+    <button type="button" id="info-knopf" aria-label="Anleitung: So wird verkostet" title="So wird verkostet">ℹ️</button>
     <input type="checkbox" id="nav-toggle" aria-hidden="true">
     <label for="nav-toggle" class="burger" aria-label="Menü öffnen">
       <span></span><span></span><span></span>
@@ -2607,6 +2619,29 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <button class="knopf zweit" type="submit">Ins Glas stellen</button>
           </form>
         </div>
+
+        <?php
+          // Direkter Zugriff auf alles, was zu diesem Tasting gehört
+          $tastingWeine = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
+          $tastingWeingutIds = array_unique(array_filter(array_map(fn($c) => trim((string)($c['weingut_id'] ?? '')), $tastingWeine)));
+        ?>
+        <p class="untertitel" style="margin-top:1.4rem;">Alles zu diesem Tasting:</p>
+        <a class="kachel" href="?liste=1&amp;tid=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
+          <span class="k-icon">🍾</span>
+          <span class="k-text"><b>Unsere Weine (<?= count($tastingWeine) ?>)</b><small>Alle verkosteten Flaschen mit Bewertungen und Fotos</small></span>
+        </a>
+        <a class="kachel" href="?weingueter=1">
+          <span class="k-icon">🍇</span>
+          <span class="k-text"><b>Weingüter<?= $tastingWeingutIds !== [] ? ' (' . count($tastingWeingutIds) . ' besucht)' : '' ?></b><small>Kontakte, Notizen und Bilder der Weingüter</small></span>
+        </a>
+        <a class="kachel" href="?fotos=1">
+          <span class="k-icon">📸</span>
+          <span class="k-text"><b>Fotoalbum</b><small>Alle Bilder – Flaschen, Weingüter und Gruppenfotos</small></span>
+        </a>
+        <a class="kachel anleitung-oeffnen" href="#">
+          <span class="k-icon">ℹ️</span>
+          <span class="k-text"><b>So wird verkostet</b><small>Anleitung für Champagner, Rot- und Weißwein, Bier</small></span>
+        </a>
 
         <?php $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? ''); ?>
         <div class="card" style="text-align:center;">
@@ -2971,32 +3006,6 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
           <p class="abmelden" style="text-align:center;"><a href="#" id="wz-ueberspringen">Diesen Schritt überspringen</a></p>
         </form>
-
-        <div id="wz-info" hidden>
-          <div class="blatt">
-            <div class="blatt-kopf">
-              <b>🥂 Champagner richtig verkosten</b>
-              <button type="button" aria-label="Schließen">&#10005;</button>
-            </div>
-            <div class="anleitung">
-              <p>Nimm dir kurz Zeit und geh in Ruhe durch die vier Sinne – die App führt dich Schritt für Schritt.</p>
-
-              <h3>👁 Das Auge</h3>
-              <p>Halte das Glas gegen einen hellen Hintergrund. <b>Farbe:</b> von zartem Zitronengelb (jung) über Gold (gereift) bis Kupfer; Rosé von Lachs bis Himbeer. <b>Perlage</b> sind die Bläschen – je feiner und beständiger, desto edler das Mundgefühl. (Die reine Bläschen-<i>Menge</i> sagt übrigens wenig über die Qualität.)</p>
-
-              <h3>👃 Die Nase</h3>
-              <p>Zuerst <b>ohne Schwenken</b> schnuppern, dann leicht schwenken – so öffnen sich die Aromen. Zwischendurch die Nase kurz ausruhen. <b>Sauber?</b> Riecht es nach feuchtem Karton/Keller, hat der Wein einen Korkfehler. <b>Aromen:</b> Wähl alles, was du erkennst – Frucht (Apfel, Zitrus, Beeren), Hefe &amp; Gebäck (Brioche, Toast, Nuss), Reife (Honig, Butter). Faustregel: 5–7 Aromen = komplex, 8+ = sehr komplex.</p>
-
-              <h3>👅 Der Mund</h3>
-              <p>Ein mittelgroßer Schluck, mit der Zunge im ganzen Mund verteilen. <b>Säure</b> erkennst du am Speichelfluss – sie macht den Champagner frisch. <b>Mousse</b> ist das Prickeln: cremig-fein ist feiner als aggressiv. <b>Balance:</b> Passen Säure, Frucht, Kraft und Süße harmonisch zusammen?</p>
-
-              <h3>⏱ Der Abgang</h3>
-              <p>Nach dem Schlucken innerlich zählen, wie lange der Geschmack angenehm nachklingt: unter 5 Sek. = kurz, 5–15 = mittel, über 15 = lang. <b>Charakter:</b> Hat der Wein etwas Eigenes, Unverwechselbares? Und ganz ehrlich: <b>Würdest du ein zweites Glas nehmen?</b></p>
-
-              <p style="color:var(--muted);">Am Ende rechnet die App aus deinen Antworten eine Sterne-Wertung – die kannst du mit einem Tipp noch anpassen. Es gibt kein „falsch": Dein Eindruck zählt. 🍾</p>
-            </div>
-          </div>
-        </div>
 
         <script id="wz-vorbelegt" type="application/json"><?= json_encode([
             'detail' => $vorhandene['detail'] ?? new stdClass(),
@@ -3511,7 +3520,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php if ($zugeordnet === [] && $offen === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Fotos – sie sammeln sich hier automatisch, sobald ihr Flaschen und Weingüter fotografiert.</p></div>
       <?php elseif ($zugeordnet !== []): ?>
-        <p class="untertitel"><?= count($zugeordnet) ?> zugeordnete(s) Foto(s):</p>
+        <p class="untertitel">✅ <?= count($zugeordnet) ?> Foto(s) sind zugeordnet – tippe auf die Beschriftung unter dem Bild, um zur Flasche oder zum Weingut zu springen:</p>
         <div class="foto-galerie album" style="margin-bottom:1rem;">
           <?php foreach ($zugeordnet as $af): ?>
             <div class="album-foto">
@@ -3870,6 +3879,70 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <a href="?tasting=1" class="<?= $bereich === 'tasting' ? 'aktiv' : '' ?>"><span class="tab-icon">👥</span>Tasting</a>
   </nav>
 
+  <div id="anleitung-box" hidden>
+    <div class="blatt">
+      <div class="blatt-kopf">
+        <b>ℹ️ So wird verkostet</b>
+        <button type="button" aria-label="Schließen">&#10005;</button>
+      </div>
+      <div class="anleitung-chips">
+        <button type="button" data-art="champagner">🍾 Champagner</button>
+        <button type="button" data-art="rotwein">🍷 Rotwein</button>
+        <button type="button" data-art="weisswein">🥂 Weißwein</button>
+        <button type="button" data-art="bier">🍺 Bier</button>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="champagner">
+        <p>Nimm dir kurz Zeit und geh in Ruhe durch die vier Sinne – die App führt dich Schritt für Schritt.</p>
+        <h3>👁 Das Auge</h3>
+        <p>Halte das Glas gegen einen hellen Hintergrund. <b>Farbe:</b> von zartem Zitronengelb (jung) über Gold (gereift) bis Kupfer; Rosé von Lachs bis Himbeer. <b>Perlage</b> sind die Bläschen – je feiner und beständiger, desto edler das Mundgefühl. (Die reine Bläschen-<i>Menge</i> sagt übrigens wenig über die Qualität.)</p>
+        <h3>👃 Die Nase</h3>
+        <p>Zuerst <b>ohne Schwenken</b> schnuppern, dann leicht schwenken – so öffnen sich die Aromen. Zwischendurch die Nase kurz ausruhen. <b>Sauber?</b> Riecht es nach feuchtem Karton/Keller, hat der Wein einen Korkfehler. <b>Aromen:</b> Wähl alles, was du erkennst – Frucht (Apfel, Zitrus, Beeren), Hefe &amp; Gebäck (Brioche, Toast, Nuss), Reife (Honig, Butter). Faustregel: 5–7 Aromen = komplex, 8+ = sehr komplex.</p>
+        <h3>👅 Der Mund</h3>
+        <p>Ein mittelgroßer Schluck, mit der Zunge im ganzen Mund verteilen. <b>Säure</b> erkennst du am Speichelfluss – sie macht den Champagner frisch. <b>Mousse</b> ist das Prickeln: cremig-fein ist feiner als aggressiv. <b>Balance:</b> Passen Säure, Frucht, Kraft und Süße harmonisch zusammen?</p>
+        <h3>⏱ Der Abgang</h3>
+        <p>Nach dem Schlucken innerlich zählen, wie lange der Geschmack angenehm nachklingt: unter 5 Sek. = kurz, 5–15 = mittel, über 15 = lang. <b>Charakter:</b> Hat der Wein etwas Eigenes, Unverwechselbares? Und ganz ehrlich: <b>Würdest du ein zweites Glas nehmen?</b></p>
+        <p style="color:var(--muted);">Am Ende rechnet die App aus deinen Antworten eine Sterne-Wertung – die kannst du mit einem Tipp noch anpassen. Es gibt kein „falsch": Dein Eindruck zählt. 🍾</p>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="rotwein" hidden>
+        <h3>👁 Das Auge</h3>
+        <p>Glas leicht kippen und gegen Weiß halten. <b>Farbe vom Kern zum Rand:</b> Purpur/Violett = jung, Rubin = auf dem Punkt, Ziegel bis Braun = gereift. Je durchsichtiger der Rand, desto reifer der Wein.</p>
+        <h3>👃 Die Nase</h3>
+        <p>Kräftig schwenken – Rotwein braucht Luft. <b>Frucht:</b> Kirsche, Beeren, Pflaume. <b>Würze:</b> Pfeffer, Lakritz, Tabak. <b>Fassnoten:</b> Vanille, Röstaromen, Schokolade. Muffig/feuchter Keller = Korkfehler.</p>
+        <h3>👅 Der Mund</h3>
+        <p>Schluck im Mund bewegen. <b>Tannin</b> ist das pelzige Gefühl am Zahnfleisch – bei gutem Wein fein, nicht kratzig. <b>Körper:</b> leicht wie Wasser oder dicht wie Sahne? <b>Balance:</b> Frucht, Säure, Tannin und Alkohol im Einklang?</p>
+        <h3>⏱ Der Abgang</h3>
+        <p>Wie lange trägt der Geschmack? Wärmt der Alkohol angenehm oder brennt er? Und: <b>Lust auf ein zweites Glas?</b></p>
+        <p style="color:var(--muted);">Die geführte Bewertung für Rotwein folgt bald – verkosten und Notizen machen geht schon jetzt. 🍷</p>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="weisswein" hidden>
+        <h3>👁 Das Auge</h3>
+        <p>Farbe gegen hellen Hintergrund: blasses Grüngelb = jung und frisch, Strohgelb = klassisch, Goldgelb = gereift oder im Holzfass ausgebaut.</p>
+        <h3>👃 Die Nase</h3>
+        <p>Erst ruhig riechen, dann schwenken. <b>Frucht:</b> Zitrus, grüner Apfel, Pfirsich, exotische Früchte. <b>Dazu:</b> Blüten, Kräuter, Mineralik (nasser Stein). Muffige Töne = Fehler.</p>
+        <h3>👅 Der Mund</h3>
+        <p><b>Säure</b> macht den Weißwein lebendig – sie zeigt sich am Speichelfluss. <b>Süße:</b> knochentrocken bis fruchtsüß, wichtig ist die Balance mit der Säure. <b>Körper:</b> leicht und schlank oder cremig und kraftvoll?</p>
+        <h3>⏱ Der Abgang</h3>
+        <p>Klingt Frucht oder Mineralik nach? Je länger und angenehmer, desto besser. Und wie immer: <b>Würdest du nachschenken?</b></p>
+        <p style="color:var(--muted);">Die geführte Bewertung für Weißwein folgt bald – verkosten und Notizen machen geht schon jetzt. 🥂</p>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="bier" hidden>
+        <h3>👁 Das Auge</h3>
+        <p><b>Farbe:</b> strohgelb (Pils) über bernstein (Ale) bis tiefschwarz (Stout). <b>Schaum:</b> feinporig, stabil, hinterlässt er Ringe am Glas? Trübung ist bei Weizen und Kellerbier gewollt.</p>
+        <h3>👃 Die Nase</h3>
+        <p><b>Hopfen:</b> blumig, grasig, Zitrus, tropisch. <b>Malz:</b> brotig, Karamell, Kaffee, Schokolade. <b>Hefe:</b> Banane und Nelke beim Weizen. Pappe-Geruch = altes Bier.</p>
+        <h3>👅 Der Mund</h3>
+        <p><b>Antrunk:</b> spritzig oder weich? <b>Kohlensäure:</b> feinperlig oder stechend? <b>Balance:</b> Malzsüße gegen Hopfenbitterkeit – beides darf da sein, keins soll erschlagen.</p>
+        <h3>⏱ Der Abgang</h3>
+        <p>Bleibt die Bitterkeit angenehm oder wird sie kratzig? Trocknet der Mund oder will er den nächsten Schluck? <b>Noch eins bestellen?</b></p>
+        <p style="color:var(--muted);">Die geführte Bewertung für Bier folgt bald – verkosten und Notizen machen geht schon jetzt. 🍺</p>
+      </div>
+    </div>
+  </div>
+
   <div id="overlay" hidden>
     <div class="blatt">
       <div class="blatt-kopf">
@@ -4026,17 +4099,33 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         KAT.forEach(function (k) { document.getElementById('stern-' + k).value = s[k]; });
       });
 
-      // Info-Overlay
-      var infoKnopf = document.getElementById('wz-info-knopf');
-      var infoBox = document.getElementById('wz-info');
-      if (infoKnopf && infoBox) {
-        function infoZu() { infoBox.hidden = true; document.body.style.overflow = ''; }
-        infoKnopf.addEventListener('click', function () { infoBox.hidden = false; document.body.style.overflow = 'hidden'; });
-        infoBox.querySelector('.blatt-kopf button').addEventListener('click', infoZu);
-        infoBox.addEventListener('click', function (e) { if (e.target === infoBox) { infoZu(); } });
-      }
-
       zeige(1);
+    })();
+
+    // Anleitung „So wird verkostet“: überall über den ℹ️-Knopf erreichbar,
+    // mit eigener Erklärung je Getränkeart
+    (function () {
+      var box = document.getElementById('anleitung-box');
+      if (!box) { return; }
+      function waehle(art) {
+        box.querySelectorAll('.anleitung-teil').forEach(function (t) { t.hidden = t.dataset.art !== art; });
+        box.querySelectorAll('.anleitung-chips button').forEach(function (b) { b.classList.toggle('gewaehlt', b.dataset.art === art); });
+      }
+      function oeffne() { box.hidden = false; document.body.style.overflow = 'hidden'; }
+      function zu() { box.hidden = true; document.body.style.overflow = ''; }
+      waehle(<?= json_encode($kategorie) ?>);
+      box.querySelectorAll('.anleitung-chips button').forEach(function (b) {
+        b.addEventListener('click', function () { waehle(b.dataset.art); });
+      });
+      ['info-knopf', 'wz-info-knopf'].forEach(function (id) {
+        var k = document.getElementById(id);
+        if (k) { k.addEventListener('click', oeffne); }
+      });
+      document.querySelectorAll('.anleitung-oeffnen').forEach(function (k) {
+        k.addEventListener('click', function (e) { e.preventDefault(); oeffne(); });
+      });
+      box.querySelector('.blatt-kopf button').addEventListener('click', zu);
+      box.addEventListener('click', function (e) { if (e.target === box) { zu(); } });
     })();
 
     // Suchfilter über Listen: tippen filtert die Einträge sofort; Feld bleibt oben stehen
@@ -4115,7 +4204,8 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         if (tippt) { return; } // Suchfilter in Benutzung → nicht wegreloaden
         var overlay = document.getElementById('overlay');
         var gross = document.getElementById('grossansicht');
-        if ((overlay && !overlay.hidden) || (gross && !gross.hidden)) { return; }
+        var anleitung = document.getElementById('anleitung-box');
+        if ((overlay && !overlay.hidden) || (gross && !gross.hidden) || (anleitung && !anleitung.hidden)) { return; }
         var u = new URL(location.href);
         u.searchParams.set('_live', Date.now());
         fetch(u.toString(), { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
