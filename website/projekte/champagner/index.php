@@ -407,6 +407,53 @@ function teilnehmerLimitErreicht(array $t): bool
     return !empty($t['gast']) && count($t['teilnehmer'] ?? []) >= 2;
 }
 
+/** Grobe Distanz in Metern zwischen zwei Koordinaten (für kleine Abstände ausreichend). */
+function distanzMeter(float $lat1, float $lon1, float $lat2, float $lon2): int
+{
+    $dx = ($lon2 - $lon1) * cos(deg2rad($lat1)) * 111320;
+    $dy = ($lat2 - $lat1) * 110540;
+    return (int)round(sqrt($dx * $dx + $dy * $dy));
+}
+
+/**
+ * War eine Bewertung „live“ (im Moment der Verkostung) oder nachträglich?
+ * Live = innerhalb von 6 Stunden nach Anlage des Getränks abgegeben.
+ * Gespeicherte Kennzeichnung hat Vorrang; sonst wird sie hergeleitet.
+ */
+function bewertungWarLive(array $b, ?array $getraenk): bool
+{
+    if (array_key_exists('live', $b)) {
+        return (bool)$b['live'];
+    }
+    $gz = (int)($getraenk['zeit'] ?? 0);
+    return $gz === 0 || ((int)($b['zeit'] ?? 0) - $gz) <= 6 * 3600;
+}
+
+/**
+ * Wer war bei dieser Bewertung mit dabei? Andere Bewerter desselben Getränks
+ * im Zeitfenster von ±2 Stunden – und, falls beide Standorte haben, im Umkreis
+ * von 250 m. Das fließt als gemeinsames Erlebnis ins Bewertungs-Umfeld ein.
+ */
+function mitDabei(array $bewertungen, array $b): array
+{
+    $dabei = [];
+    foreach ($bewertungen as $andere) {
+        if (mb_strtolower(trim((string)$andere['person'])) === mb_strtolower(trim((string)$b['person']))) {
+            continue;
+        }
+        if (abs((int)($andere['zeit'] ?? 0) - (int)($b['zeit'] ?? 0)) > 2 * 3600) {
+            continue;
+        }
+        if (isset($b['lat'], $b['lon'], $andere['lat'], $andere['lon'])
+            && is_numeric($b['lat']) && is_numeric($andere['lat'])
+            && distanzMeter((float)$b['lat'], (float)$b['lon'], (float)$andere['lat'], (float)$andere['lon']) > 250) {
+            continue; // beide orten sich, aber weit auseinander → nicht zusammen
+        }
+        $dabei[] = (string)$andere['person'];
+    }
+    return array_values(array_unique($dabei));
+}
+
 // Benutzerkonto-Cookie: dauerhaft angemeldet bleiben (läuft nicht ab)
 if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['benutzer'])) {
     $kontoTreffer = benutzerZuToken(datenLaden(), (string)$_COOKIE['benutzer']);
@@ -1531,17 +1578,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($aktion === 'tasting_anlegen') {
         $konto = aktuellerBenutzer(datenLaden());
         $mitKonto = darfTastingsAnlegen($konto);
-        if (!$mitKonto) {
-            // Ohne Account: genau EIN eigenes Tasting (am Gerät gemerkt)
-            $gastTid = (string)($_COOKIE['gast_tasting'] ?? '');
-            if (preg_match('/^[a-f0-9]{8}$/', $gastTid)) {
-                foreach (datenLaden()['tastings'] as $t) {
-                    if ($t['id'] === $gastTid) {
-                        zurueck('?tasting=' . rawurlencode($gastTid) . '&fehler=' . rawurlencode('Ohne Account kannst du nur ein eigenes Tasting haben – hier ist deins. Für mehr: kostenfreien Account anfragen (Tasting-Übersicht unten).'));
-                    }
-                }
-            }
-        }
         $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
         if ($titel === '') {
             zurueck('?tasting=1&fehler=' . rawurlencode('Bitte einen Titel für das Tasting angeben.'));
@@ -1549,19 +1585,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $neueId = bin2hex(random_bytes(4));
         $beitrittToken = bin2hex(random_bytes(8));
         $besitzerId = (string)($konto['id'] ?? '');
-        $istGast = !$mitKonto;
+        $istGast = !$mitKonto; // Gast-Tastings: beliebig viele, aber je maximal du + 1 Person
         datenAendern(function (array $d) use ($titel, $neueId, $beitrittToken, $besitzerId, $istGast): array {
             $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'besitzer' => $besitzerId, 'gast' => $istGast, 'zeit' => time()];
             return $d;
         });
         tastingWaehlen($neueId);
         if ($istGast) {
-            setcookie('gast_tasting', $neueId, [
-                'expires' => time() + 60 * 60 * 24 * 3650,
-                'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
-            ]);
-            $_COOKIE['gast_tasting'] = $neueId;
-            zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt! Ohne Account gilt: du + 1 eingeladene Person. Mehr Personen? Kostenfreien Account anfragen.'));
+            zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt! Ohne Account gilt: du + 1 eingeladene Person. Für größere Runden: kostenfreien Account anfragen.'));
         }
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
     }
@@ -1837,7 +1868,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
-        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($cid === '' ? 'Glas geleert.' : 'Steht jetzt für alle „im Glas“. 🥂'));
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($cid === '' ? 'Alles klar – es steht gerade nichts „im Glas“. Das nächste erfasste Getränk landet automatisch dort.' : 'Steht jetzt für alle „im Glas“. 🥂'));
     }
 
     if ($aktion === 'tasting_zuordnen') {
@@ -1996,6 +2027,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'wetter'        => $umfeldWetter !== '' ? $umfeldWetter : (string)($vorherige['wetter'] ?? ''),
                 'lat'           => $umfeldLat ?? ($vorherige['lat'] ?? null),
                 'lon'           => $umfeldLon ?? ($vorherige['lon'] ?? null),
+                // Live im Verkostungs-Moment oder nachträglich? (Beim Ändern bleibt der ursprüngliche Status)
+                'live'          => $vorherige !== null && array_key_exists('live', $vorherige)
+                    ? (bool)$vorherige['live']
+                    : (function () use ($d, $cid): bool {
+                        $c = champagnerHolen($d, $cid);
+                        $gz = (int)($c['zeit'] ?? 0);
+                        return $gz === 0 || (time() - $gz) <= 6 * 3600;
+                    })(),
                 'zeit'          => time(),
             ];
             return $d;
@@ -3734,7 +3773,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               usort($auswahl, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
             ?>
             <select name="champagner_id">
-              <option value="">– Glas leeren –</option>
+              <option value="">– gerade nichts im Glas –</option>
               <?php foreach (array_slice($auswahl, 0, 30) as $c): ?>
                 <option value="<?= e($c['id']) ?>"<?= ($aktivesTasting['aktiv_cid'] ?? '') === $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?></option>
               <?php endforeach; ?>
@@ -4014,45 +4053,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </a>
           <?php endforeach; ?>
         <?php endforeach; ?>
-        <?php
-          // Gast-Tasting: ohne Account genau ein eigenes Tasting (am Gerät gemerkt)
-          $gastTid = (string)($_COOKIE['gast_tasting'] ?? '');
-          $gastTasting = null;
-          foreach ($daten['tastings'] as $t) {
-              if ($t['id'] === $gastTid) {
-                  $gastTasting = $t;
-                  break;
-              }
-          }
-        ?>
-        <?php if (darfTastingsAnlegen($benutzerAktiv)): ?>
-          <div class="card" style="margin-top:1rem;">
-            <h2>Neues Tasting anlegen</h2>
-            <form method="post">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="tasting_anlegen">
-              <input type="text" name="titel" placeholder="Titel, z. B. Champagne-Tour Tag 2" maxlength="60" required>
-              <button class="knopf" type="submit">Anlegen</button>
-            </form>
-          </div>
-        <?php elseif ($gastTasting !== null): ?>
-          <div class="card" style="margin-top:1rem;">
-            <h2>Dein eigenes Tasting</h2>
-            <p style="margin-bottom:0.6rem;">Du hast bereits eines: <a href="?tasting=<?= e(rawurlencode($gastTasting['id'])) ?>"><b><?= e($gastTasting['titel']) ?></b></a> (du + 1 Gast).</p>
-            <p class="anzahl">Mehrere Tastings oder mehr Personen? Dafür gibt es den kostenfreien Account – unten anfragen.</p>
-          </div>
-        <?php else: ?>
-          <div class="card" style="margin-top:1rem;">
-            <h2>Neues Tasting anlegen</h2>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Ohne Account: ein eigenes Tasting, du + 1 eingeladene Person. Für mehr gibt es unten den kostenfreien Account.</p>
-            <form method="post">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="tasting_anlegen">
-              <input type="text" name="titel" placeholder="Titel, z. B. Abend mit Lisa" maxlength="60" required>
-              <button class="knopf" type="submit">Anlegen</button>
-            </form>
-          </div>
-        <?php endif; ?>
+        <div class="card" style="margin-top:1rem;">
+          <h2>Neues Tasting anlegen</h2>
+          <?php if (!darfTastingsAnlegen($benutzerAktiv)): ?>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Eigene Tastings kannst du beliebig viele anlegen – ohne Account aber jeweils nur du + 1 eingeladene Person. Für größere Runden gibt es unten den kostenfreien Account.</p>
+          <?php endif; ?>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_anlegen">
+            <input type="text" name="titel" placeholder="Titel, z. B. Abend mit Lisa" maxlength="60" required>
+            <button class="knopf" type="submit">Anlegen</button>
+          </form>
+        </div>
 
         <?php if ($benutzerAktiv === null): ?>
           <div class="card" style="margin-top:1rem;">
@@ -4683,22 +4695,23 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endforeach; ?>
         </div>
 
-        <?php
-          // Notizen und Bewertungs-Umfeld (wann, wo, bei welchem Wetter)
-          $mitUmfeld = array_values(array_filter($bewertungen, fn($b) =>
-              trim((string)($b['notiz'] ?? '')) !== '' || trim((string)($b['ort'] ?? '')) !== '' || trim((string)($b['wetter'] ?? '')) !== ''));
-        ?>
-        <?php if ($mitUmfeld !== []): ?>
+        <?php if ($bewertungen !== []): ?>
           <div class="card">
             <h2>Notizen &amp; Umfeld</h2>
-            <?php foreach ($mitUmfeld as $b): ?>
+            <?php foreach ($bewertungen as $b): ?>
               <?php
                 $umfeld = [date('d.m.Y, H:i', (int)($b['zeit'] ?? 0)) . ' Uhr'];
                 if (trim((string)($b['ort'] ?? '')) !== '') { $umfeld[] = '📍 ' . (string)$b['ort']; }
                 if (trim((string)($b['wetter'] ?? '')) !== '') { $umfeld[] = (string)$b['wetter']; }
+                $dabei = mitDabei($bewertungen, $b);
+                if ($dabei !== []) { $umfeld[] = '👥 zusammen mit ' . implode(', ', $dabei); }
+                $warLive = bewertungWarLive($b, $aktiverChampagner);
               ?>
               <p class="notiz" style="margin-bottom:0.7rem;">
                 <b><?= e($b['person']) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
+                <?php if (!$warLive): ?>
+                  <span class="bewerter-chip offen" title="Nicht im Verkostungs-Moment bewertet – Ort und Wetter beschreiben den Bewertungs-Zeitpunkt">⏳ nachträglich bewertet</span>
+                <?php endif; ?>
                 <?php if (trim((string)($b['notiz'] ?? '')) !== ''): ?><br><?= nl2br(e((string)$b['notiz'])) ?><?php endif; ?>
               </p>
             <?php endforeach; ?>
