@@ -885,7 +885,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . "Tipp einfach auf diesen Link – damit bist du angemeldet und kannst sofort mitbewerten (kein Passwort nötig):\n"
             . $link . "\n\nBis gleich! 🥂";
         $ok = @mail($person['email'], $betreff, $text,
-            "From: Champagne 26 <post@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
+            "From: Tasting fruthzeug.de <post@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
         if ($ok) {
             zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Einladung an ' . $person['email'] . ' verschickt.'));
         }
@@ -1798,7 +1798,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
-  <title>Champagne 26 – fruthzeug.de</title>
+  <title>Tasting – fruthzeug.de</title>
   <style>
     :root {
       --bg: #faf6ee;
@@ -2192,7 +2192,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     <nav class="site-nav">
       <a href="/">Start</a>
       <a href="/#projekte">Projekte</a>
-      <a href="/projekte/champagner/" aria-current="page">Champagne 26</a>
+      <a href="/projekte/champagner/" aria-current="page">Tasting</a>
       <a href="mailto:post@fruthzeug.de">Kontakt</a>
       <a href="#" id="neu-laden">&#10227; Neu laden</a>
     </nav>
@@ -2226,7 +2226,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
     <?php elseif ($ansicht === 'fotos'): ?>
       <h1>Fotoalbum 📸</h1>
-      <p class="untertitel">Diverse Fotos rund um Champagne 26.</p>
+      <p class="untertitel">Alle Fotos eurer Verkostungen.</p>
     <?php elseif ($ansicht === 'neu'): ?>
       <p class="zurueck"><a href="<?= isset($_GET['vk']) ? '?vk=' . e(rawurlencode((string)$_GET['vk'])) : '?liste=1' ?>">&larr; Zur&uuml;ck</a></p>
       <h1>Neue Flasche 📷</h1>
