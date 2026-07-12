@@ -987,7 +987,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vk = '';
         }
         $_SESSION['person'] = $person;
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $detail): array {
+        $meinTastingId = (string)(meinTasting(datenLaden())['id'] ?? '');
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $detail, $meinTastingId): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -1010,6 +1011,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'notiz'         => $notiz,
                 'flaschen'      => $flaschen,
                 'detail'        => $detail,
+                'tasting_id'    => $meinTastingId,
                 'zeit'          => time(),
             ];
             return $d;
@@ -1028,6 +1030,44 @@ $meldung = (string)($_GET['ok'] ?? '');
 $fehler  = (string)($_GET['fehler'] ?? '');
 
 $daten = datenLaden();
+
+// Einmalige Migration: alle Bewertungen ohne Tasting-Zuordnung dem
+// bestehenden „Champagne 26“ zuschlagen (bzw. es anlegen).
+$brauchtMigration = false;
+foreach ($daten['bewertungen'] as $b) {
+    if (!isset($b['tasting_id'])) {
+        $brauchtMigration = true;
+        break;
+    }
+}
+if ($brauchtMigration) {
+    datenAendern(function (array $d): array {
+        // Ziel-Tasting suchen (Name enthält „champagne“) oder ältestes, sonst neu anlegen
+        $zielId = '';
+        foreach ($d['tastings'] as $t) {
+            if (str_contains(mb_strtolower($t['titel']), 'champagne')) {
+                $zielId = $t['id'];
+                break;
+            }
+        }
+        if ($zielId === '' && $d['tastings'] !== []) {
+            $aeltest = $d['tastings'];
+            usort($aeltest, fn($a, $b) => ((int)($a['zeit'] ?? 0)) <=> ((int)($b['zeit'] ?? 0)));
+            $zielId = $aeltest[0]['id'];
+        }
+        if ($zielId === '') {
+            $zielId = bin2hex(random_bytes(4));
+            $d['tastings'][] = ['id' => $zielId, 'titel' => 'Champagne 26', 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => bin2hex(random_bytes(8)), 'zeit' => time()];
+        }
+        foreach ($d['bewertungen'] as &$b) {
+            if (!isset($b['tasting_id'])) {
+                $b['tasting_id'] = $zielId;
+            }
+        }
+        return $d;
+    });
+    $daten = datenLaden();
+}
 
 /** Alle Bewertungen zu einem Champagner. */
 function bewertungenFuer(array $daten, string $cid): array
@@ -2222,7 +2262,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php if (($aktivesTasting ?? null) !== null): ?>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
         <h1><?= e($aktivesTasting['titel']) ?> 👥</h1>
-        <p class="untertitel">Teilnehmer, Einladungen und das Glas der Gruppe.</p>
+        <p class="untertitel">📅 angelegt am <?= date('d.m.Y', (int)($aktivesTasting['zeit'] ?? time())) ?></p>
       <?php else: ?>
         <h1>Tasting 👥</h1>
         <p class="untertitel">Gemeinsame Verkostungen mit deiner Gruppe.</p>
@@ -2421,19 +2461,37 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         </div>
 
-        <div class="card">
+        <?php $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1'; ?>
+        <div class="card" style="text-align:center;">
           <h2>👀 Zum Mitschauen (ohne Bewerten)</h2>
-          <p class="anzahl" style="margin-bottom:0.6rem;">Diesen Link kannst du an alle geben, die nur zusehen wollen – Listen, Ergebnisse und Fotos sind sichtbar, bewerten geht damit nicht.</p>
-          <div class="knopfreihe">
-            <button type="button" class="knopf zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?liste=1">Ansehen-Link kopieren</button>
+          <p class="anzahl" style="margin-bottom:0.8rem;">QR abfotografieren oder Link teilen – Listen, Ergebnisse und Fotos sind sichtbar, bewerten geht damit nicht.</p>
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&amp;margin=8&amp;data=<?= e(rawurlencode($ansehenUrl)) ?>"
+               alt="QR-Code zum Mitschauen" width="220" height="220"
+               style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
+          <div class="knopfreihe" style="justify-content:center; margin-top:0.8rem;">
+            <button type="button" class="knopf zweit link-kopieren" data-link="<?= e($ansehenUrl) ?>">Ansehen-Link kopieren</button>
           </div>
         </div>
 
+        <?php
+          // Aktiv = hat in diesem Tasting schon bewertet; passiv = nur beigetreten
+          $aktivNamen = [];
+          foreach ($daten['bewertungen'] as $b) {
+              if (($b['tasting_id'] ?? '') === $aktivesTasting['id']) {
+                  $aktivNamen[mb_strtolower($b['person'])] = true;
+              }
+          }
+          $teiln = $aktivesTasting['teilnehmer'] ?? [];
+          $anzahlAktiv = 0;
+          foreach ($teiln as $p) { if (isset($aktivNamen[mb_strtolower($p['name'])])) { $anzahlAktiv++; } }
+        ?>
         <div class="card">
-          <h2>Teilnehmer (<?= count($aktivesTasting['teilnehmer'] ?? []) ?>)</h2>
-          <?php foreach (($aktivesTasting['teilnehmer'] ?? []) as $p): ?>
+          <h2>Teilnehmer (<?= count($teiln) ?>)</h2>
+          <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($teiln) - $anzahlAktiv ?> passiv</p>
+          <?php foreach ($teiln as $p): ?>
+            <?php $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]); ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
-              <span><b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
+              <span><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
               <span class="knopfreihe">
                 <button type="button" class="knopf klein zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?einladung=<?= e($p['token']) ?>">Link kopieren</button>
                 <?php if ($p['email'] !== ''): ?>
@@ -2527,7 +2585,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>">
             <span class="k-icon">👥</span>
             <span class="k-text"><b><?= e($t['titel']) ?></b>
-              <small><?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
+              <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
             </span>
           </a>
         <?php endforeach; ?>
