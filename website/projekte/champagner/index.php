@@ -192,6 +192,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ok=' . rawurlencode('Abgemeldet.'));
     }
 
+    if ($aktion === 'beitreten') {
+        // Beitritt per QR-Code/Gruppenlink – braucht keine Anmeldung
+        $beitritt = (string)($_POST['beitritt'] ?? '');
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $email = '';
+        }
+        $ziel = null;
+        foreach (datenLaden()['tastings'] as $t) {
+            if (($t['beitritt'] ?? '') !== '' && hash_equals((string)$t['beitritt'], $beitritt)) {
+                $ziel = $t;
+                break;
+            }
+        }
+        if ($ziel === null) {
+            zurueck('?fehler=' . rawurlencode('Dieser Beitritts-Code ist nicht (mehr) gültig.'));
+        }
+        if ($name === '') {
+            zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Bitte deinen Namen eintragen.'));
+        }
+        // Gleicher Name schon dabei? Dann dessen Zugang übernehmen statt doppelt anlegen.
+        $token = '';
+        foreach (($ziel['teilnehmer'] ?? []) as $p) {
+            if (mb_strtolower($p['name']) === mb_strtolower($name)) {
+                $token = $p['token'];
+                break;
+            }
+        }
+        if ($token === '') {
+            $token = bin2hex(random_bytes(8));
+            $tid = $ziel['id'];
+            datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
+                foreach ($d['tastings'] as &$t) {
+                    if ($t['id'] === $tid) {
+                        $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email];
+                    }
+                }
+                return $d;
+            });
+        }
+        setcookie('einladung', $token, [
+            'expires' => time() + 60 * 60 * 24 * 180,
+            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = $name;
+        zurueck('?ok=' . rawurlencode('Willkommen, ' . $name . '! Du bist dabei bei „' . $ziel['titel'] . '“. 🥂'));
+    }
+
     if (!$eingeloggt) {
         zurueck('?fehler=' . rawurlencode('Bitte zuerst mit dem Passwort anmelden.'));
     }
@@ -747,8 +797,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?tasting=1&fehler=' . rawurlencode('Bitte einen Titel für das Tasting angeben.'));
         }
         $neueId = bin2hex(random_bytes(4));
-        datenAendern(function (array $d) use ($titel, $neueId): array {
-            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'zeit' => time()];
+        $beitrittToken = bin2hex(random_bytes(8));
+        datenAendern(function (array $d) use ($titel, $neueId, $beitrittToken): array {
+            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'beitritt' => $beitrittToken, 'zeit' => time()];
             return $d;
         });
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
@@ -1713,12 +1764,28 @@ if (isset($_GET['bewerten'])) {
             }
         }
     }
+    // Ältere Tastings ohne Beitritts-Code nachrüsten
+    if ($aktivesTasting !== null && ($aktivesTasting['beitritt'] ?? '') === '') {
+        $nachruestToken = bin2hex(random_bytes(8));
+        $nachruestId = $aktivesTasting['id'];
+        datenAendern(function (array $d) use ($nachruestId, $nachruestToken): array {
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] === $nachruestId && ($t['beitritt'] ?? '') === '') {
+                    $t['beitritt'] = $nachruestToken;
+                }
+            }
+            return $d;
+        });
+        $aktivesTasting['beitritt'] = $nachruestToken;
+    }
+} elseif (isset($_GET['beitritt'])) {
+    $ansicht = 'beitreten';
 }
 
 // Bereich für die Tab-Leiste unten
 $bereich = match ($ansicht) {
     'verkosten', 'werkstatt', 'neu', 'wneu', 'bewerten' => 'verkosten',
-    'tastingplatz' => 'tasting',
+    'tastingplatz', 'beitreten' => 'tasting',
     default => 'entdecken',
 };
 
@@ -2143,6 +2210,9 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <h1>Tasting 👥</h1>
         <p class="untertitel">Gemeinsame Verkostungen mit deiner Gruppe.</p>
       <?php endif; ?>
+    <?php elseif ($ansicht === 'beitreten'): ?>
+      <h1>Mitmachen 🥂</h1>
+      <p class="untertitel">Du wurdest zu einem Tasting eingeladen.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Champagner im Überblick.</p>
@@ -2255,6 +2325,10 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       ?>
       <?php if ($hierChampagner !== []): ?>
         <p class="untertitel" style="margin-top:1.4rem;"><?= $kontextOhne ? 'Champagner ohne Weingut:' : 'Bisher hier verkostet:' ?></p>
+        <?php if (count($hierChampagner) > 3): ?>
+          <input type="search" class="filter-feld" placeholder="🔍 Champagner suchen …" data-ziel="#werkstatt-liste">
+        <?php endif; ?>
+        <div id="werkstatt-liste">
         <?php foreach ($hierChampagner as $c): ?>
           <?php
             $bewertungen = bewertungenFuer($daten, $c['id']);
@@ -2276,6 +2350,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
             <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>&amp;vk=<?= $kontextOhne ? 'ohne' : e(rawurlencode($kontextWeingut['id'])) ?>">Bewerten</a>
           </div>
         <?php endforeach; ?>
+        </div>
       <?php endif; ?>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular($kontextOhne ? '?vk=ohne' : '?vk=' . rawurlencode($kontextWeingut['id'])) ?></div>
@@ -2315,6 +2390,18 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
             </select>
             <button class="knopf zweit" type="submit">Ins Glas stellen</button>
           </form>
+        </div>
+
+        <?php $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? ''); ?>
+        <div class="card" style="text-align:center;">
+          <h2>📱 Gruppe einladen per QR-Code</h2>
+          <p class="anzahl" style="margin-bottom:0.8rem;">Einfach vom Bildschirm abfotografieren – Name eintragen – dabei sein.</p>
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&amp;margin=8&amp;data=<?= e(rawurlencode($beitrittUrl)) ?>"
+               alt="QR-Code zum Beitreten" width="260" height="260"
+               style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
+          <div class="knopfreihe" style="justify-content:center; margin-top:0.8rem;">
+            <button type="button" class="knopf zweit link-kopieren" data-link="<?= e($beitrittUrl) ?>">Link kopieren</button>
+          </div>
         </div>
 
         <div class="card">
@@ -2371,6 +2458,35 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
           </form>
         </div>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
+      <?php endif; ?>
+
+    <?php elseif ($ansicht === 'beitreten'): ?>
+      <!-- ==================== GRUPPEN-BEITRITT (per QR/Link) ==================== -->
+      <?php
+        $beitrittToken = (string)$_GET['beitritt'];
+        $beitrittTasting = null;
+        foreach ($daten['tastings'] as $t) {
+            if (($t['beitritt'] ?? '') !== '' && hash_equals((string)$t['beitritt'], $beitrittToken)) {
+                $beitrittTasting = $t;
+                break;
+            }
+        }
+      ?>
+      <?php if ($beitrittTasting === null): ?>
+        <div class="card"><p>Dieser Beitritts-Code ist nicht (mehr) gültig – frag den Gastgeber nach einem neuen QR-Code.</p></div>
+      <?php else: ?>
+        <div class="card">
+          <h2><?= e($beitrittTasting['titel']) ?></h2>
+          <p style="margin-bottom:0.8rem;">Trag deinen Namen ein und du bist dabei – ohne Passwort, dauerhaft auf diesem Gerät.</p>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="beitreten">
+            <input type="hidden" name="beitritt" value="<?= e($beitrittToken) ?>">
+            <input type="text" name="name" placeholder="Dein Name" maxlength="40" required>
+            <input type="text" name="email" placeholder="E-Mail (optional, kannst du weglassen)" maxlength="80" inputmode="email">
+            <button class="knopf" type="submit">🥂 Dabei sein</button>
+          </form>
+        </div>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'tastingplatz'): ?>
