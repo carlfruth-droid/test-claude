@@ -3326,6 +3326,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     .sorten-info { color: var(--muted); font-size: 0.88rem; margin: 0.2rem 0 0.4rem; }
     .kachel-raster { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.6rem; }
     .kachel-raster .kachel { margin: 0; }
+    /* 📖 Der Trip: Zeitstrahl des Tastings */
+    .trip { position: relative; padding-left: 1.3rem; }
+    .trip::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: var(--border); border-radius: 1px; }
+    .trip-tag { font-weight: 600; color: var(--accent); margin: 0.7rem 0 0.35rem; }
+    .trip-eintrag { position: relative; display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.55rem; text-decoration: none; color: var(--text); }
+    .trip-eintrag::before { content: ''; position: absolute; left: -1.02rem; top: 50%; transform: translateY(-50%); width: 9px; height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); }
+    .trip-eintrag img { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
+    .trip-icon { width: 52px; text-align: center; font-size: 1.5rem; flex-shrink: 0; }
+    .trip-eintrag .k-text { min-width: 0; flex: 1; }
+    .trip-eintrag .k-text small { display: block; color: var(--muted); font-size: 0.82rem; }
     .avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--accent); vertical-align: middle; }
     details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
     details.card summary::-webkit-details-marker { display: none; }
@@ -3789,7 +3799,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <div class="card" style="border-left:5px solid var(--accent);">
           <h2>🥂 Was wir gerade trinken</h2>
           <?php if ($glasChampagner !== null): ?>
-            <p style="font-size:1.1rem;"><b><?= e($glasChampagner['name']) ?></b></p>
+            <?php
+              $glasWg = weingutHolen($daten, (string)($glasChampagner['weingut_id'] ?? ''));
+              $glasFotos = mitTitelbild(fotosFuer($glasChampagner['id']), (string)($glasChampagner['titelbild'] ?? ''));
+            ?>
+            <div style="display:flex; align-items:center; gap:0.7rem;">
+              <?php if ($glasFotos !== []): ?>
+                <img class="thumb" src="<?= e(thumbUrl($glasFotos[0])) ?>" alt="" style="width:54px; height:54px; border-radius:12px; object-fit:cover; flex-shrink:0;">
+              <?php endif; ?>
+              <p style="font-size:1.05rem;"><b><?= e($glasChampagner['name']) ?></b>
+                <?php if ($glasWg !== null): ?><br><span class="anzahl">🍇 <?= e($glasWg['name']) ?></span><?php endif; ?>
+              </p>
+            </div>
             <?php
               // Wer hat das Glas schon bewertet, wer fehlt noch? (aktualisiert sich live)
               $glasBewertungen = bewertungenFuer($daten, $glasChampagner['id']);
@@ -3829,7 +3850,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <select name="champagner_id">
               <option value="">– nichts ausgewählt –</option>
               <?php foreach (array_slice($auswahl, 0, 30) as $c): ?>
-                <option value="<?= e($c['id']) ?>"<?= ($aktivesTasting['aktiv_cid'] ?? '') === $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?></option>
+                <?php $optWg = weingutHolen($daten, (string)($c['weingut_id'] ?? '')); ?>
+                <option value="<?= e($c['id']) ?>"<?= ($aktivesTasting['aktiv_cid'] ?? '') === $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?><?= $optWg !== null ? ' — ' . e($optWg['name']) : '' ?></option>
               <?php endforeach; ?>
             </select>
             <button class="knopf zweit" type="submit">Als aktuelles Getränk festlegen</button>
@@ -3841,24 +3863,119 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $tastingWeine = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
           $tastingWeingutIds = array_unique(array_filter(array_map(fn($c) => trim((string)($c['weingut_id'] ?? '')), $tastingWeine)));
         ?>
-        <div class="kachel-raster">
-          <a class="kachel" href="?liste=1&amp;kat=alle&amp;tid=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
-            <span class="k-icon">🍾</span>
-            <span class="k-text"><b>Getränke (<?= count($tastingWeine) ?>)</b></span>
-          </a>
-          <a class="kachel" href="?weingueter=1">
-            <span class="k-icon">🍇</span>
-            <span class="k-text"><b>Weingüter<?= $tastingWeingutIds !== [] ? ' (' . count($tastingWeingutIds) . ')' : '' ?></b></span>
-          </a>
-          <a class="kachel" href="?fotos=1">
-            <span class="k-icon">📸</span>
-            <span class="k-text"><b>Fotoalbum</b></span>
-          </a>
-          <a class="kachel anleitung-oeffnen" href="#">
-            <span class="k-icon">ℹ️</span>
-            <span class="k-text"><b>Anleitung</b></span>
-          </a>
-        </div>
+        <?php
+          // ---------- 📖 Der Trip: der zeitliche Verlauf des Tastings ----------
+          // Stationen: Weingut-Ankunft (erstes Getränk dort), jedes Getränk, Gruppenfotos –
+          // chronologisch, mit Bildern in der richtigen Reihenfolge.
+          $trip = [];
+          $wgErsterBesuch = [];
+          foreach ($tastingWeine as $c) {
+              $cFotos = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
+              $cBew = bewertungenFuer($daten, $c['id']);
+              $cWg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
+              $trip[] = ['zeit' => (int)$c['zeit'], 'typ' => 'getraenk', 'c' => $c, 'foto' => $cFotos[0] ?? '', 'bew' => $cBew, 'wg' => $cWg];
+              if ($cWg !== null) {
+                  $wid = $cWg['id'];
+                  if (!isset($wgErsterBesuch[$wid]) || (int)$c['zeit'] < $wgErsterBesuch[$wid]['zeit']) {
+                      $wgErsterBesuch[$wid] = ['zeit' => (int)$c['zeit'] - 1, 'typ' => 'weingut', 'w' => $cWg];
+                  }
+              }
+          }
+          foreach ($wgErsterBesuch as $einBesuch) {
+              $trip[] = $einBesuch;
+          }
+          foreach ($tsAlleFotos as $tsF) {
+              $pfad = BILDER_DIR . '/' . $tsF;
+              $trip[] = ['zeit' => is_file($pfad) ? (int)filemtime($pfad) : 0, 'typ' => 'foto', 'datei' => $tsF];
+          }
+          usort($trip, fn($x, $y) => $x['zeit'] <=> $y['zeit']);
+        ?>
+        <?php if ($trip !== []): ?>
+          <div class="card">
+            <h2>📖 Der Trip – euer Verlauf</h2>
+            <div class="trip">
+              <?php $letzterTag = ''; ?>
+              <?php foreach ($trip as $st): ?>
+                <?php $tag = date('d.m.Y', $st['zeit']); ?>
+                <?php if ($tag !== $letzterTag): $letzterTag = $tag; ?>
+                  <p class="trip-tag"><?= e($tag) ?></p>
+                <?php endif; ?>
+                <?php if ($st['typ'] === 'weingut'): ?>
+                  <?php $wFoto = mitTitelbild(weingutFotos($st['w']['id']), (string)($st['w']['titelbild'] ?? '')); ?>
+                  <a class="trip-eintrag" href="?vk=<?= e(rawurlencode($st['w']['id'])) ?>">
+                    <?php if ($wFoto !== []): ?><img src="<?= e(thumbUrl($wFoto[0])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon">🍇</span><?php endif; ?>
+                    <span class="k-text"><b>🍇 <?= e($st['w']['name']) ?></b><small>Weingut besucht</small></span>
+                  </a>
+                <?php elseif ($st['typ'] === 'getraenk'): ?>
+                  <?php $g = gesamtSchnitt($st['bew']); ?>
+                  <a class="trip-eintrag" href="?ergebnis=<?= e(rawurlencode($st['c']['id'])) ?>">
+                    <?php if ($st['foto'] !== ''): ?><img src="<?= e(thumbUrl($st['foto'])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon"><?= $KATEGORIEN_GETRAENKE[(string)($st['c']['typ'] ?? 'champagner')][0] ?? '🍾' ?></span><?php endif; ?>
+                    <span class="k-text"><b><?= e($st['c']['name']) ?></b>
+                      <small><?= date('H:i', $st['zeit']) ?> Uhr<?= $st['wg'] !== null ? ' · ' . e($st['wg']['name']) : '' ?> · <?= sterneAnzeige($g) ?><?= $st['bew'] !== [] ? ' (' . count($st['bew']) . ')' : '' ?></small>
+                    </span>
+                  </a>
+                <?php else: ?>
+                  <span class="trip-eintrag foto">
+                    <a href="bilder/<?= e(rawurlencode($st['datei'])) ?>"><img src="<?= e(thumbUrl($st['datei'])) ?>" alt="" loading="lazy"></a>
+                    <span class="k-text"><small>📸 Gruppenfoto, <?= date('H:i', $st['zeit']) ?> Uhr</small></span>
+                  </span>
+                <?php endif; ?>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($tastingWeingutIds !== []): ?>
+          <details class="card">
+            <summary>🍇 Unsere Weingüter (<?= count($tastingWeingutIds) ?>)</summary>
+            <div style="margin-top:0.5rem;">
+              <?php foreach ($daten['weingueter'] as $w): ?>
+                <?php if (!isset(array_flip($tastingWeingutIds)[$w['id']])) { continue; } ?>
+                <?php
+                  $wFotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? ''));
+                  $wAnzahl = count(array_filter($tastingWeine, fn($c) => ($c['weingut_id'] ?? '') === $w['id']));
+                ?>
+                <div style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.45rem 0;">
+                  <?php if ($wFotos !== []): ?>
+                    <img src="<?= e(thumbUrl($wFotos[0])) ?>" alt="" loading="lazy" style="width:44px; height:44px; border-radius:10px; object-fit:cover; flex-shrink:0;">
+                  <?php else: ?>
+                    <span style="width:44px; text-align:center; font-size:1.3rem; flex-shrink:0;">🍇</span>
+                  <?php endif; ?>
+                  <span style="flex:1; min-width:0;"><b><?= e($w['name']) ?></b><br><span class="anzahl"><?= $wAnzahl ?> Getränk(e) hier verkostet</span></span>
+                  <a class="knopf klein zweit" href="?vk=<?= e(rawurlencode($w['id'])) ?>">Öffnen</a>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </details>
+        <?php endif; ?>
+
+        <?php
+          // 📸 Album des Tastings: alle Bilder (Flaschen, Weingüter, Gruppenfotos) chronologisch
+          $albumBilder = [];
+          foreach ($tastingWeine as $c) {
+              foreach (fotosFuer($c['id']) as $f) { $albumBilder[$f] = true; }
+          }
+          foreach (array_keys($wgErsterBesuch) as $wid) {
+              foreach (weingutFotos($wid) as $f) { $albumBilder[$f] = true; }
+          }
+          foreach ($tsAlleFotos as $f) { $albumBilder[$f] = true; }
+          $albumBilder = array_keys($albumBilder);
+          usort($albumBilder, fn($a, $b) => (is_file(BILDER_DIR . '/' . $a) ? filemtime(BILDER_DIR . '/' . $a) : 0) <=> (is_file(BILDER_DIR . '/' . $b) ? filemtime(BILDER_DIR . '/' . $b) : 0));
+        ?>
+        <?php if ($albumBilder !== []): ?>
+          <details class="card">
+            <summary>📸 Fotoalbum des Tastings (<?= count($albumBilder) ?>)</summary>
+            <div class="foto-galerie" style="margin-top:0.6rem;">
+              <?php foreach ($albumBilder as $ab): ?>
+                <div class="foto">
+                  <a href="bilder/<?= e(rawurlencode($ab)) ?>" target="_blank">
+                    <img src="<?= e(thumbUrl($ab)) ?>" alt="" loading="lazy">
+                  </a>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </details>
+        <?php endif; ?>
 
         <?php
           $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? '');
