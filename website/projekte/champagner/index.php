@@ -1888,6 +1888,21 @@ function champagnerInTasting(array $c, string $tid): bool
     return $ct === '' || $tid === '' || $ct === $tid;
 }
 
+/** Weingüter, an denen in diesem Tasting verkostet wurde (IDs als Schlüssel). */
+function weingutIdsImTasting(array $daten, string $tid): array
+{
+    $ids = [];
+    foreach ($daten['champagner'] as $c) {
+        if (champagnerInTasting($c, $tid)) {
+            $wid = trim((string)($c['weingut_id'] ?? ''));
+            if ($wid !== '') {
+                $ids[$wid] = true;
+            }
+        }
+    }
+    return $ids;
+}
+
 // Einmalig: Admin-Konto für Carl anlegen, falls noch kein Administrator existiert
 $hatAdmin = false;
 foreach ($daten['benutzer'] as $b) {
@@ -3298,16 +3313,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <span class="k-icon">🏠</span>
         <span class="k-text"><b>Ohne Weingut verkosten</b><small>Zu Hause, im Restaurant, unterwegs</small></span>
       </a>
-      <?php if ($daten['weingueter'] !== []): ?>
-        <p class="untertitel" style="margin-top:1.4rem;">… oder Weingut wählen:</p>
-        <?php if (count($daten['weingueter']) > 3): ?>
+      <?php
+        // Nur die Weingüter des aktuellen Tastings – alles andere gehört ins Archiv
+        $tastingWgIds = weingutIdsImTasting($daten, $blickTastingId);
+        $wgSortiert = array_values(array_filter($daten['weingueter'], fn($w) => isset($tastingWgIds[$w['id']])));
+        usort($wgSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+      ?>
+      <?php if ($wgSortiert !== []): ?>
+        <p class="untertitel" style="margin-top:1.4rem;">… oder Weingut deines Tastings wählen:</p>
+        <?php if (count($wgSortiert) > 3): ?>
           <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel="#wg-wahl">
         <?php endif; ?>
         <div id="wg-wahl">
-        <?php
-          $wgSortiert = $daten['weingueter'];
-          usort($wgSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
-        ?>
         <?php foreach ($wgSortiert as $w): ?>
           <?php $wFotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? '')); ?>
           <a class="kachel filterbar" href="?vk=<?= e(rawurlencode($w['id'])) ?>">
@@ -3322,6 +3339,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </a>
         <?php endforeach; ?>
         </div>
+      <?php endif; ?>
+      <?php if (count($daten['weingueter']) > count($wgSortiert)): ?>
+        <p class="anzahl" style="margin-top:0.6rem;"><a href="?weingueter=1&amp;alle=1">Alle Weingüter ansehen (Archiv)</a></p>
       <?php endif; ?>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
@@ -4408,30 +4428,48 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       </div>
 
       <?php
-        // Alle Fotos der Reise: getrennt in zugeordnet (Flasche/Weingut) und nicht zugeordnet (div-)
+        // Fotoalbum des aktuellen Tastings (mit „Alle“ als Archiv):
+        // zugeordnet (Flasche/Weingut/Tasting) und nicht zugeordnet (div-)
+        $alleFotosZeigen = isset($_GET['alle']);
+        $albumTasting = null;
+        foreach ($daten['tastings'] as $tt) {
+            if ($tt['id'] === $blickTastingId) {
+                $albumTasting = $tt;
+                break;
+            }
+        }
+        $albumWgIds = weingutIdsImTasting($daten, $blickTastingId);
         $alleDateien = glob(BILDER_DIR . '/*.{jpg,jpeg,png,gif,webp,JPG,JPEG,PNG,GIF,WEBP}', GLOB_BRACE) ?: [];
         usort($alleDateien, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
         $zugeordnet = [];
         $offen = [];
+        $ausgeblendet = 0;
         foreach ($alleDateien as $pfad) {
             $basis = basename($pfad);
             if (preg_match('/^wg-([a-f0-9]{8})-/', $basis, $m)) {
+                if (!$alleFotosZeigen && !isset($albumWgIds[$m[1]])) { $ausgeblendet++; continue; }
                 $w = weingutHolen($daten, $m[1]);
                 $zugeordnet[] = ['datei' => $basis, 'text' => '🍇 ' . ($w['name'] ?? 'Weingut'), 'link' => '?weingut=' . rawurlencode($m[1])];
             } elseif (preg_match('/^ts-([a-f0-9]{8})-/', $basis, $m)) {
+                if (!$alleFotosZeigen && $m[1] !== $blickTastingId) { $ausgeblendet++; continue; }
                 $t = null;
                 foreach ($daten['tastings'] as $tt) { if ($tt['id'] === $m[1]) { $t = $tt; break; } }
                 $zugeordnet[] = ['datei' => $basis, 'text' => '👥 ' . ($t['titel'] ?? 'Tasting'), 'link' => '?tasting=' . rawurlencode($m[1])];
             } elseif (preg_match('/^([a-f0-9]{8})-/', $basis, $m)) {
                 $c = champagnerHolen($daten, $m[1]);
+                if (!$alleFotosZeigen && ($c === null || !champagnerInTasting($c, $blickTastingId))) { $ausgeblendet++; continue; }
                 $zugeordnet[] = ['datei' => $basis, 'text' => '🍾 ' . ($c['name'] ?? 'Champagner'), 'link' => '?ergebnis=' . rawurlencode($m[1])];
             } elseif (str_starts_with($basis, 'div-')) {
-                $offen[] = $basis;
+                $offen[] = $basis; // Unzugeordnetes immer zeigen – es wartet auf Zuordnung
             }
             // neu-/wneu-Zwischendateien bleiben außen vor
         }
         $vorschlag = $_SESSION['foto_vorschlag'] ?? null;
       ?>
+      <div class="sortier-leiste">Zeigen:
+        <a class="<?= !$alleFotosZeigen ? 'aktiv' : '' ?>" href="?fotos=1">👥 <?= e($albumTasting['titel'] ?? 'Mein Tasting') ?></a>
+        <a class="<?= $alleFotosZeigen ? 'aktiv' : '' ?>" href="?fotos=1&amp;alle=1">Alle<?= $ausgeblendet > 0 && !$alleFotosZeigen ? ' (+' . $ausgeblendet . ')' : '' ?></a>
+      </div>
 
       <?php if ($offen !== []): ?>
         <div class="card" style="border-left:5px solid var(--accent);">
@@ -4528,24 +4566,39 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       </div>
 
       <a class="knopf gross" href="?wneu=1">📷&nbsp; Neues Weingut per Foto</a>
-      <div class="sortier-leiste">Sortieren:
-        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=datum">Anlagedatum</a>
-        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=name">Name</a>
-      </div>
-      <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel=".liste-scroll">
-      <div class="liste-scroll">
-      <?php if ($daten['weingueter'] === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Weingut angelegt – unten das erste eintragen!</p></div>
-      <?php endif; ?>
-
       <?php
-        $weingutListe = $daten['weingueter'];
+        // Standard: nur die Weingüter des aktuellen Tastings; „Alle“ = Archiv
+        $alleWgZeigen = isset($_GET['alle']);
+        $wgTastingIds = weingutIdsImTasting($daten, $blickTastingId);
+        $wgTastingTitel = '';
+        foreach ($daten['tastings'] as $tt) {
+            if ($tt['id'] === $blickTastingId) {
+                $wgTastingTitel = $tt['titel'];
+                break;
+            }
+        }
+        $weingutListe = $alleWgZeigen
+            ? $daten['weingueter']
+            : array_values(array_filter($daten['weingueter'], fn($w) => isset($wgTastingIds[$w['id']])));
         if ($sortierung === 'name') {
             usort($weingutListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
         } else {
             usort($weingutListe, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
         }
       ?>
+      <div class="sortier-leiste">Zeigen:
+        <a class="<?= !$alleWgZeigen ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=<?= e($sortierung) ?>">👥 <?= e($wgTastingTitel !== '' ? $wgTastingTitel : 'Mein Tasting') ?></a>
+        <a class="<?= $alleWgZeigen ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=<?= e($sortierung) ?>&amp;alle=1">Alle (<?= count($daten['weingueter']) ?>)</a>
+      </div>
+      <div class="sortier-leiste">Sortieren:
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=datum<?= $alleWgZeigen ? '&amp;alle=1' : '' ?>">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=name<?= $alleWgZeigen ? '&amp;alle=1' : '' ?>">Name</a>
+      </div>
+      <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel=".liste-scroll">
+      <div class="liste-scroll">
+      <?php if ($weingutListe === []): ?>
+        <div class="card"><p style="color:var(--muted); font-style:italic;"><?= $alleWgZeigen ? 'Noch kein Weingut angelegt – unten das erste eintragen!' : 'In diesem Tasting wurde noch an keinem Weingut verkostet – oben auf „Alle" umschalten oder ein neues per Foto anlegen.' ?></p></div>
+      <?php endif; ?>
       <?php foreach ($weingutListe as $w): ?>
         <?php
           $fotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? ''));
