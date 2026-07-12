@@ -595,13 +595,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $erkannt = etikettErkennen($fotoName);
         // Passen die Foto-Koordinaten zu einem gespeicherten Weingut?
         $gpsHinweis = '';
+        $gpsWeingut = null;
         $gps = gpsAusFoto(BILDER_DIR . '/' . $fotoName);
         if ($gps !== null) {
-            $passendes = weingutPerKoordinaten(datenLaden(), $gps[0], $gps[1]);
-            if ($passendes !== null) {
-                $gpsHinweis = 'Die Foto-Koordinaten entsprechen dem Weingut „' . $passendes['name'] . '“ – es ist unten vorausgewählt.';
+            $gpsWeingut = weingutPerKoordinaten(datenLaden(), $gps[0], $gps[1]);
+            if ($gpsWeingut !== null) {
+                $gpsHinweis = 'Die Foto-Koordinaten entsprechen dem Weingut „' . $gpsWeingut['name'] . '“ – es ist unten vorausgewählt.';
                 if ($erkannt['weingut'] === '') {
-                    $erkannt['weingut'] = $passendes['name'];
+                    $erkannt['weingut'] = $gpsWeingut['name'];
                 }
             }
         }
@@ -610,6 +611,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vk = '';
         }
         $kat = (string)($_POST['kat'] ?? 'champagner');
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+            $kat = 'champagner';
+        }
+
+        // Etikett erkannt? Dann sofort loslegen – ohne weitere Rückfragen.
+        if ($erkannt['name'] !== '') {
+            $vkAnhang = $vk !== '' ? '&vk=' . rawurlencode($vk) : '';
+            $d0 = datenLaden();
+            $meinTid = (string)(meinTasting($d0)['id'] ?? '');
+            // Gibt es das Getränk schon in meinem Tasting? → Foto anhängen, direkt bewerten
+            foreach ($d0['champagner'] as $c) {
+                similar_text(mb_strtolower($c['name']), mb_strtolower($erkannt['name']), $proz);
+                if ($proz >= 85 && champagnerInTasting($c, $meinTid)) {
+                    fotosUmhaengen($praefix, 'neu', $c['id']);
+                    unset($_SESSION['neu']);
+                    zurueck('?bewerten=' . rawurlencode($c['id']) . $vkAnhang . '&ok=' . rawurlencode('„' . $c['name'] . '“ ist schon in der Datenbank – Foto zugeordnet, direkt bewerten!'));
+                }
+            }
+            // Weingut bestimmen: Verkosten-Kontext > GPS-Treffer > Etikett (vorhandenes oder neues)
+            $weingutId = '';
+            $weingutNeu = '';
+            if (preg_match('/^[a-f0-9]{8}$/', $vk) && weingutHolen($d0, $vk) !== null) {
+                $weingutId = $vk;
+            } elseif ($gpsWeingut !== null) {
+                $weingutId = $gpsWeingut['id'];
+            } elseif ($erkannt['weingut'] !== '') {
+                foreach ($d0['weingueter'] as $w) {
+                    if (mb_strtolower($w['name']) === mb_strtolower($erkannt['weingut'])) {
+                        $weingutId = $w['id'];
+                        break;
+                    }
+                }
+                if ($weingutId === '') {
+                    $weingutNeu = $erkannt['weingut'];
+                }
+            }
+            $neueId = bin2hex(random_bytes(4));
+            $neueWeingutId = bin2hex(random_bytes(4));
+            $nName = $erkannt['name'];
+            $nRebsorte = (string)($erkannt['rebsorte'] ?? '');
+            datenAendern(function (array $d) use ($nName, $nRebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
+                if ($weingutNeu !== '') {
+                    $d['weingueter'][] = ['id' => $neueWeingutId, 'name' => $weingutNeu, 'notiz' => '', 'zeit' => time()];
+                    $weingutId = $neueWeingutId;
+                }
+                $d['champagner'][] = ['id' => $neueId, 'name' => $nName, 'preis' => '', 'rebsorte' => $nRebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
+                if ($meinTid !== '') {
+                    foreach ($d['tastings'] as &$t) {
+                        if ($t['id'] === $meinTid) {
+                            $t['aktiv_cid'] = $neueId;
+                        }
+                    }
+                    unset($t);
+                }
+                return $d;
+            });
+            fotosUmhaengen($praefix, 'neu', $neueId);
+            unset($_SESSION['neu']);
+            zurueck('?bewerten=' . rawurlencode($neueId) . $vkAnhang . '&ok=' . rawurlencode('„' . $nName . '“ erkannt und angelegt – los geht’s! (Preis & Co. später unter „Stammdaten“ ergänzbar)'));
+        }
+
+        // Nichts erkannt: kurzes Formular zum Eintragen zeigen
         $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? ''), 'vk' => $vk, 'kat' => $kat];
         zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
     }
@@ -1069,7 +1132,102 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'div_foto_upload') {
         [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'div');
-        zurueck('?fotos=1&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+        // Sofort analysieren: Doppelte aussortieren, den Rest automatisch
+        // per Etikett (→ Getränk) bzw. GPS (→ Weingut) zuordnen.
+        $doppelt = 0;
+        $autoZugeordnet = [];
+        $offenNeu = 0;
+        if ($hochgeladen > 0) {
+            @set_time_limit(300);
+            $neueDateien = array_slice(divFotos(), 0, $hochgeladen); // die gerade hochgeladenen (neueste zuerst)
+            $neueSet = array_flip($neueDateien);
+            $bekannt = [];
+            foreach (glob(BILDER_DIR . '/*.{jpg,jpeg,png,gif,webp,JPG,JPEG,PNG,GIF,WEBP}', GLOB_BRACE) ?: [] as $pfad) {
+                $basis = basename($pfad);
+                if (isset($neueSet[$basis]) || str_starts_with($basis, 'neu-') || str_starts_with($basis, 'wneu-')) {
+                    continue;
+                }
+                $h = md5_file($pfad);
+                if ($h !== false) {
+                    $bekannt[$h] = true;
+                }
+            }
+            $d0 = datenLaden();
+            foreach ($neueDateien as $datei) {
+                $pfad = BILDER_DIR . '/' . $datei;
+                if (!is_file($pfad)) {
+                    continue;
+                }
+                $h = md5_file($pfad);
+                if ($h !== false && isset($bekannt[$h])) {
+                    unlink($pfad);
+                    thumbLoeschen($datei);
+                    $doppelt++;
+                    continue;
+                }
+                if ($h !== false) {
+                    $bekannt[$h] = true;
+                }
+                $zielC = '';
+                $zielW = '';
+                $zielName = '';
+                $erkannt = etikettErkennen($datei);
+                if ($erkannt['name'] !== '') {
+                    $best = null;
+                    $bestScore = 0;
+                    foreach ($d0['champagner'] as $c) {
+                        similar_text(mb_strtolower($c['name']), mb_strtolower($erkannt['name']), $proz);
+                        if ($proz > $bestScore) {
+                            $bestScore = $proz;
+                            $best = $c;
+                        }
+                    }
+                    if ($best !== null && $bestScore >= 55) {
+                        $zielC = $best['id'];
+                        $zielName = '🍾 ' . $best['name'];
+                    }
+                }
+                if ($zielC === '') {
+                    $gps = gpsAusFoto($pfad);
+                    if ($gps !== null) {
+                        $wg = weingutPerKoordinaten($d0, $gps[0], $gps[1]);
+                        if ($wg !== null) {
+                            $zielW = $wg['id'];
+                            $zielName = '🍇 ' . $wg['name'];
+                        }
+                    }
+                }
+                if ($zielC === '' && $zielW === '') {
+                    $offenNeu++;
+                    continue;
+                }
+                $endung = strtolower(pathinfo($datei, PATHINFO_EXTENSION));
+                $neuName = $zielC !== ''
+                    ? sprintf('%s-%s-%s.%s', $zielC, date('Ymd-His'), bin2hex(random_bytes(3)), $endung)
+                    : sprintf('wg-%s-%s-%s.%s', $zielW, date('Ymd-His'), bin2hex(random_bytes(3)), $endung);
+                if (rename($pfad, BILDER_DIR . '/' . $neuName)) {
+                    thumbLoeschen($datei);
+                    thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+                    $autoZugeordnet[] = $zielName;
+                } else {
+                    $offenNeu++;
+                }
+            }
+        }
+        $teile = [];
+        if ($autoZugeordnet !== []) {
+            $teile[] = count($autoZugeordnet) . ' automatisch zugeordnet (' . implode(', ', array_slice($autoZugeordnet, 0, 4)) . (count($autoZugeordnet) > 4 ? ', …' : '') . ')';
+        }
+        if ($doppelt > 0) {
+            $teile[] = $doppelt . ' schon vorhanden (aussortiert)';
+        }
+        if ($offenNeu > 0) {
+            $teile[] = $offenNeu . ' nicht erkannt – unten von Hand zuordnen';
+        }
+        if ($abgelehnt > 0) {
+            $teile[] = $abgelehnt . ' Datei(en) übersprungen';
+        }
+        zurueck('?fotos=1&ok=' . rawurlencode($hochgeladen . ' Foto(s) geprüft: ' . ($teile === [] ? 'nichts zu tun.' : implode(' · ', $teile))));
     }
 
     if ($aktion === 'div_foto_loeschen') {
@@ -2487,10 +2645,12 @@ if (isset($_GET['bewerten'])) {
     if ((string)$_GET['vk'] === 'ohne') {
         $kontextOhne = true;
         $ansicht = 'werkstatt';
+        $_SESSION['vk_zuletzt'] = 'ohne'; // fürs „aktuelle Weingut“ in der Status-Zeile
     } else {
         $kontextWeingut = weingutHolen($daten, (string)$_GET['vk']);
         if ($kontextWeingut !== null) {
             $ansicht = 'werkstatt';
+            $_SESSION['vk_zuletzt'] = $kontextWeingut['id'];
         }
     }
 } elseif (isset($_GET['liste'])) {
@@ -2675,26 +2835,30 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     }
     .brand { margin-right: auto; font-size: 1.15rem; color: var(--text); text-decoration: none; }
     .brand strong { color: var(--accent); font-weight: normal; }
-    #nav-toggle { display: none; }
-    .burger { display: none; }
-    nav.site-nav { display: flex; gap: 1.4rem; }
-    nav.site-nav a { color: var(--text); text-decoration: none; padding: 0.15rem 0; border-bottom: 2px solid transparent; }
-    nav.site-nav a:hover,
-    nav.site-nav a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
-    @media (max-width: 700px) {
-      .burger { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-      .burger span { display: block; width: 26px; height: 3px; background: var(--text); border-radius: 2px; transition: transform 0.25s, opacity 0.25s; }
-      nav.site-nav {
-        display: none; position: absolute; top: 100%; left: 0; right: 0;
-        flex-direction: column; gap: 0; background: var(--card);
-        border-bottom: 1px solid var(--border); box-shadow: 0 8px 16px rgba(0,0,0,0.08);
-      }
-      nav.site-nav a { padding: 0.95rem 1.4rem; border-bottom: 1px solid var(--border); }
-      #nav-toggle:checked ~ nav.site-nav { display: flex; }
-      #nav-toggle:checked ~ .burger span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
-      #nav-toggle:checked ~ .burger span:nth-child(2) { opacity: 0; }
-      #nav-toggle:checked ~ .burger span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
+    /* Status-Zeile: Wer · Tasting · Weingut · Getränk – bleibt immer oben stehen */
+    .status-zeile {
+      flex: 1; min-width: 0; display: flex; gap: 0.8rem; align-items: center;
+      overflow-x: auto; white-space: nowrap; font-size: 0.88rem;
+      scrollbar-width: none; -webkit-overflow-scrolling: touch;
     }
+    .status-zeile::-webkit-scrollbar { display: none; }
+    .status-zeile span, .status-zeile a { flex-shrink: 0; color: var(--text); text-decoration: none; }
+    .status-zeile a { color: var(--accent); }
+    /* Burger-Menü auf allen Bildschirmgrößen */
+    #nav-toggle { display: none; }
+    .burger { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .burger span { display: block; width: 26px; height: 3px; background: var(--text); border-radius: 2px; transition: transform 0.25s, opacity 0.25s; }
+    nav.site-nav {
+      display: none; position: absolute; top: 100%; left: 0; right: 0;
+      flex-direction: column; gap: 0; background: var(--card);
+      border-bottom: 1px solid var(--border); box-shadow: 0 8px 16px rgba(0,0,0,0.08);
+    }
+    nav.site-nav a { color: var(--text); text-decoration: none; padding: 0.95rem 1.4rem; border-bottom: 1px solid var(--border); }
+    nav.site-nav a:hover { color: var(--accent); }
+    #nav-toggle:checked ~ nav.site-nav { display: flex; }
+    #nav-toggle:checked ~ .burger span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
+    #nav-toggle:checked ~ .burger span:nth-child(2) { opacity: 0; }
+    #nav-toggle:checked ~ .burger span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
 
     main { flex: 1; width: 100%; max-width: 46rem; margin: 0 auto; padding: 2rem 1.2rem 4rem; }
     .zurueck { margin-bottom: 0.7rem; }
@@ -2972,18 +3136,46 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 </head>
 <body data-bereich="<?= e($bereich) ?>"<?= in_array($ansicht, ['liste', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
   <header class="site-header">
-    <a class="brand" href="/"><strong>fruthzeug</strong>.de</a>
+    <?php if ($eingeloggt): ?>
+      <?php
+        // Immer sichtbare Status-Zeile: Wer bin ich, mein Tasting, mein Weingut, mein Getränk
+        $kopfTasting = meinTasting($daten);
+        $kopfGlas = $kopfTasting !== null ? champagnerHolen($daten, (string)($kopfTasting['aktiv_cid'] ?? '')) : null;
+        $kopfVk = (string)($_SESSION['vk_zuletzt'] ?? '');
+        $kopfWeingut = $kopfVk !== '' && $kopfVk !== 'ohne' ? weingutHolen($daten, $kopfVk) : null;
+        $kopfPerson = trim((string)($_SESSION['person'] ?? ''));
+      ?>
+      <div class="status-zeile">
+        <span>👤&nbsp;<?= e($kopfPerson !== '' ? $kopfPerson : 'Gast') ?></span>
+        <?php if ($kopfTasting !== null): ?>
+          <a href="?tasting=<?= e(rawurlencode($kopfTasting['id'])) ?>">👥&nbsp;<?= e($kopfTasting['titel']) ?></a>
+        <?php endif; ?>
+        <?php if ($kopfWeingut !== null): ?>
+          <a href="?vk=<?= e(rawurlencode($kopfWeingut['id'])) ?>">🍇&nbsp;<?= e($kopfWeingut['name']) ?></a>
+        <?php elseif ($kopfVk === 'ohne'): ?>
+          <a href="?vk=ohne">🏠&nbsp;ohne Weingut</a>
+        <?php endif; ?>
+        <?php if ($kopfGlas !== null): ?>
+          <a href="?bewerten=<?= e(rawurlencode($kopfGlas['id'])) ?>">🥂&nbsp;<?= e($kopfGlas['name']) ?></a>
+        <?php endif; ?>
+      </div>
+    <?php else: ?>
+      <a class="brand" href="./"><strong>Tasting</strong></a>
+    <?php endif; ?>
     <button type="button" id="info-knopf" aria-label="Anleitung: So wird verkostet" title="So wird verkostet">ℹ️</button>
     <input type="checkbox" id="nav-toggle" aria-hidden="true">
     <label for="nav-toggle" class="burger" aria-label="Menü öffnen">
       <span></span><span></span><span></span>
     </label>
     <nav class="site-nav">
-      <a href="/">Start</a>
-      <a href="/#projekte">Projekte</a>
-      <a href="/projekte/champagner/" aria-current="page">Tasting</a>
-      <a href="mailto:post@fruthzeug.de">Kontakt</a>
+      <a href="./">🥂 Verkosten</a>
+      <a href="?liste=1">🔍 Entdecken</a>
+      <a href="?tasting=1">👥 Tastings</a>
+      <a href="?weingueter=1">🍇 Weingüter</a>
+      <a href="?fotos=1">📸 Fotoalbum</a>
+      <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
       <a href="#" id="neu-laden">&#10227; Neu laden</a>
+      <a href="/">fruthzeug.de</a>
     </nav>
   </header>
 
