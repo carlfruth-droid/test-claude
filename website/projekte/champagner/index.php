@@ -3666,19 +3666,49 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php
           $tastingsSortiert = $daten['tastings'];
           usort($tastingsSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+          // Meine Tastings: überall dort, wo ich Teilnehmer bin oder schon bewertet habe
+          $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
+          $meineTastingIds = [];
+          if ($ich !== '') {
+              foreach ($daten['tastings'] as $t) {
+                  foreach (($t['teilnehmer'] ?? []) as $p) {
+                      if (mb_strtolower(trim((string)$p['name'])) === $ich) {
+                          $meineTastingIds[$t['id']] = true;
+                      }
+                  }
+              }
+              foreach ($daten['bewertungen'] as $bw) {
+                  if ((string)($bw['tasting_id'] ?? '') !== '' && mb_strtolower(trim((string)$bw['person'])) === $ich) {
+                      $meineTastingIds[(string)$bw['tasting_id']] = true;
+                  }
+              }
+          }
+          $einladungsTreffer = teilnehmerZuToken($daten, (string)($_COOKIE['einladung'] ?? ''));
+          if ($einladungsTreffer !== null) {
+              $meineTastingIds[$einladungsTreffer[0]['id']] = true;
+          }
+          $aktuellesTid = (string)(meinTasting($daten)['id'] ?? '');
+          $meine = array_values(array_filter($tastingsSortiert, fn($t) => isset($meineTastingIds[$t['id']])));
+          $weitere = array_values(array_filter($tastingsSortiert, fn($t) => !isset($meineTastingIds[$t['id']])));
         ?>
-        <?php foreach ($tastingsSortiert as $t): ?>
-          <?php $tFotos = tastingFotos($t['id']); ?>
-          <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>">
-            <?php if ($tFotos !== []): ?>
-              <img class="thumb" src="<?= e(thumbUrl($tFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
-            <?php else: ?>
-              <span class="k-icon">👥</span>
-            <?php endif; ?>
-            <span class="k-text"><b><?= e($t['titel']) ?></b>
-              <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
-            </span>
-          </a>
+        <?php foreach ([['🥂 Meine Tastings', $meine], ['Weitere Tastings', $weitere]] as [$gruppenTitel, $gruppe]): ?>
+          <?php if ($gruppe === []) { continue; } ?>
+          <?php if ($meine !== [] && $weitere !== []): ?>
+            <p class="untertitel" style="margin:0.8rem 0 0.5rem;"><?= $gruppenTitel ?></p>
+          <?php endif; ?>
+          <?php foreach ($gruppe as $t): ?>
+            <?php $tFotos = tastingFotos($t['id']); ?>
+            <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>"<?= $t['id'] === $aktuellesTid ? ' style="border-left:5px solid var(--accent);"' : '' ?>>
+              <?php if ($tFotos !== []): ?>
+                <img class="thumb" src="<?= e(thumbUrl($tFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
+              <?php else: ?>
+                <span class="k-icon">👥</span>
+              <?php endif; ?>
+              <span class="k-text"><b><?= e($t['titel']) ?></b><?= $t['id'] === $aktuellesTid ? ' <span class="bewerter-chip">✓ aktuell</span>' : '' ?>
+                <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
+              </span>
+            </a>
+          <?php endforeach; ?>
         <?php endforeach; ?>
         <?php if (darfTastingsAnlegen($benutzerAktiv)): ?>
           <div class="card" style="margin-top:1rem;">
