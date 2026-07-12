@@ -265,7 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
@@ -342,7 +342,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'weingut_id' => $weingutId, 'typ' => 'champagner', 'zeit' => time()];
             return $d;
         });
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
@@ -1791,6 +1791,18 @@ $bereich = match ($ansicht) {
 
 $personVorschlag = (string)($_SESSION['person'] ?? '');
 $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
+
+// Getränke-Kategorien: Champagner ist aktiv, die anderen sind vorbereitet
+$KATEGORIEN_GETRAENKE = [
+    'champagner' => ['🍾', 'Champagner', true],
+    'rotwein'    => ['🍷', 'Rotwein', false],
+    'weisswein'  => ['🥂', 'Weißwein', false],
+    'bier'       => ['🍺', 'Bier', false],
+];
+$kategorie = (string)($_GET['kat'] ?? 'champagner');
+if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
+    $kategorie = 'champagner';
+}
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -3428,11 +3440,23 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     <?php else: ?>
       <!-- ==================== ÜBERSICHT ==================== -->
       <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf" href="?liste=1">Champagner</a>
+        <a class="knopf" href="?liste=1">Getränke</a>
         <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
         <a class="knopf zweit" href="?fotos=1">Fotos</a>
       </div>
 
+      <div class="sortier-leiste" style="margin-bottom:0.9rem;">
+        <?php foreach ($KATEGORIEN_GETRAENKE as $kSchluessel => [$kIcon, $kName, $kAktiviert]): ?>
+          <a class="<?= $kategorie === $kSchluessel ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kSchluessel) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
+        <?php endforeach; ?>
+      </div>
+
+      <?php if (!$KATEGORIEN_GETRAENKE[$kategorie][2]): ?>
+        <div class="card">
+          <h2><?= $KATEGORIEN_GETRAENKE[$kategorie][0] ?> <?= e($KATEGORIEN_GETRAENKE[$kategorie][1]) ?> – bald verfügbar</h2>
+          <p>Die Kategorie ist schon vorbereitet – die Verkostung startet hier, sobald ihr sie braucht. Bis dahin: <a href="?liste=1">zurück zum Champagner</a>. 🥂</p>
+        </div>
+      <?php else: ?>
       <a class="knopf gross" href="?neu=1">📷&nbsp; Neue Flasche erfassen</a>
       <div class="sortier-leiste">Sortieren:
         <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=datum">Anlagedatum</a>
@@ -3494,6 +3518,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         </div>
       <?php endif; ?>
       </div>
+      <?php endif; ?>
     <?php endif; ?>
   </main>
 
