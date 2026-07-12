@@ -588,6 +588,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung von ' . $person . ' gelöscht.'));
     }
 
+    if ($aktion === 'tasting_foto_upload') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $ziel = null;
+        foreach (datenLaden()['tastings'] as $t) {
+            if ($t['id'] === $tid) { $ziel = $t; break; }
+        }
+        if ($ziel === null) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Dieses Tasting existiert nicht (mehr).'));
+        }
+        [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'ts-' . $tid);
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+    }
+
+    if ($aktion === 'tasting_foto_loeschen') {
+        $name = basename((string)($_POST['datei'] ?? ''));
+        $pfad = BILDER_DIR . '/' . $name;
+        if (preg_match('/^ts-([a-f0-9]{8})-.*\.(jpe?g|png|gif|webp)$/i', $name, $m) && is_file($pfad)) {
+            unlink($pfad);
+            thumbLoeschen($name);
+            zurueck('?tasting=' . rawurlencode($m[1]) . '&ok=' . rawurlencode('Foto gelöscht.'));
+        }
+        zurueck('?tasting=1&fehler=' . rawurlencode('Foto nicht gefunden.'));
+    }
+
     if ($aktion === 'foto_analysieren') {
         // Ein nicht zugeordnetes Album-Foto per Etikett + GPS auswerten
         $datei = basename((string)($_POST['datei'] ?? ''));
@@ -1224,6 +1248,17 @@ function weingutFotos(string $id): array
         return [];
     }
     $treffer = glob(BILDER_DIR . '/wg-' . $id . '-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
+    usort($treffer, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
+    return array_map('basename', $treffer);
+}
+
+/** Fotos zu einem Tasting (neueste zuerst). */
+function tastingFotos(string $id): array
+{
+    if (!preg_match('/^[a-f0-9]{8}$/', $id)) {
+        return [];
+    }
+    $treffer = glob(BILDER_DIR . '/ts-' . $id . '-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
     usort($treffer, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
     return array_map('basename', $treffer);
 }
@@ -2562,6 +2597,37 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         </div>
 
+        <?php $tsFotos = tastingFotos($aktivesTasting['id']); ?>
+        <div class="card">
+          <h2>📸 Fotos vom Tasting</h2>
+          <?php if ($tsFotos === []): ?>
+            <p style="color:var(--muted); font-style:italic;">Noch keine Fotos – z. B. ein Gruppenbild der Runde.</p>
+          <?php else: ?>
+            <div class="foto-galerie">
+              <?php foreach ($tsFotos as $foto): ?>
+                <div class="foto">
+                  <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                    <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
+                  </a>
+                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="tasting_foto_loeschen">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Foto löschen">&#10005;</button>
+                  </form>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
+          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_foto_upload">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <input type="file" name="fotos[]" accept="image/*" capture="environment" multiple required>
+            <button class="knopf" type="submit">Foto hochladen</button>
+          </form>
+        </div>
+
         <?php
           // Aktiv = hat in diesem Tasting schon bewertet (Name kommt in Bewertungen vor)
           $aktivNamen = [];
@@ -2683,8 +2749,13 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           usort($tastingsSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
         ?>
         <?php foreach ($tastingsSortiert as $t): ?>
+          <?php $tFotos = tastingFotos($t['id']); ?>
           <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>">
-            <span class="k-icon">👥</span>
+            <?php if ($tFotos !== []): ?>
+              <img class="thumb" src="<?= e(thumbUrl($tFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
+            <?php else: ?>
+              <span class="k-icon">👥</span>
+            <?php endif; ?>
             <span class="k-text"><b><?= e($t['titel']) ?></b>
               <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
             </span>
@@ -3333,6 +3404,10 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             if (preg_match('/^wg-([a-f0-9]{8})-/', $basis, $m)) {
                 $w = weingutHolen($daten, $m[1]);
                 $zugeordnet[] = ['datei' => $basis, 'text' => '🍇 ' . ($w['name'] ?? 'Weingut'), 'link' => '?weingut=' . rawurlencode($m[1])];
+            } elseif (preg_match('/^ts-([a-f0-9]{8})-/', $basis, $m)) {
+                $t = null;
+                foreach ($daten['tastings'] as $tt) { if ($tt['id'] === $m[1]) { $t = $tt; break; } }
+                $zugeordnet[] = ['datei' => $basis, 'text' => '👥 ' . ($t['titel'] ?? 'Tasting'), 'link' => '?tasting=' . rawurlencode($m[1])];
             } elseif (preg_match('/^([a-f0-9]{8})-/', $basis, $m)) {
                 $c = champagnerHolen($daten, $m[1]);
                 $zugeordnet[] = ['datei' => $basis, 'text' => '🍾 ' . ($c['name'] ?? 'Champagner'), 'link' => '?ergebnis=' . rawurlencode($m[1])];
