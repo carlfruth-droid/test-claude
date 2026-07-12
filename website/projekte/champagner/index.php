@@ -383,6 +383,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Etikett erkannt – die Vorschläge stehen unten in den Bearbeiten-Feldern. Prüfen und speichern!'));
     }
 
+    if ($aktion === 'titelbild_setzen') {
+        $typ = (string)($_POST['typ'] ?? '');
+        $id = (string)($_POST['id'] ?? '');
+        $datei = basename((string)($_POST['datei'] ?? ''));
+        $weiter = $typ === 'weingut' ? '?weingut=' . rawurlencode($id) : '?ergebnis=' . rawurlencode($id);
+        $vorhandene = $typ === 'weingut' ? weingutFotos($id) : fotosFuer($id);
+        if (!in_array($datei, $vorhandene, true)) {
+            zurueck($weiter . '&fehler=' . rawurlencode('Dieses Foto wurde nicht gefunden.'));
+        }
+        datenAendern(function (array $d) use ($typ, $id, $datei): array {
+            $liste = $typ === 'weingut' ? 'weingueter' : 'champagner';
+            foreach ($d[$liste] as &$eintrag) {
+                if ($eintrag['id'] === $id) {
+                    $eintrag['titelbild'] = $datei;
+                }
+            }
+            unset($eintrag);
+            return $d;
+        });
+        zurueck($weiter . '&ok=' . rawurlencode('Titelbild gesetzt – dieses Foto erscheint jetzt überall als Vorschau. ⭐'));
+    }
+
     if ($aktion === 'champagner_bearbeiten') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $name = trim((string)($_POST['name'] ?? ''));
@@ -1294,6 +1316,15 @@ function tastingFotos(string $id): array
     $treffer = glob(BILDER_DIR . '/ts-' . $id . '-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
     usort($treffer, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
     return array_map('basename', $treffer);
+}
+
+/** Gewähltes Titelbild an den Anfang stellen – es dient überall als Vorschaubild. */
+function mitTitelbild(array $fotos, string $titelbild): array
+{
+    if ($titelbild === '' || !in_array($titelbild, $fotos, true)) {
+        return $fotos;
+    }
+    return array_merge([$titelbild], array_values(array_diff($fotos, [$titelbild])));
 }
 
 /** Diverse Fotos des Albums (neueste zuerst). */
@@ -2308,6 +2339,12 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       border: none; border-radius: 6px; padding: 4px 9px; cursor: pointer;
       background: rgba(0,0,0,0.55); color: #fff; font-size: 0.85rem;
     }
+    .foto form.titelbild-form { left: 6px; right: auto; }
+    .foto .titelbild-marke {
+      position: absolute; top: 6px; left: 6px;
+      background: var(--stern); color: #fff; border-radius: 6px;
+      padding: 4px 9px; font-size: 0.85rem;
+    }
     .sortier-leiste { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.7rem; }
     .sortier-leiste a {
       color: var(--muted); text-decoration: none;
@@ -2511,7 +2548,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           usort($wgSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
         ?>
         <?php foreach ($wgSortiert as $w): ?>
-          <?php $wFotos = weingutFotos($w['id']); ?>
+          <?php $wFotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? '')); ?>
           <a class="kachel filterbar" href="?vk=<?= e(rawurlencode($w['id'])) ?>">
             <?php if ($wFotos !== []): ?>
               <img class="thumb" src="<?= e(thumbUrl($wFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
@@ -2560,7 +2597,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php
             $bewertungen = bewertungenFuer($daten, $c['id']);
             $gesamt      = gesamtSchnitt($bewertungen);
-            $fotos       = fotosFuer($c['id']);
+            $fotos       = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
           ?>
           <div class="card flasche filterbar">
             <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
@@ -3030,7 +3067,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       </div>
 
       <?php
-        $fotos = fotosFuer($aktiverChampagner['id']);
+        $fotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? ''));
         $erkanntVorschlag = null;
         if (($_SESSION['erkannt']['cid'] ?? '') === $aktiverChampagner['id']) {
             $erkanntVorschlag = $_SESSION['erkannt'];
@@ -3073,12 +3110,26 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php if ($fotos === []): ?>
           <p style="color:var(--muted); font-style:italic;">Noch keine Fotos zu diesem Champagner.</p>
         <?php else: ?>
+          <?php $titelbildAktuell = (string)($aktiverChampagner['titelbild'] ?? ''); ?>
           <div class="foto-galerie">
-            <?php foreach ($fotos as $foto): ?>
+            <?php foreach ($fotos as $i => $foto): ?>
+              <?php $istTitelbild = $titelbildAktuell !== '' ? $foto === $titelbildAktuell : $i === 0; ?>
               <div class="foto">
                 <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
                   <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
                 </a>
+                <?php if ($istTitelbild): ?>
+                  <span class="titelbild-marke" title="Titelbild – erscheint als Vorschau in den Listen">⭐</span>
+                <?php elseif ($eingeloggt): ?>
+                  <form method="post" class="titelbild-form">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="titelbild_setzen">
+                    <input type="hidden" name="typ" value="champagner">
+                    <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Als Titelbild festlegen">☆</button>
+                  </form>
+                <?php endif; ?>
                 <?php if ($eingeloggt): ?>
                   <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
                     <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -3090,6 +3141,9 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               </div>
             <?php endforeach; ?>
           </div>
+          <?php if ($eingeloggt && count($fotos) > 1): ?>
+            <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (Vorschau in den Listen). Mit ☆ legst du ein anderes fest.</p>
+          <?php endif; ?>
         <?php endif; ?>
         <?php if ($eingeloggt): ?>
           <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
@@ -3579,7 +3633,7 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       ?>
       <?php foreach ($weingutListe as $w): ?>
         <?php
-          $fotos = weingutFotos($w['id']);
+          $fotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? ''));
           $anzahlChampagner = count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id']));
           $kurznotiz = trim((string)($w['notiz'] ?? ''));
           if (mb_strlen($kurznotiz) > 120) {
@@ -3692,18 +3746,32 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
       <?php endif; ?>
 
-      <?php $fotos = weingutFotos($aktivesWeingut['id']); ?>
+      <?php $fotos = mitTitelbild(weingutFotos($aktivesWeingut['id']), (string)($aktivesWeingut['titelbild'] ?? '')); ?>
       <div class="card">
         <h2>Bilder</h2>
         <?php if ($fotos === []): ?>
           <p style="color:var(--muted); font-style:italic;">Noch keine Bilder zu diesem Weingut.</p>
         <?php else: ?>
+          <?php $titelbildAktuell = (string)($aktivesWeingut['titelbild'] ?? ''); ?>
           <div class="foto-galerie">
-            <?php foreach ($fotos as $foto): ?>
+            <?php foreach ($fotos as $i => $foto): ?>
+              <?php $istTitelbild = $titelbildAktuell !== '' ? $foto === $titelbildAktuell : $i === 0; ?>
               <div class="foto">
                 <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
                   <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
                 </a>
+                <?php if ($istTitelbild): ?>
+                  <span class="titelbild-marke" title="Titelbild – erscheint als Vorschau in den Listen">⭐</span>
+                <?php elseif ($eingeloggt): ?>
+                  <form method="post" class="titelbild-form">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="titelbild_setzen">
+                    <input type="hidden" name="typ" value="weingut">
+                    <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Als Titelbild festlegen">☆</button>
+                  </form>
+                <?php endif; ?>
                 <?php if ($eingeloggt): ?>
                   <form method="post" onsubmit="return confirm('Dieses Bild wirklich löschen?');">
                     <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -3715,6 +3783,9 @@ if (!isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               </div>
             <?php endforeach; ?>
           </div>
+          <?php if ($eingeloggt && count($fotos) > 1): ?>
+            <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (Vorschau in den Listen). Mit ☆ legst du ein anderes fest.</p>
+          <?php endif; ?>
         <?php endif; ?>
         <?php if ($eingeloggt): ?>
           <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
