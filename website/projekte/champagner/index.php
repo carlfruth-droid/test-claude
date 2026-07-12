@@ -246,29 +246,96 @@ function sortenLabel(string $typ): string
     return $typ === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
 }
 
-/** Gängige Rebsorten bzw. Bierstile je Getränkeart – zum Antippen statt Tippen. */
+/**
+ * Gängige Rebsorten, Weinstile bzw. Bierstile je Getränkeart – zum Antippen
+ * statt Tippen, jeweils mit kurzer Erklärung (erscheint beim Antippen).
+ */
 function sortenVorschlaege(string $typ): array
 {
     return match ($typ) {
-        'rotwein'   => ['Spätburgunder', 'Merlot', 'Cabernet Sauvignon', 'Syrah/Shiraz', 'Tempranillo', 'Primitivo', 'Sangiovese', 'Nebbiolo', 'Garnacha', 'Malbec', 'Blaufränkisch', 'Zweigelt', 'Dornfelder', 'Cuvée'],
-        'weisswein' => ['Riesling', 'Chardonnay', 'Sauvignon Blanc', 'Grauburgunder', 'Weißburgunder', 'Grüner Veltliner', 'Gewürztraminer', 'Silvaner', 'Müller-Thurgau', 'Chenin Blanc', 'Albariño', 'Viognier', 'Verdejo', 'Cuvée'],
-        'bier'      => ['Pils', 'Helles', 'Weizen', 'IPA', 'Pale Ale', 'Lager', 'Dunkles', 'Bock', 'Stout', 'Porter', 'Kellerbier', 'Kölsch', 'Altbier', 'Sauerbier'],
-        default     => ['Chardonnay', 'Pinot Noir', 'Meunier', 'Blanc de Blancs', 'Blanc de Noirs', 'Rosé', 'Cuvée'],
+        'rotwein' => [
+            'Spätburgunder'      => 'auch Pinot Noir – elegant, rote Frucht (Kirsche, Erdbeere), feines Tannin',
+            'Merlot'             => 'weich und rund, Pflaume und dunkle Beeren, wenig Kanten',
+            'Cabernet Sauvignon' => 'kräftig, Cassis und Paprika, deutliches Tannin, reift lange',
+            'Syrah/Shiraz'       => 'würzig – schwarzer Pfeffer, dunkle Frucht, oft rauchig',
+            'Tempranillo'        => 'die Rioja-Traube – Kirsche, Leder, Vanille vom Fass',
+            'Primitivo'          => 'auch Zinfandel – süßfruchtig und kräftig, viel Wärme',
+            'Sangiovese'         => 'die Chianti-Traube – Sauerkirsche, Kräuter, lebendige Säure',
+            'Nebbiolo'           => 'die Barolo-Traube – hell in der Farbe, aber mächtiges Tannin, Rose und Teer',
+            'Garnacha'           => 'auch Grenache – warm, Himbeere und Gewürz, oft im Verschnitt',
+            'Malbec'             => 'Argentiniens Star – dunkel, samtig, Brombeere und Veilchen',
+            'Blaufränkisch'      => 'Österreich – dunkle Kirsche, Pfeffer, frische Säure',
+            'Zweigelt'           => 'Österreichs häufigste rote – fruchtig-weich, Kirsche',
+            'Bardolino'          => 'leichter Italiener vom Gardasee (Corvina-Verschnitt) – frisch, Kirsche',
+            'Valpolicella'       => 'norditalienischer Klassiker, gleiche Trauben wie Amarone, aber leicht',
+            'Ripasso'            => 'Valpolicella „aufgezogen“ am Amarone-Trester – kräftiger, samtig',
+            'Amarone'            => 'aus getrockneten (rosinierten) Trauben – wuchtig, süßliche Frucht, hoher Alkohol',
+            'Chianti'            => 'Toskana, aus Sangiovese – Kirsche, Kräuter, gute Säure zum Essen',
+            'Rioja'              => 'Spanien, meist Tempranillo – Vanille und Kokos durch Fassreife',
+            'Cuvée'              => 'Verschnitt mehrerer Rebsorten',
+        ],
+        'weisswein' => [
+            'Riesling'         => 'Deutschlands Königin – Pfirsich, Apfel, spannende Säure, oft mineralisch',
+            'Chardonnay'       => 'vielseitig – schlank-mineralisch (Chablis) bis cremig-buttrig (Holzfass)',
+            'Sauvignon Blanc'  => 'Stachelbeere, frisch gemähtes Gras, exotische Frucht – knackig frisch',
+            'Grauburgunder'    => 'auch Pinot Grigio – mild, Birne und Nuss, unkompliziert',
+            'Weißburgunder'    => 'zart – Apfel, Blüten, sanfte Säure, guter Essensbegleiter',
+            'Grüner Veltliner' => 'Österreich – das berühmte „Pfefferl“, Apfel, Zitrus',
+            'Gewürztraminer'   => 'Duftwunder – Rose, Litschi, Gewürz, oft leicht süß',
+            'Silvaner'         => 'Franken – erdig-ruhig, Birne, dezente Säure',
+            'Müller-Thurgau'   => 'leicht und blumig, Muskatnote, früh zu trinken',
+            'Chenin Blanc'     => 'Loire und Südafrika – Quitte, Honig, von trocken bis edelsüß',
+            'Albariño'         => 'Spaniens Atlantikküste – salzig-frisch, Aprikose, Zitrus',
+            'Viognier'         => 'üppig – Aprikose, Blüten, cremige Textur',
+            'Verdejo'          => 'Spanien (Rueda) – grasig-frisch, Fenchel, Zitrus',
+            'Soave'            => 'Norditalien (Garganega-Traube) – zart, Mandel, weiße Blüten',
+            'Lugana'           => 'vom Gardasee – cremig und doch frisch, Pfirsich, Mandel',
+            'Verdicchio'       => 'Marken – frisch, Mandel im Abgang, gute Säure',
+            'Chablis'          => 'Chardonnay aus dem nördlichen Burgund – stahlig, mineralisch, kein Holz',
+            'Muskateller'      => 'duftet nach Traube pur – Blüten, Muskat, meist leicht',
+            'Cuvée'            => 'Verschnitt mehrerer Rebsorten',
+        ],
+        'bier' => [
+            'Pils'       => 'hopfenbetont, schlank, feinherb – der deutsche Klassiker',
+            'Helles'     => 'malzig-mild, süffig, wenig Bittere – Bayerns Antwort aufs Pils',
+            'Weizen'     => 'obergärig, Banane und Nelke von der Hefe, spritzig',
+            'IPA'        => 'India Pale Ale – stark gehopft, tropische Frucht, kräftige Bittere',
+            'Pale Ale'   => 'wie IPA, aber gemäßigter – fruchtiger Hopfen, ausgewogen',
+            'Lager'      => 'untergärig, klar und sauber, dezent gehopft',
+            'Dunkles'    => 'dunkles Malz – Brotkruste, Karamell, mild',
+            'Bock'       => 'Starkbier – malzig, kräftig, oft süßlich, mehr Alkohol',
+            'Stout'      => 'fast schwarz – Röstaromen, Kaffee, Schokolade, cremig',
+            'Porter'     => 'dunkel wie Stout, meist etwas leichter und süßer',
+            'Kellerbier' => 'unfiltriert und naturtrüb – hefig, frisch vom Fass',
+            'Kölsch'     => 'hell, obergärig, schlank – nur aus Köln',
+            'Altbier'    => 'kupferfarben, obergärig – Düsseldorfs malzig-herbe Antwort',
+            'Sauerbier'  => 'gezielt säuerlich (Gose, Berliner Weisse) – erfrischend, oft fruchtig',
+        ],
+        default => [
+            'Chardonnay'       => 'bringt Frische, Zitrus und Eleganz in den Champagner',
+            'Pinot Noir'       => 'gibt Kraft, Struktur und rote Frucht',
+            'Meunier'          => 'macht ihn fruchtig, weich und früh zugänglich',
+            'Blanc de Blancs'  => 'nur aus weißen Trauben (Chardonnay) – fein und frisch',
+            'Blanc de Noirs'   => 'weiß gekeltert aus roten Trauben – kraftvoller Stil',
+            'Rosé'             => 'mit rotem Wein oder Maischekontakt – Beerenfrucht',
+            'Millésime'        => 'Jahrgangs-Champagner – nur aus einem einzigen (guten) Jahr',
+            'Cuvée'            => 'Verschnitt aus Trauben, Lagen und Jahrgängen – der Normalfall',
+        ],
     };
 }
 
-/** Antipp-Chips für Rebsorte/Stil: füllen das Textfeld, umschaltbar je Getränkeart. */
+/** Antipp-Chips für Rebsorte/Stil: füllen das Textfeld, zeigen beim Antippen eine Kurzerklärung. */
 function sortenChips(string $zielId, string $aktiveKat): string
 {
     $html = '<div class="sorten-chips" data-ziel="' . e($zielId) . '">';
     foreach (['champagner', 'rotwein', 'weisswein', 'bier'] as $k) {
         $html .= '<div class="sorten-set" data-kat="' . $k . '"' . ($k === $aktiveKat ? '' : ' hidden') . '>';
-        foreach (sortenVorschlaege($k) as $s) {
-            $html .= '<button type="button" class="sorte">' . e($s) . '</button>';
+        foreach (sortenVorschlaege($k) as $s => $info) {
+            $html .= '<button type="button" class="sorte" data-info="' . e($info) . '">' . e($s) . '</button>';
         }
         $html .= '</div>';
     }
-    return $html . '</div>';
+    return $html . '<p class="sorten-info" hidden></p></div>';
 }
 
 /**
@@ -2728,6 +2795,8 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'beitreten';
 } elseif (isset($_GET['verwaltung'])) {
     $ansicht = 'verwaltung';
+} elseif (isset($_GET['meine'])) {
+    $ansicht = 'meine';
 }
 
 // Bereich für die Tab-Leiste unten
@@ -2985,6 +3054,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       font-size: 0.9rem; cursor: pointer; font-family: inherit;
     }
     .sorten-chips button.sorte.gewaehlt { background: var(--accent-hell); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+    .sorten-info { color: var(--muted); font-size: 0.88rem; margin: 0.2rem 0 0.4rem; }
     details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
     details.card summary::-webkit-details-marker { display: none; }
     details.card summary::before { content: '▸ '; }
@@ -3192,7 +3262,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $kopfPerson = trim((string)($_SESSION['person'] ?? ''));
       ?>
       <div class="status-zeile">
-        <span>👤&nbsp;<?= e($kopfPerson !== '' ? $kopfPerson : 'Gast') ?></span>
+        <a href="?meine=1">👤&nbsp;<?= e($kopfPerson !== '' ? $kopfPerson : 'Gast') ?></a>
         <?php if ($kopfTasting !== null): ?>
           <a href="?tasting=<?= e(rawurlencode($kopfTasting['id'])) ?>">👥&nbsp;<?= e($kopfTasting['titel']) ?></a>
         <?php endif; ?>
@@ -3215,6 +3285,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     </label>
     <nav class="site-nav">
       <a href="./">🥂 Verkosten</a>
+      <a href="?meine=1">📖 Meine Liste</a>
       <a href="?liste=1">🔍 Entdecken</a>
       <a href="?tasting=1">👥 Tastings</a>
       <a href="?weingueter=1">🍇 Weingüter</a>
@@ -3253,6 +3324,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <p class="zurueck"><a href="?tasting=1">&larr; Zur Tasting-&Uuml;bersicht</a></p>
       <h1>Verwaltung 🛠️</h1>
       <p class="untertitel">Benutzer, Getränke und Weingüter – nur für Administratoren.</p>
+    <?php elseif ($ansicht === 'meine'): ?>
+      <h1>Meine Verkostungen 📖</h1>
+      <p class="untertitel">Dein persönliches Verkostungsbuch – alles, was du probiert und bewertet hast.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
@@ -3973,6 +4047,107 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <h2>✉️ Kontakt</h2>
           <p>Wünsche und Fragen an: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
         </div>
+      <?php endif; ?>
+
+    <?php elseif ($ansicht === 'meine'): ?>
+      <!-- ==================== MEIN VERKOSTUNGSBUCH ==================== -->
+      <?php if (!$eingeloggt): ?>
+        <div class="card"><?= loginFormular('?meine=1') ?></div>
+      <?php else: ?>
+        <?php $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? ''))); ?>
+        <?php if ($ich === ''): ?>
+          <div class="card">
+            <p style="margin-bottom:0.8rem;">Wir kennen deinen Namen noch nicht. Tritt einem Tasting bei oder gib bei deiner ersten Bewertung deinen Namen an – danach sammelt sich hier dein Verkostungsbuch.</p>
+            <a class="knopf" href="?tasting=1">Zu den Tastings</a>
+          </div>
+        <?php else: ?>
+          <?php
+            $tastingTitelListe = [];
+            foreach ($daten['tastings'] as $t) {
+                $tastingTitelListe[$t['id']] = $t['titel'];
+            }
+            // Meine Bewertungen einsammeln (neueste eigene Bewertung je Getränk)
+            $eintraege = [];
+            $flaschenSumme = 0;
+            foreach ($daten['bewertungen'] as $b) {
+                if (mb_strtolower(trim((string)$b['person'])) !== $ich) {
+                    continue;
+                }
+                $c = champagnerHolen($daten, (string)$b['champagner_id']);
+                if ($c === null) {
+                    continue; // Getränk wurde gelöscht
+                }
+                $summe = 0;
+                $anz = 0;
+                foreach ($b['werte'] as $w) { $summe += (int)$w; $anz++; }
+                $wg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
+                $flaschenSumme += (int)($b['flaschen'] ?? 0);
+                $eintraege[$c['id']] = [
+                    'c'       => $c,
+                    'sterne'  => $anz > 0 ? $summe / $anz : null,
+                    'zeit'    => (int)($b['zeit'] ?? 0),
+                    'notiz'   => trim((string)($b['notiz'] ?? '')),
+                    'weingut' => $wg !== null ? $wg['name'] : '',
+                    'tasting' => $tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? '',
+                ];
+            }
+            $eintraege = array_values($eintraege);
+            $msort = (string)($_GET['msort'] ?? 'datum');
+            match ($msort) {
+                'name'    => usort($eintraege, fn($x, $y) => strcmp(mb_strtolower($x['c']['name']), mb_strtolower($y['c']['name']))),
+                'tasting' => usort($eintraege, fn($x, $y) => strcmp(mb_strtolower($x['tasting']), mb_strtolower($y['tasting'])) ?: ($y['zeit'] <=> $x['zeit'])),
+                'weingut' => usort($eintraege, fn($x, $y) => strcmp(mb_strtolower($x['weingut'] !== '' ? $x['weingut'] : '~'), mb_strtolower($y['weingut'] !== '' ? $y['weingut'] : '~')) ?: ($y['zeit'] <=> $x['zeit'])),
+                'sterne'  => usort($eintraege, fn($x, $y) => (($y['sterne'] ?? 0) <=> ($x['sterne'] ?? 0))),
+                default   => usort($eintraege, fn($x, $y) => $y['zeit'] <=> $x['zeit']),
+            };
+          ?>
+          <div class="card" style="border-left:5px solid var(--accent);">
+            <p><b>👤 <?= e(trim((string)$_SESSION['person'])) ?></b> – du hast <b><?= count($eintraege) ?></b> Getränk(e) bewertet<?= $flaschenSumme > 0 ? ' und <b>' . $flaschenSumme . '</b> Flasche(n) mitgenommen' : '' ?>. 🥂</p>
+          </div>
+          <?php if ($eintraege !== []): ?>
+            <div class="sortier-leiste">Sortieren:
+              <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=datum">Datum</a>
+              <a class="<?= $msort === 'name' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=name">Name</a>
+              <a class="<?= $msort === 'tasting' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=tasting">Tasting</a>
+              <a class="<?= $msort === 'weingut' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=weingut">Weingut</a>
+              <a class="<?= $msort === 'sterne' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=sterne">Meine Sterne</a>
+            </div>
+            <input type="search" class="filter-feld" placeholder="🔍 Name, Traube, Weingut, Tasting suchen …" data-ziel="#meine-liste">
+            <div id="meine-liste">
+              <?php foreach ($eintraege as $ein): ?>
+                <?php
+                  $c = $ein['c'];
+                  $fotos = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
+                  $meta = [];
+                  $meta[] = date('d.m.Y', $ein['zeit']);
+                  if (trim((string)($c['rebsorte'] ?? '')) !== '') { $meta[] = (string)$c['rebsorte']; }
+                  if ($ein['weingut'] !== '') { $meta[] = '🍇 ' . $ein['weingut']; }
+                  if ($ein['tasting'] !== '') { $meta[] = '👥 ' . $ein['tasting']; }
+                ?>
+                <div class="card flasche filterbar">
+                  <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
+                    <?php if ($fotos !== []): ?>
+                      <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
+                    <?php else: ?>
+                      <span class="thumb platzhalter"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
+                    <?php endif; ?>
+                    <span class="flasche-info">
+                      <span class="f-name"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '' ?> <?= e($c['name']) ?></span>
+                      <span class="f-meta"><?= e(implode(' · ', $meta)) ?></span>
+                      <span class="f-wertung"><?= sterneAnzeige($ein['sterne']) ?></span>
+                      <?php if ($ein['notiz'] !== ''): ?>
+                        <span class="f-meta" style="font-style:italic;">„<?= e(mb_strlen($ein['notiz']) > 90 ? mb_substr($ein['notiz'], 0, 90) . ' …' : $ein['notiz']) ?>“</span>
+                      <?php endif; ?>
+                    </span>
+                  </a>
+                  <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>&amp;person=<?= e(rawurlencode((string)$_SESSION['person'])) ?>">Ändern</a>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          <?php else: ?>
+            <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Bewertungen von dir – ab zum Verkosten! 🥂</p></div>
+          <?php endif; ?>
+        <?php endif; ?>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
@@ -5350,6 +5525,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           b.classList.toggle('gewaehlt', teile.indexOf(b.textContent.trim().toLowerCase()) !== -1);
         });
       }
+      var infoZeile = box.querySelector('.sorten-info');
       box.querySelectorAll('button.sorte').forEach(function (b) {
         b.addEventListener('click', function () {
           var wert = b.textContent.trim();
@@ -5358,6 +5534,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           if (i === -1) { teile.push(wert); } else { teile.splice(i, 1); }
           ziel.value = teile.join(', ');
           markiere();
+          if (infoZeile && b.dataset.info) {
+            infoZeile.innerHTML = '💡 <b>' + wert + ':</b> ' + b.dataset.info;
+            infoZeile.hidden = false;
+          }
         });
       });
       if (katWahl) {
