@@ -52,7 +52,65 @@ $KATEGORIEN = [
 if (!isset($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
+
+/** Teilnehmer zu einem Einladungs-Token finden: [tasting, teilnehmer] oder null. */
+function teilnehmerZuToken(array $daten, string $token): ?array
+{
+    if (!preg_match('/^[a-f0-9]{16}$/', $token)) {
+        return null;
+    }
+    foreach ($daten['tastings'] as $t) {
+        foreach (($t['teilnehmer'] ?? []) as $p) {
+            if (hash_equals($p['token'], $token)) {
+                return [$t, $p];
+            }
+        }
+    }
+    return null;
+}
+
+// Einladungslink angeklickt? Cookie setzen und automatisch anmelden.
+if (isset($_GET['einladung'])) {
+    $treffer = teilnehmerZuToken(datenLaden(), (string)$_GET['einladung']);
+    if ($treffer !== null) {
+        [$einladungsTasting, $teilnehmer] = $treffer;
+        setcookie('einladung', $teilnehmer['token'], [
+            'expires' => time() + 60 * 60 * 24 * 180,
+            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = $teilnehmer['name'];
+        header('Location: ./?ok=' . rawurlencode('Willkommen, ' . $teilnehmer['name'] . '! Du bist angemeldet für „' . $einladungsTasting['titel'] . '“. 🥂'));
+        exit;
+    }
+    header('Location: ./?fehler=' . rawurlencode('Dieser Einladungslink ist nicht (mehr) gültig.'));
+    exit;
+}
+
+// Wiederkehrende Gäste am Einladungs-Cookie erkennen
+if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['einladung'])) {
+    $treffer = teilnehmerZuToken(datenLaden(), (string)$_COOKIE['einladung']);
+    if ($treffer !== null) {
+        $_SESSION['tasting_ok'] = true;
+        if (trim((string)($_SESSION['person'] ?? '')) === '') {
+            $_SESSION['person'] = $treffer[1]['name'];
+        }
+    }
+}
+
 $eingeloggt = ($_SESSION['tasting_ok'] ?? false) === true;
+
+/** Das Tasting des aktuellen Nutzers (per Cookie), sonst das neueste. */
+function meinTasting(array $daten): ?array
+{
+    $treffer = teilnehmerZuToken($daten, (string)($_COOKIE['einladung'] ?? ''));
+    if ($treffer !== null) {
+        return $treffer[0];
+    }
+    $ts = $daten['tastings'];
+    usort($ts, static fn(array $a, array $b): int => ((int)($b['zeit'] ?? 0)) <=> ((int)($a['zeit'] ?? 0)));
+    return $ts[0] ?? null;
+}
 
 function zurueck(string $query = ''): void
 {
@@ -69,13 +127,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => []]
-        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -93,9 +151,9 @@ function datenAendern(callable $fn): void
     $roh = stream_get_contents($h);
     $d = json_decode((string)$roh, true);
     if (!is_array($d)) {
-        $d = ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
+        $d = ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []];
     }
-    $d += ['champagner' => [], 'bewertungen' => [], 'weingueter' => []];
+    $d += ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => []];
     $d = $fn($d);
     ftruncate($h, 0);
     rewind($h);
@@ -240,6 +298,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
         fotosUmhaengen((string)($_SESSION['neu']['praefix'] ?? ''), 'neu', $neueId);
         unset($_SESSION['neu']);
+        // Für die eigene Tasting-Gruppe automatisch „ins Glas“ stellen
+        $meins = meinTasting(datenLaden());
+        if ($meins !== null) {
+            $meinTid = $meins['id'];
+            datenAendern(function (array $d) use ($meinTid, $neueId): array {
+                foreach ($d['tastings'] as &$t) {
+                    if ($t['id'] === $meinTid) {
+                        $t['aktiv_cid'] = $neueId;
+                    }
+                }
+                return $d;
+            });
+        }
         zurueck('?bewerten=' . rawurlencode($neueId) . ($vk !== '' ? '&vk=' . rawurlencode($vk) : '') . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
     }
 
@@ -652,6 +723,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             return $d;
         });
         zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.'));
+    }
+
+    if ($aktion === 'tasting_anlegen') {
+        $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
+        if ($titel === '') {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Bitte einen Titel für das Tasting angeben.'));
+        }
+        $neueId = bin2hex(random_bytes(4));
+        datenAendern(function (array $d) use ($titel, $neueId): array {
+            $d['tastings'][] = ['id' => $neueId, 'titel' => $titel, 'aktiv_cid' => '', 'teilnehmer' => [], 'zeit' => time()];
+            return $d;
+        });
+        zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
+    }
+
+    if ($aktion === 'tasting_titel') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
+        if ($titel === '') {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Der Titel darf nicht leer sein.'));
+        }
+        datenAendern(function (array $d) use ($tid, $titel): array {
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] === $tid) {
+                    $t['titel'] = $titel;
+                }
+            }
+            return $d;
+        });
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Titel gespeichert.'));
+    }
+
+    if ($aktion === 'tasting_loeschen') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        datenAendern(function (array $d) use ($tid): array {
+            $d['tastings'] = array_values(array_filter($d['tastings'], fn($t) => $t['id'] !== $tid));
+            return $d;
+        });
+        zurueck('?tasting=1&ok=' . rawurlencode('Tasting gelöscht (Bewertungen bleiben erhalten).'));
+    }
+
+    if ($aktion === 'teilnehmer_anlegen') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
+        if ($name === '') {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Bitte einen Namen angeben.'));
+        }
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Die E-Mail-Adresse sieht nicht gültig aus.'));
+        }
+        $token = bin2hex(random_bytes(8));
+        datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] === $tid) {
+                    $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email];
+                }
+            }
+            return $d;
+        });
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($name . ' ist dabei – Link kopieren oder per Mail senden!'));
+    }
+
+    if ($aktion === 'teilnehmer_loeschen') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $token = (string)($_POST['token'] ?? '');
+        datenAendern(function (array $d) use ($tid, $token): array {
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] === $tid) {
+                    $t['teilnehmer'] = array_values(array_filter($t['teilnehmer'], fn($p) => $p['token'] !== $token));
+                }
+            }
+            return $d;
+        });
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Teilnehmer entfernt.'));
+    }
+
+    if ($aktion === 'teilnehmer_mail') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $token = (string)($_POST['token'] ?? '');
+        $treffer = teilnehmerZuToken(datenLaden(), $token);
+        if ($treffer === null || $treffer[0]['id'] !== $tid) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Teilnehmer nicht gefunden.'));
+        }
+        [$tasting, $person] = $treffer;
+        if ($person['email'] === '') {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Für ' . $person['name'] . ' ist keine E-Mail hinterlegt – nutze den Kopier-Knopf.'));
+        }
+        $link = 'https://fruthzeug.de/projekte/champagner/?einladung=' . $person['token'];
+        $betreff = mb_encode_mimeheader('Einladung zum Tasting „' . $tasting['titel'] . '“', 'UTF-8');
+        $text = "Hallo " . $person['name'] . ",\n\n"
+            . "du bist eingeladen zum Tasting \u{201E}" . $tasting['titel'] . "\u{201C}!\n\n"
+            . "Tipp einfach auf diesen Link – damit bist du angemeldet und kannst sofort mitbewerten (kein Passwort nötig):\n"
+            . $link . "\n\nBis gleich! 🥂";
+        $ok = @mail($person['email'], $betreff, $text,
+            "From: Champagne 26 <post@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
+        if ($ok) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Einladung an ' . $person['email'] . ' verschickt.'));
+        }
+        zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Mail-Versand hat nicht geklappt – nutze den Kopier-Knopf.'));
+    }
+
+    if ($aktion === 'glas_setzen') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        datenAendern(function (array $d) use ($tid, $cid): array {
+            if ($cid !== '' && champagnerHolen($d, $cid) === null) {
+                zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Champagner nicht gefunden.'));
+            }
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] === $tid) {
+                    $t['aktiv_cid'] = $cid;
+                }
+            }
+            return $d;
+        });
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($cid === '' ? 'Glas geleert.' : 'Steht jetzt für alle „im Glas“. 🥂'));
     }
 
     if ($aktion === 'weingut_kontakt') {
@@ -1456,6 +1644,15 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'liste';
 } elseif (isset($_GET['tasting'])) {
     $ansicht = 'tastingplatz';
+    $aktivesTasting = null;
+    if (preg_match('/^[a-f0-9]{8}$/', (string)$_GET['tasting'])) {
+        foreach ($daten['tastings'] as $t) {
+            if ($t['id'] === (string)$_GET['tasting']) {
+                $aktivesTasting = $t;
+                break;
+            }
+        }
+    }
 }
 
 // Bereich für die Tab-Leiste unten
@@ -1661,7 +1858,8 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
     button.laedt { animation: pulsieren 1s infinite; }
     button.loeschen { background: none; border: none; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
 
-    input[type="password"], input[type="text"], input[type="number"], input[type="file"], textarea, select {
+    .filter-feld { margin-bottom: 0.7rem; }
+    input[type="password"], input[type="text"], input[type="number"], input[type="search"], input[type="file"], textarea, select {
       width: 100%; padding: 0.65rem; border: 1px solid var(--border); border-radius: 8px;
       background: var(--bg); color: var(--text); font-size: 1rem; margin-bottom: 0.8rem;
       font-family: inherit;
@@ -1826,8 +2024,14 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <h1><?= $kontextOhne ? 'Ohne Weingut 🏠' : e($kontextWeingut['name']) . ' 🍇' ?></h1>
       <p class="untertitel"><?= $kontextOhne ? 'Zu Hause oder unterwegs verkosten.' : 'Du bist hier – verkoste und erfasse die Weine.' ?></p>
     <?php elseif ($ansicht === 'tastingplatz'): ?>
-      <h1>Tasting 👥</h1>
-      <p class="untertitel">Gemeinsame Verkostungen mit deiner Gruppe.</p>
+      <?php if (($aktivesTasting ?? null) !== null): ?>
+        <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
+        <h1><?= e($aktivesTasting['titel']) ?> 👥</h1>
+        <p class="untertitel">Teilnehmer, Einladungen und das Glas der Gruppe.</p>
+      <?php else: ?>
+        <h1>Tasting 👥</h1>
+        <p class="untertitel">Gemeinsame Verkostungen mit deiner Gruppe.</p>
+      <?php endif; ?>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Champagner im Überblick.</p>
@@ -1866,6 +2070,19 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       <div class="hinweis fehler"><?= e($fehler) ?></div>
     <?php endif; ?>
 
+    <?php
+      // "Gerade im Glas" der eigenen Gruppe oben anpinnen (Verkosten + Arbeitsfläche)
+      if (in_array($ansicht, ['verkosten', 'werkstatt'], true)) {
+          $meins = meinTasting($daten);
+          $imGlas = $meins !== null ? champagnerHolen($daten, (string)($meins['aktiv_cid'] ?? '')) : null;
+          if ($imGlas !== null) {
+              echo '<div class="card" style="border-left:5px solid var(--accent); display:flex; align-items:center; gap:0.8rem; justify-content:space-between; flex-wrap:wrap;">'
+                  . '<span>🥂 <b>Gerade im Glas:</b> ' . e($imGlas['name']) . '<br><span class="anzahl">' . e($meins['titel']) . '</span></span>'
+                  . '<a class="knopf" href="?bewerten=' . e(rawurlencode($imGlas['id'])) . '">Bewerten</a>'
+                  . '</div>';
+          }
+      }
+    ?>
     <?php if ($ansicht === 'verkosten'): ?>
       <!-- ==================== VERKOSTEN-START ==================== -->
       <a class="kachel" href="?wneu=1&amp;vkmodus=1">
@@ -1878,13 +2095,17 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       </a>
       <?php if ($daten['weingueter'] !== []): ?>
         <p class="untertitel" style="margin-top:1.4rem;">… oder Weingut wählen:</p>
+        <?php if (count($daten['weingueter']) > 3): ?>
+          <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel="#wg-wahl">
+        <?php endif; ?>
+        <div id="wg-wahl">
         <?php
           $wgSortiert = $daten['weingueter'];
           usort($wgSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
         ?>
         <?php foreach ($wgSortiert as $w): ?>
           <?php $wFotos = weingutFotos($w['id']); ?>
-          <a class="kachel" href="?vk=<?= e(rawurlencode($w['id'])) ?>">
+          <a class="kachel filterbar" href="?vk=<?= e(rawurlencode($w['id'])) ?>">
             <?php if ($wFotos !== []): ?>
               <img class="thumb" src="<?= e(thumbUrl($wFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
             <?php else: ?>
@@ -1895,6 +2116,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
             </span>
           </a>
         <?php endforeach; ?>
+        </div>
       <?php endif; ?>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
@@ -1928,7 +2150,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
             $gesamt      = gesamtSchnitt($bewertungen);
             $fotos       = fotosFuer($c['id']);
           ?>
-          <div class="card flasche">
+          <div class="card flasche filterbar">
             <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
               <?php if ($fotos !== []): ?>
                 <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
@@ -1948,12 +2170,125 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular($kontextOhne ? '?vk=ohne' : '?vk=' . rawurlencode($kontextWeingut['id'])) ?></div>
       <?php endif; ?>
 
+    <?php elseif ($ansicht === 'tastingplatz' && ($aktivesTasting ?? null) !== null): ?>
+      <!-- ==================== TASTING-DETAIL ==================== -->
+      <?php if (!$eingeloggt): ?>
+        <div class="card"><?= loginFormular('?tasting=' . rawurlencode($aktivesTasting['id'])) ?></div>
+      <?php else: ?>
+        <?php
+          $glasChampagner = champagnerHolen($daten, (string)($aktivesTasting['aktiv_cid'] ?? ''));
+        ?>
+        <div class="card" style="border-left:5px solid var(--accent);">
+          <h2>🥂 Gerade im Glas</h2>
+          <?php if ($glasChampagner !== null): ?>
+            <p style="font-size:1.1rem;"><b><?= e($glasChampagner['name']) ?></b></p>
+            <div class="knopfreihe" style="margin-top:0.5rem;">
+              <a class="knopf" href="?bewerten=<?= e(rawurlencode($glasChampagner['id'])) ?>">Jetzt bewerten</a>
+            </div>
+          <?php else: ?>
+            <p style="color:var(--muted); font-style:italic;">Noch nichts im Glas – wird automatisch gesetzt, sobald jemand eine Flasche erfasst, oder unten von Hand wählen.</p>
+          <?php endif; ?>
+          <form method="post" style="margin-top:0.8rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="glas_setzen">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <?php
+              $auswahl = $daten['champagner'];
+              usort($auswahl, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+            ?>
+            <select name="champagner_id">
+              <option value="">– Glas leeren –</option>
+              <?php foreach (array_slice($auswahl, 0, 30) as $c): ?>
+                <option value="<?= e($c['id']) ?>"<?= ($aktivesTasting['aktiv_cid'] ?? '') === $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <button class="knopf zweit" type="submit">Ins Glas stellen</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Teilnehmer (<?= count($aktivesTasting['teilnehmer'] ?? []) ?>)</h2>
+          <?php foreach (($aktivesTasting['teilnehmer'] ?? []) as $p): ?>
+            <div class="ergebnis-kategorie" style="align-items:center;">
+              <span><b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
+              <span class="knopfreihe">
+                <button type="button" class="knopf klein zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?einladung=<?= e($p['token']) ?>">Link kopieren</button>
+                <?php if ($p['email'] !== ''): ?>
+                  <form method="post" style="display:inline">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="teilnehmer_mail">
+                    <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+                    <input type="hidden" name="token" value="<?= e($p['token']) ?>">
+                    <button class="knopf klein zweit" type="submit">✉️ Mail</button>
+                  </form>
+                <?php endif; ?>
+                <form method="post" style="display:inline" onsubmit="return confirm('<?= e($p['name']) ?> entfernen?');">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="teilnehmer_loeschen">
+                  <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+                  <input type="hidden" name="token" value="<?= e($p['token']) ?>">
+                  <button class="loeschen" type="submit">✕</button>
+                </form>
+              </span>
+            </div>
+          <?php endforeach; ?>
+          <form method="post" style="margin-top:1rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="teilnehmer_anlegen">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <input type="text" name="name" placeholder="Name" maxlength="40" required>
+            <input type="text" name="email" placeholder="E-Mail (optional – für die Einladung)" maxlength="80" inputmode="email">
+            <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
+          </form>
+          <p class="anzahl" style="margin-top:0.5rem;">Jeder Teilnehmer bekommt einen persönlichen Link – ein Tipp darauf meldet ihn dauerhaft an (kein Passwort nötig).</p>
+        </div>
+
+        <div class="card">
+          <h2>Tasting verwalten</h2>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_titel">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <input type="text" name="titel" value="<?= e($aktivesTasting['titel']) ?>" maxlength="60" required>
+            <button class="knopf zweit" type="submit">Titel speichern</button>
+          </form>
+          <form method="post" class="abmelden" onsubmit="return confirm('Tasting „<?= e($aktivesTasting['titel']) ?>“ löschen? Bewertungen bleiben erhalten.');">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_loeschen">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <button type="submit">Tasting löschen</button>
+          </form>
+        </div>
+        <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
+      <?php endif; ?>
+
     <?php elseif ($ansicht === 'tastingplatz'): ?>
-      <!-- ==================== TASTING (kommt in Etappe 3) ==================== -->
-      <div class="card">
-        <h2>Bald verfügbar 🛠</h2>
-        <p>Hier entstehen die <b>Tasting-Gruppen</b>: Titel anlegen, Freunde per Link einladen (ohne Passwort), gemeinsam bewerten – mit dem „Gerade im Glas“-Champagner für alle.</p>
-      </div>
+      <!-- ==================== TASTING-ÜBERSICHT ==================== -->
+      <?php if (!$eingeloggt): ?>
+        <div class="card"><?= loginFormular('?tasting=1') ?></div>
+      <?php else: ?>
+        <?php
+          $tastingsSortiert = $daten['tastings'];
+          usort($tastingsSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+        ?>
+        <?php foreach ($tastingsSortiert as $t): ?>
+          <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>">
+            <span class="k-icon">👥</span>
+            <span class="k-text"><b><?= e($t['titel']) ?></b>
+              <small><?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
+            </span>
+          </a>
+        <?php endforeach; ?>
+        <div class="card" style="margin-top:1rem;">
+          <h2>Neues Tasting anlegen</h2>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_anlegen">
+            <input type="text" name="titel" placeholder="Titel, z. B. Champagne-Tour Tag 2" maxlength="60" required>
+            <button class="knopf" type="submit">Anlegen</button>
+          </form>
+        </div>
+      <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
       <!-- ==================== BEWERTUNGSFORMULAR ==================== -->
@@ -2478,6 +2813,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=datum">Anlagedatum</a>
         <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?weingueter=1&amp;sort=name">Name</a>
       </div>
+      <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php if ($daten['weingueter'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Weingut angelegt – unten das erste eintragen!</p></div>
@@ -2500,7 +2836,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
               $kurznotiz = mb_substr($kurznotiz, 0, 120) . ' …';
           }
         ?>
-        <div class="card">
+        <div class="card filterbar">
           <div class="champagner-zeile">
             <?php if ($fotos !== []): ?>
               <a href="?weingut=<?= e(rawurlencode($w['id'])) ?>">
@@ -2689,6 +3025,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
         <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=datum">Anlagedatum</a>
         <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;sort=name">Name</a>
       </div>
+      <input type="search" class="filter-feld" placeholder="🔍 Champagner oder Weingut suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php if ($daten['champagner'] === []): ?>
         <div class="card"><p style="color:var(--muted); font-style:italic;">Noch kein Champagner angelegt – oben auf „Neue Flasche erfassen" tippen!</p></div>
@@ -2713,7 +3050,7 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
           if ($wg !== null) { $meta[] = $wg['name']; }
           if (trim((string)($c['preis'] ?? '')) !== '') { $meta[] = (string)$c['preis']; }
         ?>
-        <div class="card flasche">
+        <div class="card flasche filterbar">
           <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
             <?php if ($fotos !== []): ?>
               <img class="thumb" src="<?= e(thumbUrl($fotos[0])) ?>" alt="" loading="lazy">
@@ -2794,6 +3131,32 @@ $sortierung = ($_GET['sort'] ?? 'datum') === 'name' ? 'name' : 'datum';
       overlay.querySelector('.blatt-kopf button').addEventListener('click', zu);
       overlay.addEventListener('click', function (e) { if (e.target === overlay) { zu(); } });
     })();
+
+    // Suchfilter über Listen: tippen filtert die Einträge sofort
+    document.querySelectorAll('.filter-feld').forEach(function (feld) {
+      var ziel = document.querySelector(feld.dataset.ziel);
+      if (!ziel) { return; }
+      feld.addEventListener('input', function () {
+        var q = feld.value.toLowerCase().trim();
+        ziel.querySelectorAll('.filterbar').forEach(function (el) {
+          el.style.display = el.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+        });
+      });
+    });
+
+    // Einladungslinks in die Zwischenablage kopieren
+    document.querySelectorAll('.link-kopieren').forEach(function (k) {
+      k.addEventListener('click', function () {
+        var text = k.dataset.link;
+        var versuch = navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject();
+        versuch.then(function () {
+          k.textContent = 'Kopiert ✓';
+          setTimeout(function () { k.textContent = 'Link kopieren'; }, 2500);
+        }).catch(function () {
+          window.prompt('Link zum Kopieren:', text);
+        });
+      });
+    });
 
     // "Neu laden": Seite garantiert frisch am Zwischenspeicher vorbei holen
     document.getElementById('neu-laden').addEventListener('click', function (e) {
