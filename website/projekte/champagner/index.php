@@ -407,6 +407,13 @@ function teilnehmerLimitErreicht(array $t): bool
     return !empty($t['gast']) && count($t['teilnehmer'] ?? []) >= 2;
 }
 
+/** Profilfoto einer Person (Dateiname) oder ''. */
+function profilFoto(array $daten, string $name): string
+{
+    $datei = (string)($daten['profile'][mb_strtolower(trim($name))] ?? '');
+    return $datei !== '' && is_file(BILDER_DIR . '/' . $datei) ? $datei : '';
+}
+
 /** Grobe Distanz in Metern zwischen zwei Koordinaten (für kleine Abstände ausreichend). */
 function distanzMeter(float $lat1, float $lon1, float $lat2, float $lon2): int
 {
@@ -546,13 +553,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => []]
-        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -1164,6 +1171,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             return $d;
         });
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung von ' . $person . ' gelöscht.'));
+    }
+
+    if ($aktion === 'profil_foto_upload') {
+        // Persönliches Profilfoto (Kamera oder Galerie) – gehört zum Namen der Person
+        $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
+        if ($ich === '') {
+            zurueck('?meine=1&fehler=' . rawurlencode('Wir kennen deinen Namen noch nicht – tritt erst einem Tasting bei oder bewerte einmal.'));
+        }
+        [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'pf');
+        if ($hochgeladen === 0) {
+            zurueck('?meine=1&fehler=' . rawurlencode('Das Foto kam nicht an – bitte nochmal versuchen (nur Bilder, max. 25 MB).'));
+        }
+        $neustes = glob(BILDER_DIR . '/pf-*.{jpg,jpeg,png,gif,webp}', GLOB_BRACE) ?: [];
+        usort($neustes, static fn(string $a, string $b): int => filemtime($b) <=> filemtime($a));
+        $neuDatei = basename($neustes[0] ?? '');
+        datenAendern(function (array $d) use ($ich, $neuDatei): array {
+            $alt = (string)($d['profile'][$ich] ?? '');
+            if ($alt !== '' && $alt !== $neuDatei && is_file(BILDER_DIR . '/' . $alt)) {
+                @unlink(BILDER_DIR . '/' . $alt);
+                thumbLoeschen($alt);
+            }
+            $d['profile'][$ich] = $neuDatei;
+            return $d;
+        });
+        zurueck('?meine=1&ok=' . rawurlencode('Dein Profilfoto ist gesetzt – schön, dich zu sehen! 👋'));
     }
 
     if ($aktion === 'tasting_foto_upload') {
@@ -1870,7 +1902,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
-        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($cid === '' ? 'Alles klar – es steht gerade nichts „im Glas“. Das nächste erfasste Getränk landet automatisch dort.' : 'Steht jetzt für alle „im Glas“. 🥂'));
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($cid === '' ? 'Zurückgesetzt – gerade ist kein Getränk als „aktuell“ gewählt. Das nächste erfasste Getränk wird automatisch das aktuelle.' : 'Für alle als aktuelles Getränk der Runde gesetzt. 🥂'));
     }
 
     if ($aktion === 'tasting_zuordnen') {
@@ -2043,7 +2075,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         });
         if ($vk !== '') {
             // Im Verkosten-Modus direkt zurück zur Arbeitsfläche – der nächste Wein wartet
-            zurueck('?vk=' . rawurlencode($vk) . '&ok=' . rawurlencode('Danke, ' . $person . ' – gespeichert! Der nächste Wein kann ins Glas. 🥂'));
+            zurueck('?vk=' . rawurlencode($vk) . '&ok=' . rawurlencode('Danke, ' . $person . ' – gespeichert! Der nächste Wein kann kommen. 🥂'));
         }
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Danke, ' . $person . ' – deine Bewertung ist gespeichert!'));
     }
@@ -3212,11 +3244,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     #nav-toggle:checked ~ .burger span:nth-child(2) { opacity: 0; }
     #nav-toggle:checked ~ .burger span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
 
-    main { flex: 1; width: 100%; max-width: 46rem; margin: 0 auto; padding: 2rem 1.2rem 4rem; }
+    main { flex: 1; width: 100%; max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 4.2rem; }
     .zurueck { margin-bottom: 0.7rem; }
     .zurueck a { text-decoration: none; font-size: 1.05rem; }
-    h1 { font-size: clamp(1.7rem, 5vw, 2.4rem); font-weight: normal; margin-bottom: 0.3rem; }
-    .untertitel { color: var(--muted); font-style: italic; margin-bottom: 1.6rem; }
+    h1 { font-size: clamp(1.35rem, 4.5vw, 1.9rem); font-weight: normal; margin-bottom: 0.25rem; }
+    .untertitel { color: var(--muted); font-style: italic; margin-bottom: 0.8rem; }
 
     .hinweis { border-radius: 8px; padding: 0.8rem 1.1rem; margin-bottom: 1.4rem; border: 1px solid var(--border); background: var(--card); }
     .hinweis.ok { border-left: 4px solid var(--ok); }
@@ -3224,7 +3256,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
     .card {
       background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: 1.4rem 1.6rem; margin-bottom: 1rem;
+      border-radius: 10px; padding: 0.95rem 1.05rem; margin-bottom: 0.6rem;
     }
     .card h2 { font-size: 1.15rem; font-weight: normal; color: var(--accent); margin-bottom: 0.5rem; }
 
@@ -3264,7 +3296,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       font-size: 0.9rem; font-weight: 600; cursor: pointer; font-family: inherit;
     }
     #anleitung-box, #tasting-bild-box { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
-    #anleitung-box [hidden], #tasting-bild-box [hidden] { display: none; }
+    #anleitung-box[hidden], #tasting-bild-box[hidden] { display: none !important; }
     #anleitung-box .blatt, #tasting-bild-box .blatt {
       background: var(--bg); width: 100%; max-width: 46rem; max-height: 90dvh;
       overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 18px 18px 0 0; padding: 1rem 1.2rem 3rem;
@@ -3292,6 +3324,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     }
     .sorten-chips button.sorte.gewaehlt { background: var(--accent-hell); color: var(--accent); border-color: var(--accent); font-weight: 600; }
     .sorten-info { color: var(--muted); font-size: 0.88rem; margin: 0.2rem 0 0.4rem; }
+    .kachel-raster { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.6rem; }
+    .kachel-raster .kachel { margin: 0; }
+    .avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--accent); vertical-align: middle; }
     details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
     details.card summary::-webkit-details-marker { display: none; }
     details.card summary::before { content: '▸ '; }
@@ -3499,7 +3534,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $kopfPerson = trim((string)($_SESSION['person'] ?? ''));
       ?>
       <div class="status-zeile">
-        <a href="?meine=1">👤&nbsp;<?= e($kopfPerson !== '' ? $kopfPerson : 'Gast') ?></a>
+        <?php $kopfProfil = $kopfPerson !== '' ? profilFoto($daten, $kopfPerson) : ''; ?>
+        <a href="?meine=1" style="display:inline-flex; align-items:center; gap:0.3rem;">
+          <?php if ($kopfProfil !== ''): ?>
+            <img class="avatar" src="<?= e(thumbUrl($kopfProfil)) ?>" alt="" style="width:26px; height:26px;">
+          <?php else: ?>
+            👤
+          <?php endif; ?><?= e($kopfPerson !== '' ? $kopfPerson : 'Gast') ?></a>
         <?php if ($kopfTasting !== null): ?>
           <a href="?tasting=<?= e(rawurlencode($kopfTasting['id'])) ?>">👥&nbsp;<?= e($kopfTasting['titel']) ?></a>
         <?php endif; ?>
@@ -3632,7 +3673,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $imGlas = $meins !== null ? champagnerHolen($daten, (string)($meins['aktiv_cid'] ?? '')) : null;
           if ($imGlas !== null) {
               echo '<div class="card" style="border-left:5px solid var(--accent); display:flex; align-items:center; gap:0.8rem; justify-content:space-between; flex-wrap:wrap;">'
-                  . '<span>🥂 <b>Gerade im Glas:</b> ' . e($imGlas['name']) . '<br><span class="anzahl">' . e($meins['titel']) . '</span></span>'
+                  . '<span>🥂 <b>Ihr trinkt gerade:</b> ' . e($imGlas['name']) . '<br><span class="anzahl">' . e($meins['titel']) . '</span></span>'
                   . '<a class="knopf" href="?bewerten=' . e(rawurlencode($imGlas['id'])) . '">Bewerten</a>'
                   . '</div>';
           }
@@ -3746,7 +3787,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $tsAlleFotos = $tsKopfFotos; // fürs Overlay (oben beim Titel berechnet)
         ?>
         <div class="card" style="border-left:5px solid var(--accent);">
-          <h2>🥂 Gerade im Glas</h2>
+          <h2>🥂 Was wir gerade trinken</h2>
           <?php if ($glasChampagner !== null): ?>
             <p style="font-size:1.1rem;"><b><?= e($glasChampagner['name']) ?></b></p>
             <?php
@@ -3772,10 +3813,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($glasChampagner['id'])) ?>">Ergebnis ansehen</a>
             </div>
           <?php else: ?>
-            <p style="color:var(--muted); font-style:italic;">Noch nichts im Glas – wird automatisch gesetzt, sobald jemand eine Flasche erfasst, oder unten von Hand wählen.</p>
+            <p style="color:var(--muted); font-style:italic;">Noch nichts festgelegt – das zuletzt erfasste Getränk wird automatisch das aktuelle, oder unten von Hand wählen.</p>
           <?php endif; ?>
           <a class="knopf" href="?neu=1" style="margin-top:0.8rem; display:inline-block;">📷&nbsp; Neues Getränk erfassen</a>
-          <p class="anzahl" style="margin-top:0.3rem;">Etikett fotografieren – das neue Getränk steht danach automatisch „im Glas“.</p>
+          <p class="anzahl" style="margin-top:0.3rem;">Etikett fotografieren – das neue Getränk ist danach automatisch das aktuelle der Runde.</p>
           <form method="post" style="margin-top:0.8rem;">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="glas_setzen">
@@ -3786,12 +3827,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               usort($auswahl, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
             ?>
             <select name="champagner_id">
-              <option value="">– gerade nichts im Glas –</option>
+              <option value="">– nichts ausgewählt –</option>
               <?php foreach (array_slice($auswahl, 0, 30) as $c): ?>
                 <option value="<?= e($c['id']) ?>"<?= ($aktivesTasting['aktiv_cid'] ?? '') === $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?></option>
               <?php endforeach; ?>
             </select>
-            <button class="knopf zweit" type="submit">Ins Glas stellen</button>
+            <button class="knopf zweit" type="submit">Als aktuelles Getränk festlegen</button>
           </form>
         </div>
 
@@ -3800,11 +3841,53 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $tastingWeine = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
           $tastingWeingutIds = array_unique(array_filter(array_map(fn($c) => trim((string)($c['weingut_id'] ?? '')), $tastingWeine)));
         ?>
-        <p class="untertitel" style="margin-top:1.4rem;">Alles zu diesem Tasting:</p>
-        <a class="kachel" href="?liste=1&amp;kat=alle&amp;tid=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
-          <span class="k-icon">🍾</span>
-          <span class="k-text"><b>Unsere Getränke (<?= count($tastingWeine) ?>)</b><small>Alle verkosteten Flaschen mit Bewertungen und Fotos</small></span>
-        </a>
+        <div class="kachel-raster">
+          <a class="kachel" href="?liste=1&amp;kat=alle&amp;tid=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
+            <span class="k-icon">🍾</span>
+            <span class="k-text"><b>Getränke (<?= count($tastingWeine) ?>)</b></span>
+          </a>
+          <a class="kachel" href="?weingueter=1">
+            <span class="k-icon">🍇</span>
+            <span class="k-text"><b>Weingüter<?= $tastingWeingutIds !== [] ? ' (' . count($tastingWeingutIds) . ')' : '' ?></b></span>
+          </a>
+          <a class="kachel" href="?fotos=1">
+            <span class="k-icon">📸</span>
+            <span class="k-text"><b>Fotoalbum</b></span>
+          </a>
+          <a class="kachel anleitung-oeffnen" href="#">
+            <span class="k-icon">ℹ️</span>
+            <span class="k-text"><b>Anleitung</b></span>
+          </a>
+        </div>
+
+        <?php
+          $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? '');
+          $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($aktivesTasting['id']);
+        ?>
+        <details class="card">
+          <summary>📱 Einladen &amp; Mitschauen (QR-Codes)</summary>
+          <div style="display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; text-align:center; margin-top:0.6rem;">
+            <div>
+              <p class="anzahl" style="margin-bottom:0.4rem;"><b>Mitmachen:</b> abfotografieren, Name eintragen, dabei sein.</p>
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&amp;margin=8&amp;data=<?= e(rawurlencode($beitrittUrl)) ?>"
+                   alt="QR-Code zum Beitreten" width="200" height="200"
+                   style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
+              <div class="knopfreihe" style="justify-content:center; margin-top:0.4rem;">
+                <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($beitrittUrl) ?>">Link kopieren</button>
+              </div>
+            </div>
+            <div>
+              <p class="anzahl" style="margin-bottom:0.4rem;"><b>Nur zuschauen:</b> sehen, aber nicht bewerten.</p>
+              <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&amp;margin=8&amp;data=<?= e(rawurlencode($ansehenUrl)) ?>"
+                   alt="QR-Code zum Mitschauen" width="200" height="200"
+                   style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
+              <div class="knopfreihe" style="justify-content:center; margin-top:0.4rem;">
+                <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($ansehenUrl) ?>">Link kopieren</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
         <?php
           // Getränke aus anderen Tastings, die man hierher holen kann
           $fremdeGetraenke = array_values(array_filter(
@@ -3818,10 +3901,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           }
         ?>
         <?php if ($fremdeGetraenke !== []): ?>
-          <div class="card">
-            <h2>➕ Getränk diesem Tasting zuordnen</h2>
-            <p class="anzahl" style="margin-bottom:0.6rem;">Ein bereits erfasstes Getränk aus einem anderen Tasting hierher holen:</p>
-            <form method="post">
+          <details class="card">
+            <summary>➕ Getränk aus anderem Tasting hierher holen</summary>
+            <form method="post" style="margin-top:0.6rem;">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="tasting_zuordnen">
               <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
@@ -3834,44 +3916,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               </select>
               <button class="knopf zweit" type="submit">Hierher holen</button>
             </form>
-          </div>
+          </details>
         <?php endif; ?>
-        <a class="kachel" href="?weingueter=1">
-          <span class="k-icon">🍇</span>
-          <span class="k-text"><b>Weingüter<?= $tastingWeingutIds !== [] ? ' (' . count($tastingWeingutIds) . ' besucht)' : '' ?></b><small>Kontakte, Notizen und Bilder der Weingüter</small></span>
-        </a>
-        <a class="kachel" href="?fotos=1">
-          <span class="k-icon">📸</span>
-          <span class="k-text"><b>Fotoalbum</b><small>Alle Bilder – Flaschen, Weingüter und Gruppenfotos</small></span>
-        </a>
-        <a class="kachel anleitung-oeffnen" href="#">
-          <span class="k-icon">ℹ️</span>
-          <span class="k-text"><b>So wird verkostet</b><small>Anleitung für Champagner, Rot- und Weißwein, Bier</small></span>
-        </a>
-
-        <?php $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? ''); ?>
-        <div class="card" style="text-align:center;">
-          <h2>📱 Gruppe einladen per QR-Code</h2>
-          <p class="anzahl" style="margin-bottom:0.8rem;">Einfach vom Bildschirm abfotografieren – Name eintragen – dabei sein.</p>
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&amp;margin=8&amp;data=<?= e(rawurlencode($beitrittUrl)) ?>"
-               alt="QR-Code zum Beitreten" width="260" height="260"
-               style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
-          <div class="knopfreihe" style="justify-content:center; margin-top:0.8rem;">
-            <button type="button" class="knopf zweit link-kopieren" data-link="<?= e($beitrittUrl) ?>">Link kopieren</button>
-          </div>
-        </div>
-
-        <?php $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($aktivesTasting['id']); ?>
-        <div class="card" style="text-align:center;">
-          <h2>👀 Zum Mitschauen (ohne Bewerten)</h2>
-          <p class="anzahl" style="margin-bottom:0.8rem;">QR abfotografieren oder Link teilen – Listen, Ergebnisse und Fotos sind sichtbar, bewerten geht damit nicht.</p>
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&amp;margin=8&amp;data=<?= e(rawurlencode($ansehenUrl)) ?>"
-               alt="QR-Code zum Mitschauen" width="220" height="220"
-               style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
-          <div class="knopfreihe" style="justify-content:center; margin-top:0.8rem;">
-            <button type="button" class="knopf zweit link-kopieren" data-link="<?= e($ansehenUrl) ?>">Ansehen-Link kopieren</button>
-          </div>
-        </div>
 
         <!-- Overlay: Bild & Fotos des Tastings – öffnet sich per Tipp auf Titel/Avatar -->
         <div id="tasting-bild-box" hidden>
@@ -3956,9 +4002,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </div>
           <?php endforeach; ?>
           <?php foreach ($teiln as $p): ?>
-            <?php $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]); ?>
+            <?php
+              $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]);
+              $pFoto = profilFoto($daten, (string)$p['name']);
+            ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
-              <span><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
+              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
               <span class="knopfreihe">
                 <button type="button" class="knopf klein zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?einladung=<?= e($p['token']) ?>">Link kopieren</button>
                 <?php if ($p['email'] !== ''): ?>
@@ -4086,7 +4135,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <span class="k-icon">👥</span>
               <?php endif; ?>
               <span class="k-text"><b><?= e($t['titel']) ?></b><?= $t['id'] === $aktuellesTid ? ' <span class="bewerter-chip">✓ aktuell</span>' : '' ?>
-                <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · im Glas: ' . e($gc['name']) : '' ?></small>
+                <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · 🥂 gerade: ' . e($gc['name']) : '' ?></small>
               </span>
             </a>
           <?php endforeach; ?>
@@ -4455,7 +4504,20 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             };
           ?>
           <div class="card" style="border-left:5px solid var(--accent);">
-            <p><b>👤 <?= e(trim((string)$_SESSION['person'])) ?></b> – du hast <b><?= count($eintraege) ?></b> Getränk(e) bewertet<?= $flaschenSumme > 0 ? ' und <b>' . $flaschenSumme . '</b> Flasche(n) mitgenommen' : '' ?>. 🥂</p>
+            <?php $meinProfil = profilFoto($daten, (string)$_SESSION['person']); ?>
+            <div style="display:flex; align-items:center; gap:0.8rem;">
+              <?php if ($meinProfil !== ''): ?>
+                <img class="avatar" src="<?= e(thumbUrl($meinProfil)) ?>" alt="" style="width:56px; height:56px; flex-shrink:0;">
+              <?php else: ?>
+                <span style="width:56px; height:56px; border-radius:50%; border:2px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:1.5rem; flex-shrink:0;">👤</span>
+              <?php endif; ?>
+              <p style="flex:1;"><b><?= e(trim((string)$_SESSION['person'])) ?></b> – du hast <b><?= count($eintraege) ?></b> Getränk(e) bewertet<?= $flaschenSumme > 0 ? ' und <b>' . $flaschenSumme . '</b> Flasche(n) mitgenommen' : '' ?>. 🥂</p>
+            </div>
+            <form method="post" enctype="multipart/form-data" style="margin-top:0.6rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="profil_foto_upload">
+              <?= fotoUploadFelder('pf-up') ?>
+            </form>
           </div>
 
           <?php if (count($eintraege) >= 2): ?>
