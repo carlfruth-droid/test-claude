@@ -2888,6 +2888,8 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'verwaltung';
 } elseif (isset($_GET['meine'])) {
     $ansicht = 'meine';
+} elseif (isset($_GET['ueber'])) {
+    $ansicht = 'ueber';
 }
 
 // Bereich für die Tab-Leiste unten
@@ -3382,6 +3384,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?weingueter=1">🍇 Weingüter</a>
       <a href="?fotos=1">📸 Fotoalbum</a>
       <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
+      <a href="?ueber=1">💛 Über diese App</a>
       <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
         <a href="?verwaltung=1">🛠️ Verwaltung</a>
       <?php endif; ?>
@@ -3418,6 +3421,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'meine'): ?>
       <h1>Meine Verkostungen 📖</h1>
       <p class="untertitel">Dein persönliches Verkostungsbuch – alles, was du probiert und bewertet hast.</p>
+    <?php elseif ($ansicht === 'ueber'): ?>
+      <h1>Über diese App 🥂</h1>
+      <p class="untertitel">Warum es sie gibt – und was sie für dich tut.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
@@ -4139,6 +4145,43 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <p>Wünsche und Fragen an: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
         </div>
       <?php endif; ?>
+
+    <?php elseif ($ansicht === 'ueber'): ?>
+      <!-- ==================== ÜBER DIESE APP ==================== -->
+      <div class="card">
+        <h2>Der Gedanke dahinter</h2>
+        <p style="margin-bottom:0.7rem;">Geschmack ist keine feste Eigenschaft eines Getränks. Geschmack entsteht im Zusammenspiel von Produkt, Umgebung und dir.</p>
+        <p style="margin-bottom:0.7rem;">Genau hier setzt diese App an. Sie stellt nicht die Frage: „Wie viele Punkte gibst du diesem Getränk?“ Sie stellt die wichtigere Frage: <b>„Wie hast du dieses Getränk genau in diesem Moment erlebt?“</b></p>
+        <p style="margin-bottom:0.7rem;">Jede Verkostung wird zu einer Momentaufnahme deiner Wahrnehmung. Neben deinen sensorischen Eindrücken werden – soweit verfügbar – Ort, Uhrzeit, Jahreszeit, Temperatur, Wetter und weitere Umgebungsdaten berücksichtigt. Gleichzeitig fließen Faktoren wie deine Stimmung, die Menschen, mit denen du zusammen bist, oder der Anlass in die Einordnung ein. Denn all das beeinflusst, wie du Aromen wahrnimmst und bewertest.</p>
+        <p style="margin-bottom:0.7rem;">Mit jeder Verkostung entsteht ein immer genaueres Bild deines persönlichen Geschmacks. Du erkennst Muster, die dir bisher verborgen geblieben sind. Du verstehst, warum dich derselbe Champagner heute begeistert und Monate später ganz anders erscheint. Du lernst, welche Bedingungen deine Wahrnehmung verändern und welche Eindrücke dauerhaft zu deinem Geschmack gehören.</p>
+        <p style="margin-bottom:0.7rem;">Das Ziel dieser App ist nicht, Getränke zu bewerten.</p>
+        <p style="margin-bottom:0.7rem; font-size:1.15rem;"><b>Das Ziel bist du.</b></p>
+        <p style="margin-bottom:0.7rem;">Du entwickelst mit jeder Verkostung ein präziseres sensorisches Gedächtnis. Du lernst, Aromen bewusster wahrzunehmen, Unterschiede klarer zu erkennen und deine Eindrücke immer genauer zu beschreiben. Aus spontanen Meinungen werden fundierte Urteile. Aus einzelnen Verkostungen entsteht Erfahrung. Aus Erfahrung entsteht Kompetenz.</p>
+        <p style="margin-bottom:0.7rem;">Mit der Zeit wird diese App zu deinem persönlichen Geschmacksarchiv. Sie dokumentiert nicht nur, was du getrunken hast, sondern wie sich dein Geschmack entwickelt. Sie hilft dir, dich selbst als Verkoster immer besser kennenzulernen und deine Wahrnehmung systematisch zu schärfen.</p>
+        <p style="margin-bottom:0.7rem;">Jedes Getränk erzählt eine Geschichte.</p>
+        <p>Diese App hilft dir, sie zu verstehen – und gleichzeitig deine eigene sensorische Geschichte zu schreiben.</p>
+      </div>
+
+      <div class="card">
+        <h2>Über mich &amp; meine Motivation</h2>
+        <p style="margin-bottom:0.7rem;">Diese App ist aus einem ganz persönlichen Bedürfnis entstanden.</p>
+        <p style="margin-bottom:0.7rem;">Über viele Jahre hatte ich das Glück, außergewöhnliche Champagner, Weine, Biere und viele andere Getränke zu genießen. Doch mit der Zeit wurde mir bewusst, wie wenig davon wirklich geblieben ist. Ich wusste noch, dass ein Getränk großartig war – aber nicht mehr <i>warum</i>. Die Aromen, der Moment, die Menschen, der Ort – vieles war mit der Zeit verloren.</p>
+        <p style="margin-bottom:0.7rem;">Ich wollte eine App, die genau dieses Problem löst. Eine App, die Erinnerungen bewahrt, Verkostungen strukturiert dokumentiert und mich dabei unterstützt, ohne dass ich lange Texte schreiben muss. Denn auch ich gehöre zu den Menschen, die lieber genießen als tippen.</p>
+        <p style="margin-bottom:0.7rem;"><b>Vielleicht geht es dir genauso.</b></p>
+        <p style="margin-bottom:0.7rem;">Wenn diese App dir dabei hilft, deinen Geschmack bewusster zu erleben, deine schönsten Genussmomente festzuhalten und über die Jahre ein persönliches Geschmacksarchiv aufzubauen, dann hat sie ihren Zweck erfüllt.</p>
+        <p style="margin-bottom:0.7rem;">Ich wünsche dir viele besondere Entdeckungen, spannende Vergleiche und vor allem unvergessliche Genussmomente.</p>
+        <p style="margin-bottom:0.7rem;">Und falls diese App dich tatsächlich begeistert und sie ein fester Begleiter deiner Verkostungen wird, freue ich mich natürlich auch über das eine oder andere Getränk, das seinen Weg zu mir findet. Schließlich muss ich die App ja regelmäßig weiterentwickeln – und das testet sich mit guten Getränken bekanntlich am besten. 🥂</p>
+        <p style="text-align:right;"><i>– Carl</i></p>
+      </div>
+
+      <div class="card">
+        <h2>✉️ Kontakt</h2>
+        <p>Wünsche, Ideen oder ein Getränk auf den Weg bringen: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
+      </div>
+      <div class="knopfreihe">
+        <a class="knopf" href="./">🥂 Loslegen: Verkosten</a>
+        <a class="knopf zweit" href="?meine=1">📖 Meine Verkostungen</a>
+      </div>
 
     <?php elseif ($ansicht === 'meine'): ?>
       <!-- ==================== MEIN VERKOSTUNGSBUCH ==================== -->
