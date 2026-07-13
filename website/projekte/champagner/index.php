@@ -414,6 +414,21 @@ function profilFoto(array $daten, string $name): string
     return $datei !== '' && is_file(BILDER_DIR . '/' . $datei) ? $datei : '';
 }
 
+/** Bewertung der aktuellen Person zu einem Getränk oder null. */
+function meineBewertung(array $daten, string $cid): ?array
+{
+    $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
+    if ($ich === '') {
+        return null;
+    }
+    foreach ($daten['bewertungen'] as $b) {
+        if ($b['champagner_id'] === $cid && mb_strtolower(trim((string)$b['person'])) === $ich) {
+            return $b;
+        }
+    }
+    return null;
+}
+
 /** Grobe Distanz in Metern zwischen zwei Koordinaten (für kleine Abstände ausreichend). */
 function distanzMeter(float $lat1, float $lon1, float $lat2, float $lon2): int
 {
@@ -3736,7 +3751,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           if ($imGlas !== null) {
               echo '<div class="card" style="border-left:5px solid var(--accent); display:flex; align-items:center; gap:0.8rem; justify-content:space-between; flex-wrap:wrap;">'
                   . '<span>🥂 <b>Ihr trinkt gerade:</b> ' . e($imGlas['name']) . '<br><span class="anzahl">' . e($meins['titel']) . '</span></span>'
-                  . '<a class="knopf" href="?bewerten=' . e(rawurlencode($imGlas['id'])) . '">Bewerten</a>'
+                  . '<a class="knopf" href="?bewerten=' . e(rawurlencode($imGlas['id'])) . '">' . (meineBewertung($daten, $imGlas['id']) !== null ? '🔁 Nochmal' : 'Bewerten') . '</a>'
                   . '</div>';
           }
       }
@@ -3830,7 +3845,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <span class="f-wertung"><?= sterneAnzeige($gesamt) ?><?= $bewertungen !== [] ? ' <span class="anzahl">(' . count($bewertungen) . ')</span>' : '' ?></span>
               </span>
             </a>
-            <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>&amp;vk=<?= $kontextOhne ? 'ohne' : e(rawurlencode($kontextWeingut['id'])) ?>">Bewerten</a>
+            <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>&amp;vk=<?= $kontextOhne ? 'ohne' : e(rawurlencode($kontextWeingut['id'])) ?>"><?= meineBewertung($daten, $c['id']) !== null ? '🔁 Nochmal' : 'Bewerten' ?></a>
           </div>
         <?php endforeach; ?>
         </div>
@@ -3882,7 +3897,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
             </p>
             <div class="knopfreihe" style="margin-top:0.5rem;">
-              <a class="knopf" href="?bewerten=<?= e(rawurlencode($glasChampagner['id'])) ?>">Jetzt bewerten</a>
+              <?php $meineGlasB = meineBewertung($daten, $glasChampagner['id']); ?>
+              <a class="knopf" href="?bewerten=<?= e(rawurlencode($glasChampagner['id'])) ?>"><?= $meineGlasB !== null ? '🔁 Noch einmal bewerten' : 'Jetzt bewerten' ?></a>
+              <?php if ($meineGlasB !== null): ?><span class="anzahl" style="align-self:center;">deine Wertung: <?= date('d.m., H:i', (int)($meineGlasB['zeit'] ?? 0)) ?> Uhr</span><?php endif; ?>
               <a class="knopf zweit" href="?ergebnis=<?= e(rawurlencode($glasChampagner['id'])) ?>">Ergebnis ansehen</a>
             </div>
           <?php else: ?>
@@ -5005,8 +5022,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <span class="anzahl">Noch keine Bewertungen – sei die/der Erste!</span>
           <?php endif; ?>
         </p>
-        <div class="knopfreihe" style="margin-top:0.4rem;">
-          <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Jetzt selbst bewerten</a>
+        <?php $meineB = meineBewertung($daten, $aktiverChampagner['id']); ?>
+        <div class="knopfreihe" style="margin-top:0.4rem; align-items:center;">
+          <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>"><?= $meineB !== null ? '🔁 Noch einmal bewerten' : 'Jetzt selbst bewerten' ?></a>
+          <?php if ($meineB !== null): ?>
+            <span class="anzahl">Du hast am <?= date('d.m.Y \u\m H:i', (int)($meineB['zeit'] ?? 0)) ?> Uhr bewertet.</span>
+          <?php endif; ?>
         </div>
       </div>
 
@@ -5948,7 +5969,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <span class="f-wertung"><?= sterneAnzeige($gesamt) ?><?= $bewertungen !== [] ? ' <span class="anzahl">(' . count($bewertungen) . ')</span>' : '' ?></span>
             </span>
           </a>
-          <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>">Bewerten</a>
+          <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>"><?= meineBewertung($daten, $c['id']) !== null ? '🔁 Nochmal' : 'Bewerten' ?></a>
         </div>
       <?php endforeach; ?>
 
@@ -6434,11 +6455,38 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         fetch(u.toString(), { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
           var doc = new DOMParser().parseFromString(html, 'text/html');
           var main = doc.querySelector('main');
-          if (main && main.innerHTML !== letzterStand) { location.reload(); }
+          if (main && main.innerHTML !== letzterStand) { if (window.klappZustandSichern) { window.klappZustandSichern(); } location.reload(); }
         }).catch(function () { /* offline o. ä. – nächster Versuch in 20 s */ });
       }, 20000);
     })();
     <?php endif; ?>
+
+    // Klappzustände über automatische Neuladungen hinweg merken
+    (function () {
+      var schluessel = 'klapp:' + location.pathname + location.search;
+      window.klappZustandSichern = function () {
+        var z = { details: [], karten: [], tage: [] };
+        document.querySelectorAll('details.card').forEach(function (d, i) { if (d.open) { z.details.push(i); } });
+        document.querySelectorAll('.card > h2').forEach(function (h, i) { if (!h.parentNode.classList.contains('zu')) { z.karten.push(i); } });
+        document.querySelectorAll('.trip-tag-knopf').forEach(function (k, i) {
+          var g = document.getElementById(k.dataset.ziel);
+          if (g && !g.hidden) { z.tage.push(i); }
+        });
+        try { sessionStorage.setItem(schluessel, JSON.stringify(z)); } catch (e) {}
+      };
+      try {
+        var z = JSON.parse(sessionStorage.getItem(schluessel) || 'null');
+        if (z) {
+          sessionStorage.removeItem(schluessel);
+          document.querySelectorAll('details.card').forEach(function (d, i) { d.open = z.details.indexOf(i) !== -1; });
+          document.querySelectorAll('.card > h2').forEach(function (h, i) { h.parentNode.classList.toggle('zu', z.karten.indexOf(i) === -1); });
+          document.querySelectorAll('.trip-tag-knopf').forEach(function (k, i) {
+            var g = document.getElementById(k.dataset.ziel);
+            if (g) { g.hidden = z.tage.indexOf(i) === -1; k.classList.toggle('zu', g.hidden); }
+          });
+        }
+      } catch (e) {}
+    })();
 
     // Beim Absenden sichtbar machen, dass gearbeitet wird (v. a. Foto-Upload)
     document.querySelectorAll('form').forEach(function (form) {
