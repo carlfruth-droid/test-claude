@@ -407,6 +407,34 @@ function teilnehmerLimitErreicht(array $t): bool
     return !empty($t['gast']) && count($t['teilnehmer'] ?? []) >= 2;
 }
 
+/**
+ * Tastings, die wirklich zum aktuellen Nutzer gehören (Teilnehmer per Name
+ * oder Einladung, oder Besitzer per Benutzerkonto) – id => tasting.
+ */
+function meineTastings(array $daten): array
+{
+    $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
+    $einladung = (string)($_COOKIE['einladung'] ?? '');
+    $konto = aktuellerBenutzer($daten);
+    $treffer = [];
+    foreach ($daten['tastings'] as $t) {
+        $dabei = $konto !== null && (string)($t['besitzer'] ?? '') === (string)$konto['id'];
+        if (!$dabei) {
+            foreach (($t['teilnehmer'] ?? []) as $p) {
+                if (($einladung !== '' && hash_equals((string)($p['token'] ?? ''), $einladung))
+                    || ($ich !== '' && mb_strtolower(trim((string)($p['name'] ?? ''))) === $ich)) {
+                    $dabei = true;
+                    break;
+                }
+            }
+        }
+        if ($dabei) {
+            $treffer[$t['id']] = $t;
+        }
+    }
+    return $treffer;
+}
+
 /** Profilfoto einer Person (Dateiname) oder ''. */
 function profilFoto(array $daten, string $name): string
 {
@@ -1944,20 +1972,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . ($wg !== null ? ' vom Erzeuger "' . $wg['name'] . '"' : '')
             . '. Fasse kurz auf Deutsch zusammen, als Stichpunkte mit Zeilenumbrüchen, insgesamt höchstens ~120 Wörter: '
             . 'Stil und Rebsorten, Dosage, Besonderheiten der Herstellung, Bewertungen/Auszeichnungen (falls findbar), üblicher Preis. '
-            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben.';
+            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben. '
+            . 'Ganz am Ende, als eigene letzte Zeile, zusätzlich genau dieses JSON mit deinen besten Werten (unbekannte Felder leer lassen): '
+            . '{"rebsorte":"...","preis":"z. B. ca. 45 €"}';
         $text = claudeWebsuche($auftrag);
         if ($text === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.'));
         }
-        datenAendern(function (array $d) use ($cid, $text): array {
+        // Struktur-Zeile am Ende herauslösen → Vorschlag für die Stammdaten
+        $vorschlag = [];
+        if (preg_match_all('/\{[^{}]*\}/s', $text, $mm) && $mm[0] !== []) {
+            $roh = end($mm[0]);
+            $j = json_decode($roh, true);
+            if (is_array($j)) {
+                $text = trim(str_replace($roh, '', $text));
+                $vr = mb_substr(trim((string)($j['rebsorte'] ?? '')), 0, 80);
+                $vp = mb_substr(trim((string)($j['preis'] ?? '')), 0, 20);
+                if ($vr !== '' && mb_strtolower($vr) !== mb_strtolower(trim((string)($c['rebsorte'] ?? '')))) {
+                    $vorschlag['rebsorte'] = $vr;
+                }
+                if ($vp !== '' && $vp !== trim((string)($c['preis'] ?? ''))) {
+                    $vorschlag['preis'] = $vp;
+                }
+            }
+        }
+        datenAendern(function (array $d) use ($cid, $text, $vorschlag): array {
             foreach ($d['champagner'] as &$c2) {
                 if ($c2['id'] === $cid) {
                     $c2['recherche'] = $text;
+                    if ($vorschlag !== []) {
+                        $c2['recherche_vorschlag'] = $vorschlag;
+                    } else {
+                        unset($c2['recherche_vorschlag']);
+                    }
                 }
             }
             return $d;
         });
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.'));
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($vorschlag !== [] ? ' Dort wartet ein Stammdaten-Vorschlag auf deine Bestätigung.' : '')));
     }
 
     if ($aktion === 'weingut_recherche') {
@@ -1969,20 +2021,104 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $auftrag = 'Recherchiere im Web das Champagner-Weingut/Champagnerhaus "' . $weingut['name'] . '" (Champagne, Frankreich). '
             . 'Fasse kurz auf Deutsch zusammen, als Stichpunkte mit Zeilenumbrüchen, insgesamt höchstens ~120 Wörter: '
             . 'Geschichte und Größe, Stil und Besonderheiten, bekannte Cuvées, Preisniveau, Besuchsmöglichkeiten. '
-            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben.';
+            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben. '
+            . 'Ganz am Ende, als eigene letzte Zeile, zusätzlich genau dieses JSON mit deinen besten Werten (unbekannte Felder leer lassen): '
+            . '{"adresse":"...","telefon":"...","email":"...","website":"..."}';
         $text = claudeWebsuche($auftrag);
         if ($text === '') {
             zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.'));
         }
-        datenAendern(function (array $d) use ($id, $text): array {
+        // Struktur-Zeile am Ende herauslösen → Vorschlag für die Kontakt-Stammdaten
+        $vorschlag = [];
+        if (preg_match_all('/\{[^{}]*\}/s', $text, $mm) && $mm[0] !== []) {
+            $roh = end($mm[0]);
+            $j = json_decode($roh, true);
+            if (is_array($j)) {
+                $text = trim(str_replace($roh, '', $text));
+                $kontaktAlt = (string)($weingut['kontakt'] ?? '');
+                foreach (['adresse' => 100, 'telefon' => 40, 'email' => 80, 'website' => 100] as $feld => $lang) {
+                    $wert = mb_substr(trim((string)($j[$feld] ?? '')), 0, $lang);
+                    if ($wert !== '' && mb_stripos($kontaktAlt, $wert) === false) {
+                        $vorschlag[$feld] = $wert;
+                    }
+                }
+            }
+        }
+        datenAendern(function (array $d) use ($id, $text, $vorschlag): array {
             foreach ($d['weingueter'] as &$w) {
                 if ($w['id'] === $id) {
                     $w['recherche'] = $text;
+                    if ($vorschlag !== []) {
+                        $w['recherche_vorschlag'] = $vorschlag;
+                    } else {
+                        unset($w['recherche_vorschlag']);
+                    }
                 }
             }
             return $d;
         });
-        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.'));
+        zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($vorschlag !== [] ? ' Dort wartet ein Kontakt-Vorschlag auf deine Bestätigung.' : '')));
+    }
+
+    if ($aktion === 'recherche_uebernehmen' || $aktion === 'recherche_verwerfen') {
+        // Recherche-Vorschlag aktiv bestätigen (oder ablehnen) → Stammdaten
+        $typ = (string)($_POST['typ'] ?? '');
+        $id = (string)($_POST['id'] ?? '');
+        $uebernehmen = $aktion === 'recherche_uebernehmen';
+        if ($typ === 'champagner') {
+            $c = champagnerHolen(datenLaden(), $id);
+            if ($c === null) {
+                zurueck('?fehler=' . rawurlencode('Dieses Getränk existiert nicht (mehr).'));
+            }
+            datenAendern(function (array $d) use ($id, $uebernehmen): array {
+                foreach ($d['champagner'] as &$c2) {
+                    if ($c2['id'] !== $id) {
+                        continue;
+                    }
+                    $v = is_array($c2['recherche_vorschlag'] ?? null) ? $c2['recherche_vorschlag'] : [];
+                    if ($uebernehmen) {
+                        if (($v['rebsorte'] ?? '') !== '') {
+                            $c2['rebsorte'] = (string)$v['rebsorte'];
+                        }
+                        if (($v['preis'] ?? '') !== '') {
+                            $c2['preis'] = (string)$v['preis'];
+                        }
+                    }
+                    unset($c2['recherche_vorschlag']);
+                }
+                return $d;
+            });
+            zurueck('?ergebnis=' . rawurlencode($id) . '&ok=' . rawurlencode($uebernehmen ? 'Stammdaten aus der Recherche übernommen.' : 'Vorschlag verworfen.'));
+        }
+        if ($typ === 'weingut') {
+            $w0 = weingutHolen(datenLaden(), $id);
+            if ($w0 === null) {
+                zurueck('?fehler=' . rawurlencode('Dieses Weingut existiert nicht (mehr).'));
+            }
+            datenAendern(function (array $d) use ($id, $uebernehmen): array {
+                foreach ($d['weingueter'] as &$w) {
+                    if ($w['id'] !== $id) {
+                        continue;
+                    }
+                    $v = is_array($w['recherche_vorschlag'] ?? null) ? $w['recherche_vorschlag'] : [];
+                    if ($uebernehmen && $v !== []) {
+                        $kontakt = trim((string)($w['kontakt'] ?? ''));
+                        $namen = ['adresse' => '', 'telefon' => 'Tel. ', 'email' => '', 'website' => ''];
+                        foreach ($namen as $feld => $praefixText) {
+                            $wert = trim((string)($v[$feld] ?? ''));
+                            if ($wert !== '' && mb_stripos($kontakt, $wert) === false) {
+                                $kontakt .= ($kontakt !== '' ? "\n" : '') . $praefixText . $wert;
+                            }
+                        }
+                        $w['kontakt'] = $kontakt;
+                    }
+                    unset($w['recherche_vorschlag']);
+                }
+                return $d;
+            });
+            zurueck('?weingut=' . rawurlencode($id) . '&ok=' . rawurlencode($uebernehmen ? 'Kontaktdaten aus der Recherche übernommen.' : 'Vorschlag verworfen.'));
+        }
+        zurueck('?fehler=' . rawurlencode('Unbekannter Vorschlagstyp.'));
     }
 
     if ($aktion === 'tasting_anlegen') {
@@ -2791,11 +2927,24 @@ function thumbErzeugen(string $quelle, string $ziel, int $maxKante = 640): bool
         return false;
     }
     [$b, $h] = $info;
-    // Extrem hochauflösende Fotos (>40 Megapixel) würden das Speicherlimit
-    // sprengen – dann lieber keine Vorschau als ein abgebrochener Upload.
+    // Speicher-Schutz: das entpackte Bild (4 Bytes je Pixel, plus zweite Kopie
+    // bei der EXIF-Drehung) muss sicher ins PHP-Speicherlimit passen – sonst
+    // stirbt mitten im Seitenaufbau die ganze Seite.
+    $limitRoh = trim((string)ini_get('memory_limit'));
+    if ($limitRoh !== '' && $limitRoh !== '-1') {
+        $einheit = strtolower(substr($limitRoh, -1));
+        $limit = (int)((float)$limitRoh * match ($einheit) {
+            'g' => 1073741824, 'm' => 1048576, 'k' => 1024, default => 1,
+        });
+        $frei = $limit - memory_get_usage(true) - 16 * 1024 * 1024; // Reserve
+        if ($b * $h * 9 > $frei) {
+            return false;
+        }
+    }
     if ($b * $h > 40000000) {
         return false;
     }
+    @set_time_limit(60); // jede Vorschau bekommt frische Zeit – kein Seiten-Timeout
     $typ = $info[2];
     $img = match ($typ) {
         IMAGETYPE_JPEG => @imagecreatefromjpeg($quelle),
@@ -2844,9 +2993,17 @@ function thumbErzeugen(string $quelle, string $ziel, int $maxKante = 640): bool
 function thumbUrl(string $name): string
 {
     $thumb = thumbVerzeichnis() . '/' . $name . '.jpg';
-    if (!is_file($thumb) && !thumbErzeugen(BILDER_DIR . '/' . $name, $thumb)) {
+    if (is_file($thumb)) {
+        return 'bilder/thumbs/' . rawurlencode($name . '.jpg');
+    }
+    // Je Seitenaufruf nur begrenzt viele neue Vorschauen erzeugen – nach einem
+    // großen Foto-Schwung füllt sich der Rest bei den nächsten Aufrufen auf,
+    // statt einen einzelnen Aufruf ins Zeitlimit zu treiben.
+    static $budget = 12;
+    if ($budget <= 0 || !thumbErzeugen(BILDER_DIR . '/' . $name, $thumb)) {
         return 'bilder/' . rawurlencode($name);
     }
+    $budget--;
     return 'bilder/thumbs/' . rawurlencode($name . '.jpg');
 }
 
@@ -4292,7 +4449,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1>Neues Weingut 📷</h1>
       <p class="untertitel">Fotografieren – Standort erkennen – anlegen.</p>
     <?php elseif ($ansicht === 'weingut'): ?>
-      <p class="zurueck"><a href="?weingueter=1">&larr; Zur&uuml;ck zur Weingut-Liste</a></p>
+      <p class="zurueck"><a href="?weingueter=1">&larr; Zur&uuml;ck</a></p>
       <h1><?= e($aktivesWeingut['name']) ?></h1>
       <p class="untertitel">Weingut</p>
     <?php elseif ($ansicht === 'bewerten'): ?>
@@ -4300,8 +4457,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
     <?php else: ?>
-      <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck zur Liste</a></p>
-      <h1><?= e($aktiverChampagner['name']) ?></h1>
+      <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck</a></p>
+      <?php $kopfCFotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? '')); ?>
+      <h1 style="display:flex; align-items:center; gap:0.65rem;">
+        <?php if ($kopfCFotos !== []): ?>
+          <span class="bild" style="flex-shrink:0;"><a href="bilder/<?= e(rawurlencode($kopfCFotos[0])) ?>"><img src="<?= e(thumbUrl($kopfCFotos[0])) ?>" alt="" style="width:54px; height:54px; border-radius:12px; object-fit:cover; display:block; border:2px solid var(--accent);"></a></span>
+        <?php endif; ?>
+        <span><?= e($aktiverChampagner['name']) ?></span>
+      </h1>
       <?php
         $cTastingTitel = '';
         foreach ($daten['tastings'] as $t) {
@@ -6239,6 +6402,34 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php else: ?>
             <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Champagner.</p>
           <?php endif; ?>
+          <?php $cVorschlag = is_array($aktiverChampagner['recherche_vorschlag'] ?? null) ? array_filter($aktiverChampagner['recherche_vorschlag']) : []; ?>
+          <?php if ($cVorschlag !== [] && $eingeloggt): ?>
+            <div style="background:var(--accent-hell); border-radius:12px; padding:0.7rem 0.9rem; margin-top:0.7rem;">
+              <p style="margin-bottom:0.4rem;"><b>💡 Für die Stammdaten gefunden – übernehmen?</b></p>
+              <?php if (isset($cVorschlag['rebsorte'])): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">🍇 Rebsorte: <b><?= e($cVorschlag['rebsorte']) ?></b><?= trim((string)($aktiverChampagner['rebsorte'] ?? '')) !== '' ? ' – bisher: ' . e((string)$aktiverChampagner['rebsorte']) : '' ?></p>
+              <?php endif; ?>
+              <?php if (isset($cVorschlag['preis'])): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">💶 Preis: <b><?= e($cVorschlag['preis']) ?></b><?= trim((string)($aktiverChampagner['preis'] ?? '')) !== '' ? ' – bisher: ' . e((string)$aktiverChampagner['preis']) : '' ?></p>
+              <?php endif; ?>
+              <div class="knopfreihe" style="margin-top:0.5rem;">
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="recherche_uebernehmen">
+                  <input type="hidden" name="typ" value="champagner">
+                  <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
+                  <button class="knopf klein" type="submit">✓ Übernehmen</button>
+                </form>
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="recherche_verwerfen">
+                  <input type="hidden" name="typ" value="champagner">
+                  <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
+                  <button class="knopf klein zweit" type="submit">Verwerfen</button>
+                </form>
+              </div>
+            </div>
+          <?php endif; ?>
           <?php if ($eingeloggt): ?>
             <form method="post" style="margin-top:0.8rem;">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -6788,6 +6979,33 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php else: ?>
             <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Weingut.</p>
           <?php endif; ?>
+          <?php $wVorschlag = is_array($aktivesWeingut['recherche_vorschlag'] ?? null) ? array_filter($aktivesWeingut['recherche_vorschlag']) : []; ?>
+          <?php if ($wVorschlag !== [] && $eingeloggt): ?>
+            <div style="background:var(--accent-hell); border-radius:12px; padding:0.7rem 0.9rem; margin-top:0.7rem;">
+              <p style="margin-bottom:0.4rem;"><b>💡 Für die Kontakt-Stammdaten gefunden – übernehmen?</b></p>
+              <?php foreach (['adresse' => '📍 Adresse', 'telefon' => '📞 Telefon', 'email' => '✉️ E-Mail', 'website' => '🌐 Website'] as $vFeld => $vLabel): ?>
+                <?php if (isset($wVorschlag[$vFeld])): ?>
+                  <p class="anzahl" style="margin:0.15rem 0;"><?= $vLabel ?>: <b><?= e($wVorschlag[$vFeld]) ?></b></p>
+                <?php endif; ?>
+              <?php endforeach; ?>
+              <div class="knopfreihe" style="margin-top:0.5rem;">
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="recherche_uebernehmen">
+                  <input type="hidden" name="typ" value="weingut">
+                  <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+                  <button class="knopf klein" type="submit">✓ In den Kontakt übernehmen</button>
+                </form>
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="recherche_verwerfen">
+                  <input type="hidden" name="typ" value="weingut">
+                  <input type="hidden" name="id" value="<?= e($aktivesWeingut['id']) ?>">
+                  <button class="knopf klein zweit" type="submit">Verwerfen</button>
+                </form>
+              </div>
+            </div>
+          <?php endif; ?>
           <?php if ($eingeloggt): ?>
             <form method="post" style="margin-top:0.8rem;">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -6888,10 +7106,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
     <?php else: ?>
       <!-- ==================== ÜBERSICHT ==================== -->
-      <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf" href="?liste=1">Getränke</a>
-        <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
-        <a class="knopf zweit" href="?fotos=1">Fotos</a>
+      <div class="sortier-leiste">Zeigen:
+        <a class="aktiv" href="?liste=1">🥂 Getränke</a>
+        <a href="?weingueter=1">🍇 Weingüter</a>
+        <a href="?fotos=1">📸 Fotos</a>
       </div>
 
       <div class="sortier-leiste" style="margin-bottom:0.9rem;">
@@ -6907,21 +7125,38 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <p>Die Kategorie ist schon vorbereitet – die Verkostung startet hier, sobald ihr sie braucht. Bis dahin: <a href="?liste=1">zurück zum Champagner</a>. 🥂</p>
         </div>
       <?php else: ?>
-      <a class="knopf gross" href="?neu=1&amp;kat=<?= e($kategorie === 'alle' ? 'champagner' : $kategorie) ?>">📷&nbsp; Neue Flasche erfassen</a>
       <?php
-        // Tasting-Umschalter: eigenes Tasting ist Standard, „Alle“ (Archiv) nur für Admins
+        // Sichtbarkeit: jeder sieht nur die eigenen Tastings (Teilnehmer/Besitzer).
+        // Eingeladene Betrachter (Mitschau-Link mit tid) sehen genau dieses eine
+        // Tasting. Nur Administratoren sehen alles.
+        $meineTs = meineTastings($daten);
         $tidWahl = (string)($_GET['tid'] ?? '');
-        $tidGueltig = $tidWahl === 'alle' && $istAdmin;
+        $tidBekannt = false;
         foreach ($daten['tastings'] as $t) {
-            if ($t['id'] === $tidWahl) { $tidGueltig = true; break; }
+            if ($t['id'] === $tidWahl) { $tidBekannt = true; break; }
         }
-        if (!$tidGueltig) {
-            $tidWahl = $blickTastingId !== '' ? $blickTastingId : 'alle';
+        if ($tidWahl === 'alle') {
+            if (!$istAdmin) { $tidWahl = ''; }
+        } elseif (!$tidBekannt) {
+            $tidWahl = '';
         }
-        $tastingsSortiert = $daten['tastings'];
+        if ($tidWahl === '') {
+            if ($blickTastingId !== '') {
+                $tidWahl = $blickTastingId;
+            } elseif ($istAdmin) {
+                $tidWahl = 'alle';
+            } else {
+                $tidWahl = (string)(array_key_first($meineTs) ?? '');
+            }
+        }
+        $tastingsSortiert = $istAdmin ? $daten['tastings'] : array_values($meineTs);
+        if (!$istAdmin && $tidWahl !== '' && $tidWahl !== 'alle' && !isset($meineTs[$tidWahl])) {
+            // Eingeladener Betrachter: nur dieses eine Tasting anzeigen
+            $tastingsSortiert = array_values(array_filter($daten['tastings'], fn($t) => $t['id'] === $tidWahl));
+        }
         usort($tastingsSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
       ?>
-      <?php if (count($daten['tastings']) > 1): ?>
+      <?php if (count($tastingsSortiert) > 1 || $istAdmin): ?>
         <div class="sortier-leiste">Tasting:
           <?php foreach ($tastingsSortiert as $t): ?>
             <a class="<?= $tidWahl === $t['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=<?= e(rawurlencode($t['id'])) ?>"><?= e($t['titel']) ?></a>
@@ -6938,7 +7173,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <input type="search" class="filter-feld" placeholder="🔍 Champagner oder Weingut suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php
-        $champagnerListe = array_values(array_filter(
+        $champagnerListe = $tidWahl === '' ? [] : array_values(array_filter(
             $daten['champagner'],
             fn($c) => ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)
                 && ($tidWahl === 'alle' || champagnerInTasting($c, $tidWahl))
@@ -6952,7 +7187,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       ?>
       <?php $katName = $kategorie === 'alle' ? 'Getränk' : $KATEGORIEN_GETRAENKE[$kategorie][1]; ?>
       <?php if ($champagnerListe === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;"><?= $tidWahl === 'alle' ? 'Noch kein ' . e($katName) . ' angelegt – oben auf „Neue Flasche erfassen" tippen!' : 'In diesem Tasting ist noch kein ' . e($katName) . ' erfasst – oben auf „Neue Flasche erfassen" tippen oder oben auf „Alle" umschalten.' ?></p></div>
+        <div class="card"><p style="color:var(--muted); font-style:italic;">Hier ist noch kein <?= e($katName) ?> erfasst – leg unter <a href="./">🥂 Verkosten</a> mit „Neues Getränk“ los!</p></div>
       <?php endif; ?>
       <?php foreach ($champagnerListe as $c): ?>
         <?php
