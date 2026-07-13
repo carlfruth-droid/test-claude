@@ -3301,6 +3301,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       border-radius: 10px; padding: 0.95rem 1.05rem; margin-bottom: 0.6rem;
     }
     .card h2 { font-size: 1.15rem; font-weight: normal; color: var(--accent); margin-bottom: 0.5rem; }
+    /* Einheitlich: jede Karten-Überschrift klappt ihre Karte auf/zu */
+    .card > h2 { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
+    .card > h2::before { content: '▾ '; font-size: 0.85em; }
+    .card.zu > h2 { margin-bottom: 0; }
+    .card.zu > h2::before { content: '▸ '; }
+    .card.zu > :not(h2) { display: none !important; }
 
     .champagner-zeile { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
     .champagner-zeile .info { flex: 1; min-width: 12rem; }
@@ -4241,7 +4247,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <p class="anzahl" style="margin-top:0.5rem;">Jeder Teilnehmer bekommt einen persönlichen Link – ein Tipp darauf meldet ihn dauerhaft an (kein Passwort nötig).</p>
         </div>
 
-        <div class="card">
+        <div class="card zu">
           <h2>Tasting verwalten</h2>
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -4355,7 +4361,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
 
         <?php if ($benutzerAktiv === null): ?>
-          <div class="card" style="margin-top:1rem;">
+          <div class="card zu" style="margin-top:1rem;">
             <h2>👤 Benutzerkonto</h2>
             <p class="anzahl" style="margin-bottom:0.7rem;">Kostenfrei, Anmeldung läuft nie ab. Registrierte legen sofort Tastings an (du + 1 Person); größere Runden schaltet der Administrator frei.</p>
             <form method="post">
@@ -4380,7 +4386,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </form>
           </details>
         <?php else: ?>
-          <div class="card" style="margin-top:1rem;">
+          <div class="card zu" style="margin-top:1rem;">
             <h2>👤 Benutzerkonto</h2>
             <p>Angemeldet als <b><?= e(trim((string)($benutzerAktiv['vorname'] ?? '') . ' ' . (string)($benutzerAktiv['name'] ?? ''))) ?></b>
               <span class="anzahl">(<?= e((string)($benutzerAktiv['email'] ?? '')) ?>)</span>
@@ -4577,7 +4583,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         </div>
 
-        <div class="card">
+        <div class="card zu">
           <h2>🍇 Alle Weingüter (<?= count($daten['weingueter']) ?>)</h2>
           <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel="#vw-weingueter">
           <div id="vw-weingueter">
@@ -5019,7 +5025,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         <?php endif; ?>
 
-        <div class="card">
+        <div class="card zu">
           <h2>Einzelbewertungen</h2>
           <div class="tabelle-scroll">
             <table>
@@ -5168,7 +5174,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <?php $recherche = trim((string)($aktiverChampagner['recherche'] ?? '')); ?>
       <?php if ($recherche !== '' || $eingeloggt): ?>
-        <div class="card">
+        <div class="card zu">
           <h2>Recherche</h2>
           <?php if ($recherche !== ''): ?>
             <p><?= verlinken($recherche) ?></p>
@@ -5188,7 +5194,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php endif; ?>
 
       <?php $zugeordnet = weingutHolen($daten, (string)($aktiverChampagner['weingut_id'] ?? '')); ?>
-      <div class="card">
+      <div class="card zu">
         <h2>Weingut</h2>
         <?php if ($zugeordnet !== null): ?>
           <p><a href="?weingut=<?= e(rawurlencode($zugeordnet['id'])) ?>"><?= e($zugeordnet['name']) ?></a></p>
@@ -5717,7 +5723,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <?php $wRecherche = trim((string)($aktivesWeingut['recherche'] ?? '')); ?>
       <?php if ($wRecherche !== '' || $eingeloggt): ?>
-        <div class="card">
+        <div class="card zu">
           <h2>Recherche</h2>
           <?php if ($wRecherche !== ''): ?>
             <p><?= verlinken($wRecherche) ?></p>
@@ -6232,6 +6238,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           el.style.display = el.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
         });
       });
+    });
+
+    // Einheitlich: Karten-Überschriften klappen ihre Karte auf und zu
+    document.querySelectorAll('.card > h2').forEach(function (h) {
+      h.addEventListener('click', function () { h.parentNode.classList.toggle('zu'); });
     });
 
     // Tasting-Bild: Tipp auf Titel oder Avatar öffnet das Foto-Overlay
