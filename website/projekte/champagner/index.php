@@ -3355,6 +3355,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
   <title>TasteLog</title>
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="apple-mobile-web-app-title" content="TasteLog">
+  <meta name="theme-color" content="#faf6ee">
   <style>
     :root {
       --bg: #faf6ee;
@@ -3494,9 +3500,22 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       display: none; position: absolute; top: 100%; left: 0; right: 0;
       flex-direction: column; gap: 0; background: var(--card);
       border-bottom: 1px solid var(--border); box-shadow: 0 8px 16px rgba(0,0,0,0.08);
+      max-height: calc(100vh - 70px); max-height: calc(100dvh - 70px);
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
     }
     nav.site-nav a { color: var(--text); text-decoration: none; padding: 0.95rem 1.4rem; border-bottom: 1px solid var(--border); }
     nav.site-nav a:hover { color: var(--accent); }
+    /* Untermenüs im Burger-Menü: native Klappgruppen */
+    nav.site-nav details { border-bottom: 1px solid var(--border); }
+    nav.site-nav details summary {
+      list-style: none; cursor: pointer; padding: 0.95rem 1.4rem; color: var(--text);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    nav.site-nav details summary::-webkit-details-marker { display: none; }
+    nav.site-nav details summary::after { content: '▸'; color: var(--muted); font-size: 0.85em; }
+    nav.site-nav details[open] summary::after { content: '▾'; }
+    nav.site-nav details a { padding-left: 2.6rem; background: var(--bg); display: block; }
+    nav.site-nav details a:last-child { border-bottom: none; }
     #nav-toggle:checked ~ nav.site-nav { display: flex; }
     #nav-toggle:checked ~ .burger span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
     #nav-toggle:checked ~ .burger span:nth-child(2) { opacity: 0; }
@@ -3853,7 +3872,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php endif; ?>
       </div>
     <?php else: ?>
-      <a class="brand" href="./"><strong>TasteLog</strong></a>
+      <a class="brand" href="./" style="display:flex; align-items:center; gap:0.45rem; text-decoration:none;"><img src="icon-192.png" alt="" style="width:30px; height:30px;"><strong>TasteLog</strong></a>
     <?php endif; ?>
     <button type="button" id="info-knopf" aria-label="Anleitung: So wird verkostet" title="So wird verkostet">ℹ️</button>
     <input type="checkbox" id="nav-toggle" aria-hidden="true">
@@ -3865,16 +3884,25 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?meine=1">📖 Meine Liste</a>
       <a href="?liste=1">🔍 Entdecken</a>
       <a href="?tasting=1">👥 Tastings</a>
-      <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
-      <a href="?ueber=1">💛 Über TasteLog</a>
-      <a href="?nutzung=1">📜 Nutzungsbedingungen</a>
-      <a href="?impressum=1">⚖️ Impressum &amp; Datenschutz</a>
+      <details>
+        <summary>ℹ️ Hilfe &amp; Info</summary>
+        <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
+        <a href="?ueber=1">💛 Über TasteLog</a>
+        <a href="mailto:tasting@fruthzeug.de">✉️ Kontakt</a>
+      </details>
+      <details>
+        <summary>⚖️ Rechtliches</summary>
+        <a href="?nutzung=1">📜 Nutzungsbedingungen</a>
+        <a href="?impressum=1">⚖️ Impressum &amp; Datenschutz</a>
+      </details>
       <?php if ($istAdmin): ?>
-        <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
-        <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
-        <a href="?verwaltung=1">🛠️ Verwaltung</a>
+        <details>
+          <summary>🛠️ Administration</summary>
+          <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
+          <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
+          <a href="?verwaltung=1">🛠️ Verwaltung</a>
+        </details>
       <?php endif; ?>
-      <a href="mailto:tasting@fruthzeug.de">✉️ Kontakt</a>
       <a href="#" id="neu-laden">&#10227; Neu laden</a>
       <a href="/">fruthzeug.de</a>
     </nav>
@@ -3882,8 +3910,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
   <main>
     <?php if ($ansicht === 'verkosten'): ?>
-      <h1>Verkosten 🥂</h1>
-      <p class="untertitel">Wo verkostest du gerade?</p>
+      <div style="text-align:center; margin:0.4rem 0 0.9rem;">
+        <img src="logo.png" alt="TasteLog" style="width:min(52vw, 15rem); height:auto; background:#fff; border-radius:16px; padding:0.7rem 1rem; box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+      </div>
+      <p class="untertitel" style="text-align:center;">Dein Verkostungsbuch – wo verkostest du gerade?</p>
     <?php elseif ($ansicht === 'werkstatt'): ?>
       <p class="zurueck"><a href="./">&larr; Anderes Weingut w&auml;hlen</a></p>
       <h1><?= $kontextOhne ? 'Ohne Weingut 🏠' : e($kontextWeingut['name']) . ' 🍇' ?></h1>
