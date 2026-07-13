@@ -557,6 +557,21 @@ if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['einladung']))
 
 $eingeloggt = ($_SESSION['tasting_ok'] ?? false) === true;
 
+// Fehlersuche: mit ?debug=1 (nur angemeldet) wird ein tödlicher PHP-Fehler
+// am Seitenende sichtbar gemacht, statt die Seite stumm abzuschneiden
+if (isset($_GET['debug']) && $eingeloggt) {
+    ini_set('display_errors', '1');
+    error_reporting(E_ALL);
+    register_shutdown_function(static function (): void {
+        $f = error_get_last();
+        if ($f !== null && in_array($f['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+            echo '<pre style="background:#fdd; color:#900; padding:1rem; white-space:pre-wrap;">FATAL: '
+                . htmlspecialchars($f['message'] . ' — ' . $f['file'] . ':' . $f['line'], ENT_QUOTES, 'UTF-8')
+                . '</pre>';
+        }
+    });
+}
+
 // Bildinfo für die Großansicht: Aufnahmedatum, Kamera, Ort, Maße, Zuordnung.
 // Wird vom ℹ️-Knopf der Großansicht per fetch geholt und als JSON geliefert.
 if (isset($_GET['bildinfo'])) {
