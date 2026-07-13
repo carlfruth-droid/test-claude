@@ -4549,7 +4549,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php if ($auchBewertet !== []): ?>
           <div style="margin-top:0.6rem; border-top:1px solid var(--border); padding-top:0.5rem;">
             <?php foreach (array_slice($auchBewertet, 0, 6, true) as $werName => $wann): ?>
-              <p class="anzahl" style="margin:0.15rem 0;">👤 <b><?= e($werName) ?></b> hat dieses Getränk auch bewertet – am <?= date('d.m.Y', $wann) ?></p>
+              <p class="anzahl" style="margin:0.15rem 0;">👤 <b><?= e((string)$werName) ?></b> hat dieses Getränk auch bewertet – am <?= date('d.m.Y', (int)$wann) ?></p>
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
@@ -4969,7 +4969,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               foreach (fotosFuer($c['id']) as $f) { $albumBilder[$f] = true; }
           }
           foreach (array_keys($wgErsterBesuch) as $wid) {
-              foreach (weingutFotos($wid) as $f) { $albumBilder[$f] = true; }
+              // (string)-Cast: PHP macht aus rein numerischen IDs Array-Schlüssel vom Typ int
+              foreach (weingutFotos((string)$wid) as $f) { $albumBilder[$f] = true; }
           }
           foreach ($tsAlleFotos as $f) { $albumBilder[$f] = true; }
           $albumBilder = array_keys($albumBilder);
