@@ -629,7 +629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         if ($gefunden === null || !password_verify($pw, (string)($gefunden['pw_hash'] ?? ''))) {
-            zurueck('?tasting=1&fehler=' . rawurlencode('E-Mail oder Passwort stimmt nicht.'));
+            zurueck('?meine=1&fehler=' . rawurlencode('E-Mail oder Passwort stimmt nicht.'));
         }
         setcookie('benutzer', (string)$gefunden['token'], [
             'expires' => time() + 60 * 60 * 24 * 3650, // läuft nicht ab
@@ -637,12 +637,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $_SESSION['tasting_ok'] = true;
         $_SESSION['person'] = (string)($gefunden['vorname'] ?? '');
-        zurueck('?tasting=1&ok=' . rawurlencode('Willkommen, ' . ($gefunden['vorname'] ?? '') . '! Du bleibst auf diesem Gerät dauerhaft angemeldet.'));
+        zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . ($gefunden['vorname'] ?? '') . '! Du bleibst auf diesem Gerät dauerhaft angemeldet.'));
     }
 
     if ($aktion === 'benutzer_logout') {
         setcookie('benutzer', '', ['expires' => time() - 3600, 'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax']);
-        zurueck('?tasting=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
+        zurueck('?meine=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
     }
 
     if ($aktion === 'beitreten') {
@@ -1639,10 +1639,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
         $pw = (string)($_POST['passwort'] ?? '');
         if ($vorname === '' || $nachname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            zurueck('?tasting=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
+            zurueck('?meine=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
         }
         if (mb_strlen($pw) < 6) {
-            zurueck('?tasting=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+            zurueck('?meine=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
         }
         $neuerBenutzer = [
             'id' => bin2hex(random_bytes(4)),
@@ -1658,7 +1658,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
             foreach ($d['benutzer'] as $b) {
                 if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
-                    zurueck('?tasting=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
+                    zurueck('?meine=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
                 }
             }
             $d['benutzer'][] = $neuerBenutzer;
@@ -1670,7 +1670,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $_SESSION['tasting_ok'] = true;
         $_SESSION['person'] = $vorname;
-        zurueck('?tasting=1&ok=' . rawurlencode('Willkommen, ' . $vorname . '! Dein Konto ist fertig – du kannst sofort Tastings anlegen (du + 1 Person). Für größere Runden schaltet dich der Administrator frei.'));
+        zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . $vorname . '! Dein Konto ist fertig – du kannst sofort Tastings anlegen (du + 1 Person). Für größere Runden schaltet dich der Administrator frei.'));
     }
 
     if ($aktion === 'konto_anfragen') {
@@ -3377,7 +3377,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     /* 📖 Der Trip: Zeitstrahl des Tastings */
     .trip { position: relative; padding-left: 1.3rem; }
     .trip::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: var(--border); border-radius: 1px; }
-    .trip-tag { font-weight: 600; color: var(--accent); margin: 0.7rem 0 0.35rem; }
+    .trip-tag-zeile { display: flex; align-items: center; gap: 0.5rem; margin: 0.7rem 0 0.35rem; }
+    .trip-tag-knopf { background: none; border: none; padding: 0; font-family: inherit; font-size: 1rem; font-weight: 600; color: var(--accent); cursor: pointer; }
+    .trip-tag-knopf::before { content: '▾ '; font-size: 0.85em; }
+    .trip-tag-knopf.zu::before { content: '▸ '; }
+    .trip-karte { text-decoration: none; font-size: 1.15rem; }
     .trip-eintrag { position: relative; display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.55rem; text-decoration: none; color: var(--text); }
     .trip-eintrag::before { content: ''; position: absolute; left: -1.02rem; top: 50%; transform: translateY(-50%); width: 9px; height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); }
     .trip-eintrag img { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
@@ -3938,78 +3942,93 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           }
           usort($trip, fn($x, $y) => $x['zeit'] <=> $y['zeit']);
 
-          // 🗺️ Bewegungsverlauf: alle bekannten Koordinaten in Trip-Reihenfolge
-          // (Weingut-Standorte, Bewertungs-Orte, Foto-GPS) → Google-Maps-Route
-          $route = [];
-          foreach ($trip as $st) {
-              $pt = null;
+          // Nach Tagen gruppieren; je Tag den Bewegungsverlauf (Google-Maps-Route)
+          // aus Weingut-Standorten, Bewertungs-Orten und Foto-GPS bauen
+          $ptFuer = function (array $st): ?array {
               if ($st['typ'] === 'weingut') {
-                  $pt = weingutKoordinaten($st['w']);
-              } elseif ($st['typ'] === 'getraenk') {
+                  return weingutKoordinaten($st['w']);
+              }
+              if ($st['typ'] === 'getraenk') {
                   foreach ($st['bew'] as $rb) {
                       if (is_numeric($rb['lat'] ?? null) && is_numeric($rb['lon'] ?? null)) {
-                          $pt = [(float)$rb['lat'], (float)$rb['lon']];
-                          break;
+                          return [(float)$rb['lat'], (float)$rb['lon']];
                       }
                   }
-              } else {
-                  $pt = gpsAusFoto(BILDER_DIR . '/' . $st['datei']);
+                  return null;
               }
-              if ($pt === null) {
-                  continue;
-              }
-              $letzt = $route === [] ? null : $route[count($route) - 1];
-              if ($letzt !== null && distanzMeter($letzt[0], $letzt[1], $pt[0], $pt[1]) < 100) {
-                  continue; // praktisch derselbe Ort → keine doppelte Station
-              }
-              $route[] = $pt;
+              return gpsAusFoto(BILDER_DIR . '/' . $st['datei']);
+          };
+          $tripTage = [];
+          foreach ($trip as $st) {
+              $tripTage[date('d.m.Y', $st['zeit'])][] = $st;
           }
-          if (count($route) > 23) {
-              // Google Maps verkraftet nur begrenzt Wegpunkte → gleichmäßig ausdünnen
-              $schritt = count($route) / 23;
-              $ausgeduennt = [];
-              for ($ri = 0.0; $ri < count($route); $ri += $schritt) {
-                  $ausgeduennt[] = $route[(int)$ri];
+          $tagRoute = [];
+          foreach ($tripTage as $tag => $stationen) {
+              $punkte = [];
+              foreach ($stationen as $st) {
+                  $pt = $ptFuer($st);
+                  if ($pt === null) {
+                      continue;
+                  }
+                  $letzt = $punkte === [] ? null : $punkte[count($punkte) - 1];
+                  if ($letzt !== null && distanzMeter($letzt[0], $letzt[1], $pt[0], $pt[1]) < 100) {
+                      continue;
+                  }
+                  $punkte[] = $pt;
               }
-              $route = $ausgeduennt;
+              if (count($punkte) > 23) {
+                  $schritt = count($punkte) / 23;
+                  $ausgeduennt = [];
+                  for ($ri = 0.0; $ri < count($punkte); $ri += $schritt) {
+                      $ausgeduennt[] = $punkte[(int)$ri];
+                  }
+                  $punkte = $ausgeduennt;
+              }
+              if (count($punkte) >= 2) {
+                  $tagRoute[$tag] = 'https://www.google.com/maps/dir/' . implode('/', array_map(fn($pt) => $pt[0] . ',' . $pt[1], $punkte));
+              } elseif (count($punkte) === 1) {
+                  $tagRoute[$tag] = 'https://www.google.com/maps/search/?api=1&query=' . $punkte[0][0] . ',' . $punkte[0][1];
+              }
           }
-          $routeUrl = count($route) >= 2
-              ? 'https://www.google.com/maps/dir/' . implode('/', array_map(fn($pt) => $pt[0] . ',' . $pt[1], $route))
-              : '';
+          $letzterTripTag = array_key_last($tripTage);
         ?>
         <?php if ($trip !== []): ?>
           <div class="card">
             <h2>📖 Der Trip – euer Verlauf</h2>
-            <?php if ($routeUrl !== ''): ?>
-              <a class="knopf zweit" target="_blank" rel="noopener" href="<?= e($routeUrl) ?>" style="margin:0.2rem 0 0.5rem; display:inline-block;">🗺️ Route in Google Maps öffnen (<?= count($route) ?> Stationen)</a>
-            <?php endif; ?>
             <div class="trip">
-              <?php $letzterTag = ''; ?>
-              <?php foreach ($trip as $st): ?>
-                <?php $tag = date('d.m.Y', $st['zeit']); ?>
-                <?php if ($tag !== $letzterTag): $letzterTag = $tag; ?>
-                  <p class="trip-tag"><?= e($tag) ?></p>
-                <?php endif; ?>
-                <?php if ($st['typ'] === 'weingut'): ?>
-                  <?php $wFoto = mitTitelbild(weingutFotos($st['w']['id']), (string)($st['w']['titelbild'] ?? '')); ?>
-                  <a class="trip-eintrag" href="?vk=<?= e(rawurlencode($st['w']['id'])) ?>">
-                    <?php if ($wFoto !== []): ?><img src="<?= e(thumbUrl($wFoto[0])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon">🍇</span><?php endif; ?>
-                    <span class="k-text"><b>🍇 <?= e($st['w']['name']) ?></b><small>Weingut besucht</small></span>
-                  </a>
-                <?php elseif ($st['typ'] === 'getraenk'): ?>
-                  <?php $g = gesamtSchnitt($st['bew']); ?>
-                  <a class="trip-eintrag" href="?ergebnis=<?= e(rawurlencode($st['c']['id'])) ?>">
-                    <?php if ($st['foto'] !== ''): ?><img src="<?= e(thumbUrl($st['foto'])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon"><?= $KATEGORIEN_GETRAENKE[(string)($st['c']['typ'] ?? 'champagner')][0] ?? '🍾' ?></span><?php endif; ?>
-                    <span class="k-text"><b><?= e($st['c']['name']) ?></b>
-                      <small><?= date('H:i', $st['zeit']) ?> Uhr<?= $st['wg'] !== null ? ' · ' . e($st['wg']['name']) : '' ?> · <?= sterneAnzeige($g) ?><?= $st['bew'] !== [] ? ' (' . count($st['bew']) . ')' : '' ?></small>
+              <?php $tagNr = 0; ?>
+              <?php foreach ($tripTage as $tag => $stationen): $tagNr++; ?>
+                <?php $zuAlt = $tag !== $letzterTripTag; // nur der aktuellste Tag startet offen ?>
+                <div class="trip-tag-zeile">
+                  <button type="button" class="trip-tag-knopf<?= $zuAlt ? ' zu' : '' ?>" data-ziel="trip-tag-<?= $tagNr ?>"><?= e($tag) ?> <span class="anzahl">(<?= count($stationen) ?>)</span></button>
+                  <?php if (isset($tagRoute[$tag])): ?>
+                    <a class="trip-karte" target="_blank" rel="noopener" href="<?= e($tagRoute[$tag]) ?>" title="Bewegungsverlauf dieses Tages in Google Maps">🗺️</a>
+                  <?php endif; ?>
+                </div>
+                <div id="trip-tag-<?= $tagNr ?>"<?= $zuAlt ? ' hidden' : '' ?>>
+                <?php foreach ($stationen as $st): ?>
+                  <?php if ($st['typ'] === 'weingut'): ?>
+                    <?php $wFoto = mitTitelbild(weingutFotos($st['w']['id']), (string)($st['w']['titelbild'] ?? '')); ?>
+                    <a class="trip-eintrag" href="?vk=<?= e(rawurlencode($st['w']['id'])) ?>">
+                      <?php if ($wFoto !== []): ?><img src="<?= e(thumbUrl($wFoto[0])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon">🍇</span><?php endif; ?>
+                      <span class="k-text"><b>🍇 <?= e($st['w']['name']) ?></b><small>Weingut besucht</small></span>
+                    </a>
+                  <?php elseif ($st['typ'] === 'getraenk'): ?>
+                    <?php $g = gesamtSchnitt($st['bew']); ?>
+                    <a class="trip-eintrag" href="?ergebnis=<?= e(rawurlencode($st['c']['id'])) ?>">
+                      <?php if ($st['foto'] !== ''): ?><img src="<?= e(thumbUrl($st['foto'])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon"><?= $KATEGORIEN_GETRAENKE[(string)($st['c']['typ'] ?? 'champagner')][0] ?? '🍾' ?></span><?php endif; ?>
+                      <span class="k-text"><b><?= e($st['c']['name']) ?></b>
+                        <small><?= date('H:i', $st['zeit']) ?> Uhr<?= $st['wg'] !== null ? ' · ' . e($st['wg']['name']) : '' ?> · <?= sterneAnzeige($g) ?><?= $st['bew'] !== [] ? ' (' . count($st['bew']) . ')' : '' ?></small>
+                      </span>
+                    </a>
+                  <?php else: ?>
+                    <span class="trip-eintrag foto">
+                      <a href="bilder/<?= e(rawurlencode($st['datei'])) ?>"><img src="<?= e(thumbUrl($st['datei'])) ?>" alt="" loading="lazy"></a>
+                      <span class="k-text"><small>📸 Gruppenfoto, <?= date('H:i', $st['zeit']) ?> Uhr</small></span>
                     </span>
-                  </a>
-                <?php else: ?>
-                  <span class="trip-eintrag foto">
-                    <a href="bilder/<?= e(rawurlencode($st['datei'])) ?>"><img src="<?= e(thumbUrl($st['datei'])) ?>" alt="" loading="lazy"></a>
-                    <span class="k-text"><small>📸 Gruppenfoto, <?= date('H:i', $st['zeit']) ?> Uhr</small></span>
-                  </span>
-                <?php endif; ?>
+                  <?php endif; ?>
+                <?php endforeach; ?>
+                </div>
               <?php endforeach; ?>
             </div>
           </div>
@@ -4025,15 +4044,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   $wFotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? ''));
                   $wAnzahl = count(array_filter($tastingWeine, fn($c) => ($c['weingut_id'] ?? '') === $w['id']));
                 ?>
-                <div style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.45rem 0;">
+                <a href="?vk=<?= e(rawurlencode($w['id'])) ?>" style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.45rem 0; text-decoration:none; color:var(--text);">
                   <?php if ($wFotos !== []): ?>
                     <img src="<?= e(thumbUrl($wFotos[0])) ?>" alt="" loading="lazy" style="width:44px; height:44px; border-radius:10px; object-fit:cover; flex-shrink:0;">
                   <?php else: ?>
                     <span style="width:44px; text-align:center; font-size:1.3rem; flex-shrink:0;">🍇</span>
                   <?php endif; ?>
-                  <span style="flex:1; min-width:0;"><b><?= e($w['name']) ?></b><br><span class="anzahl"><?= $wAnzahl ?> Getränk(e) hier verkostet</span></span>
-                  <a class="knopf klein zweit" href="?vk=<?= e(rawurlencode($w['id'])) ?>">Öffnen</a>
-                </div>
+                  <span style="flex:1; min-width:0;"><b><?= e($w['name']) ?></b><br><span class="anzahl"><?= $wAnzahl ?> Getränk(e) hier verkostet · antippen zum Öffnen</span></span>
+                </a>
               <?php endforeach; ?>
             </div>
           </details>
@@ -4360,61 +4378,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </form>
         </div>
 
-        <?php if ($benutzerAktiv === null): ?>
-          <div class="card zu" style="margin-top:1rem;">
-            <h2>👤 Benutzerkonto</h2>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Kostenfrei, Anmeldung läuft nie ab. Registrierte legen sofort Tastings an (du + 1 Person); größere Runden schaltet der Administrator frei.</p>
-            <form method="post">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="benutzer_login">
-              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
-              <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
-              <button class="knopf zweit" type="submit">Anmelden</button>
-            </form>
-          </div>
-          <details class="card">
-            <summary>✍️ Neu hier? Jetzt registrieren (kostenfrei)</summary>
-            <p class="anzahl" style="margin:0.5rem 0 0.7rem;">Stammdaten vollständig ausfüllen – dein Konto ist sofort nutzbar, ganz ohne Wartezeit.</p>
-            <form method="post">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="benutzer_registrieren">
-              <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
-              <input type="text" name="name" placeholder="Nachname" maxlength="40" required>
-              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
-              <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
-              <button class="knopf" type="submit">Registrieren &amp; loslegen</button>
-            </form>
-          </details>
-        <?php else: ?>
-          <div class="card zu" style="margin-top:1rem;">
-            <h2>👤 Benutzerkonto</h2>
-            <p>Angemeldet als <b><?= e(trim((string)($benutzerAktiv['vorname'] ?? '') . ' ' . (string)($benutzerAktiv['name'] ?? ''))) ?></b>
-              <span class="anzahl">(<?= e((string)($benutzerAktiv['email'] ?? '')) ?>)</span>
-              <?php if (!empty($benutzerAktiv['admin'])): ?><span class="bewerter-chip">🛡️ Administrator</span><?php endif; ?>
-            </p>
-            <p class="anzahl" style="margin:0.3rem 0 0.6rem;">Dauerhaft angemeldet – die Anmeldung läuft nicht ab.</p>
-            <form method="post">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="benutzer_logout">
-              <button class="loeschen" type="submit">Vom Konto abmelden</button>
-            </form>
-          </div>
-        <?php endif; ?>
-
-        <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
-          <a class="kachel" href="?verwaltung=1">
-            <span class="k-icon">🛠️</span>
-            <span class="k-text"><b>Verwaltung</b><small>Benutzer, alle Getränke und Weingüter – mit Filtern</small></span>
-          </a>
-        <?php endif; ?>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'verwaltung'): ?>
       <!-- ==================== VERWALTUNG (nur Admin) ==================== -->
       <?php if ($benutzerAktiv === null || empty($benutzerAktiv['admin'])): ?>
         <div class="card">
-          <p style="margin-bottom:0.8rem;">Die Verwaltung ist nur für Administratoren. Melde dich auf der Tasting-Seite mit deinem Benutzerkonto an.</p>
-          <a class="knopf" href="?tasting=1">Zur Tasting-Seite</a>
+          <p style="margin-bottom:0.8rem;">Die Verwaltung ist nur für Administratoren. Melde dich unter „📖 Meine Liste“ mit deinem Benutzerkonto an.</p>
+          <a class="knopf" href="?meine=1">Zu Meine Liste</a>
         </div>
       <?php else: ?>
 
@@ -4842,6 +4813,53 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
         <?php endif; ?>
       <?php endif; ?>
+        <?php if ($benutzerAktiv === null): ?>
+          <div class="card zu" style="margin-top:0.6rem;">
+            <h2>👤 Benutzerkonto</h2>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Kostenfrei, Anmeldung läuft nie ab. Registrierte legen sofort Tastings an (du + 1 Person); größere Runden schaltet der Administrator frei.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_login">
+              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
+              <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
+              <button class="knopf zweit" type="submit">Anmelden</button>
+            </form>
+          </div>
+          <details class="card">
+            <summary>✍️ Neu hier? Jetzt registrieren (kostenfrei)</summary>
+            <p class="anzahl" style="margin:0.5rem 0 0.7rem;">Stammdaten vollständig ausfüllen – dein Konto ist sofort nutzbar, ganz ohne Wartezeit.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_registrieren">
+              <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
+              <input type="text" name="name" placeholder="Nachname" maxlength="40" required>
+              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
+              <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
+              <button class="knopf" type="submit">Registrieren &amp; loslegen</button>
+            </form>
+          </details>
+        <?php else: ?>
+          <div class="card zu" style="margin-top:0.6rem;">
+            <h2>👤 Benutzerkonto</h2>
+            <p>Angemeldet als <b><?= e(trim((string)($benutzerAktiv['vorname'] ?? '') . ' ' . (string)($benutzerAktiv['name'] ?? ''))) ?></b>
+              <span class="anzahl">(<?= e((string)($benutzerAktiv['email'] ?? '')) ?>)</span>
+              <?php if (!empty($benutzerAktiv['admin'])): ?><span class="bewerter-chip">🛡️ Administrator</span><?php endif; ?>
+            </p>
+            <p class="anzahl" style="margin:0.3rem 0 0.6rem;">Dauerhaft angemeldet – die Anmeldung läuft nicht ab.</p>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_logout">
+              <button class="loeschen" type="submit">Vom Konto abmelden</button>
+            </form>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
+          <a class="kachel" href="?verwaltung=1">
+            <span class="k-icon">🛠️</span>
+            <span class="k-text"><b>Verwaltung</b><small>Benutzer, alle Getränke und Weingüter – mit Filtern</small></span>
+          </a>
+        <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
       <!-- ==================== BEWERTUNGSFORMULAR ==================== -->
@@ -6237,6 +6255,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         ziel.querySelectorAll('.filterbar').forEach(function (el) {
           el.style.display = el.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
         });
+      });
+    });
+
+    // Trip: Tage auf- und zuklappen
+    document.querySelectorAll('.trip-tag-knopf').forEach(function (k) {
+      k.addEventListener('click', function () {
+        var ziel = document.getElementById(k.dataset.ziel);
+        if (!ziel) { return; }
+        ziel.hidden = !ziel.hidden;
+        k.classList.toggle('zu', ziel.hidden);
+      });
+    });
+
+    // Zurück-Links: wirklich dahin zurück, wo man herkam
+    document.querySelectorAll('.zurueck a').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        if (history.length > 1 && document.referrer.indexOf(location.host) !== -1) {
+          e.preventDefault();
+          history.back();
+        }
       });
     });
 
