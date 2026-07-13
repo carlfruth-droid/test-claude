@@ -402,6 +402,33 @@ function aktuellerBenutzer(array $daten): ?array
 }
 
 /**
+ * Ein Tasting soll anonym bleiben: normale Mitglieder sehen NICHT, wer wie
+ * bewertet hat oder wer sonst dabei ist – nur die anonyme Summe. Klarnamen
+ * sieht ausschließlich der Gastgeber (Besitzer) und der Administrator.
+ */
+function darfBewerterNamen(array $daten, ?array $tasting): bool
+{
+    $konto = aktuellerBenutzer($daten);
+    if ($konto === null) {
+        return false;
+    }
+    if (!empty($konto['admin'])) {
+        return true;
+    }
+    return $tasting !== null && (string)($tasting['besitzer'] ?? '') !== ''
+        && (string)($tasting['besitzer'] ?? '') === (string)$konto['id'];
+}
+
+/** Anzeigename eines Bewerters aus Sicht des Betrachters: Klarname, „Du“ oder anonym. */
+function bewerterAnzeige(array $b, bool $darfNamen, array $meineNamen, int $nr): string
+{
+    if (isset($meineNamen[mb_strtolower(trim((string)($b['person'] ?? '')))])) {
+        return 'Du';
+    }
+    return $darfNamen ? (string)($b['person'] ?? '') : 'Bewerter ' . $nr;
+}
+
+/**
  * Alle Namen (klein geschrieben), unter denen der aktuelle Nutzer bewertet
  * haben kann: aktueller Anzeigename plus – falls angemeldet – Alias, Vorname
  * und Nachname des Kontos. So bleiben ältere Bewertungen auch nach einer
@@ -421,6 +448,14 @@ function meineNamen(array $daten): array
             if ($wert !== '') {
                 $namen[mb_strtolower($wert)] = true;
             }
+        }
+    }
+    // Gast per Einladungslink: der Teilnehmername gehört auch zu „mir“
+    $einl = teilnehmerZuToken($daten, (string)($_COOKIE['einladung'] ?? ''));
+    if ($einl !== null) {
+        $tn = trim((string)($einl[1]['name'] ?? ''));
+        if ($tn !== '') {
+            $namen[mb_strtolower($tn)] = true;
         }
     }
     return $namen;
@@ -1504,6 +1539,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($aktion === 'bewertung_loeschen') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $person = trim((string)($_POST['person'] ?? ''));
+        // Löschen darf nur die eigene Bewertung – oder der Gastgeber/Administrator
+        $d0 = datenLaden();
+        $cGet = champagnerHolen($d0, $cid);
+        $cTasting = null;
+        if ($cGet !== null) {
+            foreach ($d0['tastings'] as $t) {
+                if ($t['id'] === (string)($cGet['tasting_id'] ?? '')) { $cTasting = $t; break; }
+            }
+        }
+        $eigene = isset(meineNamen($d0)[mb_strtolower($person)]);
+        if (!$eigene && !darfBewerterNamen($d0, $cTasting)) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Du kannst nur deine eigene Bewertung löschen.'));
+        }
         datenAendern(function (array $d) use ($cid, $person): array {
             $d['bewertungen'] = array_values(array_filter(
                 $d['bewertungen'],
@@ -1511,7 +1559,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ));
             return $d;
         });
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung von ' . $person . ' gelöscht.'));
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung gelöscht.'));
     }
 
     if ($aktion === 'profil_foto_upload') {
@@ -4664,6 +4712,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   $auchBewertet[$wer] = max((int)($vb['zeit'] ?? 0), $auchBewertet[$wer] ?? 0);
               }
               arsort($auchBewertet);
+              $darfNamenGlas = darfBewerterNamen($daten, $meins);
           }
       }
     ?>
@@ -4698,9 +4747,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
         <?php if ($auchBewertet !== []): ?>
           <div style="margin-top:0.6rem; border-top:1px solid var(--border); padding-top:0.5rem;">
-            <?php foreach (array_slice($auchBewertet, 0, 6, true) as $werName => $wann): ?>
-              <p class="anzahl" style="margin:0.15rem 0;">👤 <b><?= e((string)$werName) ?></b> hat dieses Getränk auch bewertet – am <?= date('d.m.Y', (int)$wann) ?></p>
-            <?php endforeach; ?>
+            <?php if ($darfNamenGlas): ?>
+              <?php foreach (array_slice($auchBewertet, 0, 6, true) as $werName => $wann): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">👤 <b><?= e((string)$werName) ?></b> hat dieses Getränk auch bewertet – am <?= date('d.m.Y', (int)$wann) ?></p>
+              <?php endforeach; ?>
+            <?php else: ?>
+              <p class="anzahl" style="margin:0.15rem 0;">👥 <?= count($auchBewertet) ?> andere haben dieses Getränk auch schon bewertet.</p>
+            <?php endif; ?>
           </div>
         <?php endif; ?>
       </div>
@@ -4868,16 +4921,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               // Wer hat das Glas schon bewertet, wer fehlt noch? (aktualisiert sich live)
               $glasBewertungen = bewertungenFuer($daten, $glasChampagner['id']);
               $glasBewertetVon = array_map(fn($b) => mb_strtolower(trim((string)$b['person'])), $glasBewertungen);
+              $glasDarfNamen = darfBewerterNamen($daten, $aktivesTasting);
+              $glasOffen = 0;
+              foreach (($aktivesTasting['teilnehmer'] ?? []) as $p) {
+                  if (!in_array(mb_strtolower(trim((string)$p['name'])), $glasBewertetVon, true)) { $glasOffen++; }
+              }
             ?>
             <p style="margin:0.5rem 0 0.2rem;">
-              <?php foreach ($glasBewertungen as $gb): ?>
-                <span class="bewerter-chip">✅ <?= e($gb['person']) ?></span>
-              <?php endforeach; ?>
-              <?php foreach (($aktivesTasting['teilnehmer'] ?? []) as $p): ?>
-                <?php if (!in_array(mb_strtolower(trim((string)$p['name'])), $glasBewertetVon, true)): ?>
-                  <span class="bewerter-chip offen">⏳ <?= e($p['name']) ?></span>
-                <?php endif; ?>
-              <?php endforeach; ?>
+              <?php if ($glasDarfNamen): ?>
+                <?php foreach ($glasBewertungen as $gb): ?>
+                  <span class="bewerter-chip">✅ <?= e($gb['person']) ?></span>
+                <?php endforeach; ?>
+                <?php foreach (($aktivesTasting['teilnehmer'] ?? []) as $p): ?>
+                  <?php if (!in_array(mb_strtolower(trim((string)$p['name'])), $glasBewertetVon, true)): ?>
+                    <span class="bewerter-chip offen">⏳ <?= e($p['name']) ?></span>
+                  <?php endif; ?>
+                <?php endforeach; ?>
+              <?php else: ?>
+                <?php if ($glasBewertungen !== []): ?><span class="bewerter-chip">✅ <?= count($glasBewertungen) ?> haben bewertet</span><?php endif; ?>
+                <?php if ($glasOffen > 0): ?><span class="bewerter-chip offen">⏳ noch <?= $glasOffen ?> offen</span><?php endif; ?>
+              <?php endif; ?>
               <?php if ($glasBewertungen === [] && ($aktivesTasting['teilnehmer'] ?? []) === []): ?>
                 <span class="anzahl">Noch keine Bewertung.</span>
               <?php endif; ?>
@@ -5343,6 +5406,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           // Bewerter, die (noch) nicht in der Teilnehmerliste stehen
           $externAktiv = array_filter($aktivAnzeige, fn($n, $ln) => !isset($teilnNamen[$ln]), ARRAY_FILTER_USE_BOTH);
         ?>
+        <?php $darfTeilnehmer = darfBewerterNamen($daten, $aktivesTasting); ?>
+        <?php if (!$darfTeilnehmer): ?>
+          <div class="card">
+            <h2>Teilnehmer</h2>
+            <p class="anzahl">👥 <?= count($teiln) ?> dabei · 🟢 <?= $anzahlAktiv ?> haben schon bewertet</p>
+            <p class="anzahl" style="margin-top:0.5rem;">Wer genau dabei ist und wie jede/r bewertet, bleibt anonym – nur der Gastgeber sieht die Namen.</p>
+          </div>
+        <?php else: ?>
         <div class="card">
           <h2>Teilnehmer</h2>
           <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($passiv) ?> passiv</p>
@@ -5389,7 +5460,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </form>
           <p class="anzahl" style="margin-top:0.5rem;">Jeder Teilnehmer bekommt einen persönlichen Link – ein Tipp darauf meldet ihn dauerhaft an (kein Passwort nötig).</p>
         </div>
+        <?php endif; ?>
 
+        <?php if ($darfTeilnehmer): ?>
         <div class="card zu">
           <h2>Tasting verwalten</h2>
           <form method="post">
@@ -5406,6 +5479,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <button type="submit">Tasting löschen</button>
           </form>
         </div>
+        <?php endif; ?>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
       <?php endif; ?>
 
@@ -6433,17 +6507,35 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               }
           }
         ?>
+        <?php
+          $darfNamen = darfBewerterNamen($daten, $getraenkTasting);
+          $meineNamenErg = meineNamen($daten);
+          // Wie viele Teilnehmer fehlen noch (anonym gezählt)?
+          $offenAnzahl = 0;
+          if ($getraenkTasting !== null) {
+              foreach (($getraenkTasting['teilnehmer'] ?? []) as $p) {
+                  if (!in_array(mb_strtolower(trim((string)$p['name'])), $bewertetVon, true)) { $offenAnzahl++; }
+              }
+          }
+        ?>
         <p style="margin-top:0.7rem;">
-          <?php foreach ($bewertungen as $b): ?>
-            <?php $s = 0; foreach ($KATEGORIEN as $bk => $bi) { $s += (int)($b['werte'][$bk] ?? 0); } ?>
-            <span class="bewerter-chip">✅ <?= e($b['person']) ?> <b><?= number_format($s / count($KATEGORIEN), 1, ',', '') ?></b></span>
-          <?php endforeach; ?>
-          <?php if ($getraenkTasting !== null): ?>
-            <?php foreach (($getraenkTasting['teilnehmer'] ?? []) as $p): ?>
-              <?php if (!in_array(mb_strtolower(trim((string)$p['name'])), $bewertetVon, true)): ?>
-                <span class="bewerter-chip offen">⏳ <?= e($p['name']) ?></span>
-              <?php endif; ?>
+          <?php if ($darfNamen): ?>
+            <?php foreach ($bewertungen as $b): ?>
+              <?php $s = 0; foreach ($KATEGORIEN as $bk => $bi) { $s += (int)($b['werte'][$bk] ?? 0); } ?>
+              <span class="bewerter-chip">✅ <?= e($b['person']) ?> <b><?= number_format($s / count($KATEGORIEN), 1, ',', '') ?></b></span>
             <?php endforeach; ?>
+            <?php if ($getraenkTasting !== null): ?>
+              <?php foreach (($getraenkTasting['teilnehmer'] ?? []) as $p): ?>
+                <?php if (!in_array(mb_strtolower(trim((string)$p['name'])), $bewertetVon, true)): ?>
+                  <span class="bewerter-chip offen">⏳ <?= e($p['name']) ?></span>
+                <?php endif; ?>
+              <?php endforeach; ?>
+            <?php endif; ?>
+          <?php else: ?>
+            <?php $habIchBewertet = false; foreach ($bewertungen as $b) { if (isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))])) { $habIchBewertet = true; break; } } ?>
+            <?php if ($bewertungen !== []): ?><span class="bewerter-chip">✅ <?= count($bewertungen) ?> Bewertung(en)</span><?php endif; ?>
+            <?php if ($habIchBewertet): ?><span class="bewerter-chip">🙂 Deine ist dabei</span><?php endif; ?>
+            <?php if ($offenAnzahl > 0): ?><span class="bewerter-chip offen">⏳ noch <?= $offenAnzahl ?> offen</span><?php endif; ?>
           <?php endif; ?>
           <?php if ($bewertungen === [] && $getraenkTasting === null): ?>
             <span class="anzahl">Noch keine Bewertungen – sei die/der Erste!</span>
@@ -6479,17 +6571,22 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php if ($bewertungen !== []): ?>
           <div class="card">
             <h2>Notizen &amp; Umfeld</h2>
-            <?php foreach ($bewertungen as $b): ?>
+            <?php $notizNr = 0; foreach ($bewertungen as $b): $notizNr++; ?>
               <?php
+                $eigene = isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))]);
+                // Ort/Wetter/„zusammen mit“ nur bei der eigenen Bewertung oder für
+                // Gastgeber/Admin – sonst bleibt es anonym
                 $umfeld = [date('d.m.Y, H:i', (int)($b['zeit'] ?? 0)) . ' Uhr'];
-                if (trim((string)($b['ort'] ?? '')) !== '') { $umfeld[] = '📍 ' . (string)$b['ort']; }
-                if (trim((string)($b['wetter'] ?? '')) !== '') { $umfeld[] = (string)$b['wetter']; }
-                $dabei = mitDabei($bewertungen, $b);
-                if ($dabei !== []) { $umfeld[] = '👥 zusammen mit ' . implode(', ', $dabei); }
+                if ($darfNamen || $eigene) {
+                    if (trim((string)($b['ort'] ?? '')) !== '') { $umfeld[] = '📍 ' . (string)$b['ort']; }
+                    if (trim((string)($b['wetter'] ?? '')) !== '') { $umfeld[] = (string)$b['wetter']; }
+                    $dabei = mitDabei($bewertungen, $b);
+                    if ($dabei !== [] && $darfNamen) { $umfeld[] = '👥 zusammen mit ' . implode(', ', $dabei); }
+                }
                 $warLive = bewertungWarLive($b, $aktiverChampagner);
               ?>
               <p class="notiz" style="margin-bottom:0.7rem;">
-                <b><?= e($b['person']) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
+                <b><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $notizNr)) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
                 <?php if (!$warLive): ?>
                   <span class="bewerter-chip offen" title="Nicht im Verkostungs-Moment bewertet – Ort und Wetter beschreiben den Bewertungs-Zeitpunkt">⏳ nachträglich bewertet</span>
                 <?php endif; ?>
@@ -6515,9 +6612,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 </tr>
               </thead>
               <tbody>
-                <?php foreach ($bewertungen as $b): ?>
+                <?php $zeilNr = 0; foreach ($bewertungen as $b): $zeilNr++; ?>
+                  <?php $eigeneZeile = isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))]); ?>
                   <tr>
-                    <td><?= e($b['person']) ?></td>
+                    <td><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $zeilNr)) ?></td>
                     <?php $summe = 0; foreach ($KATEGORIEN as $schluessel => $info): $w = (int)($b['werte'][$schluessel] ?? 0); $summe += $w; ?>
                       <td><?= $w ?></td>
                     <?php endforeach; ?>
@@ -6525,14 +6623,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     <td><?= (int)($b['flaschen'] ?? 0) ?></td>
                     <?php if ($eingeloggt): ?>
                       <td>
-                        <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>">ändern</a>
-                        <form method="post" style="display:inline" onsubmit="return confirm('Bewertung von <?= e($b['person']) ?> wirklich löschen?');">
-                          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                          <input type="hidden" name="aktion" value="bewertung_loeschen">
-                          <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-                          <input type="hidden" name="person" value="<?= e($b['person']) ?>">
-                          <button class="loeschen" type="submit">löschen</button>
-                        </form>
+                        <?php if ($eigeneZeile || $darfNamen): // eigene Bewertung – oder Gastgeber/Admin ?>
+                          <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>">ändern</a>
+                          <form method="post" style="display:inline" onsubmit="return confirm('Diese Bewertung wirklich löschen?');">
+                            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                            <input type="hidden" name="aktion" value="bewertung_loeschen">
+                            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                            <input type="hidden" name="person" value="<?= e($b['person']) ?>">
+                            <button class="loeschen" type="submit">löschen</button>
+                          </form>
+                        <?php endif; ?>
                       </td>
                     <?php endif; ?>
                   </tr>
