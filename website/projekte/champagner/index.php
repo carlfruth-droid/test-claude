@@ -683,11 +683,21 @@ if (isset($_GET['bildinfo'])) {
  */
 function meinTasting(array $daten): ?array
 {
+    // Nur eigene Tastings (Teilnehmer/Besitzer). Wer nirgends dabei ist, sieht
+    // hier nichts – kein Fallback auf ein fremdes, neuestes Tasting.
+    $meine = meineTastings($daten);
+    $konto = aktuellerBenutzer($daten);
+    $istAdmin = $konto !== null && !empty($konto['admin']);
     $gewaehlt = (string)($_COOKIE['tasting_aktuell'] ?? '');
     if (preg_match('/^[a-f0-9]{8}$/', $gewaehlt)) {
-        foreach ($daten['tastings'] as $t) {
-            if ($t['id'] === $gewaehlt) {
-                return $t;
+        if (isset($meine[$gewaehlt])) {
+            return $meine[$gewaehlt];
+        }
+        if ($istAdmin) {
+            foreach ($daten['tastings'] as $t) {
+                if ($t['id'] === $gewaehlt) {
+                    return $t;
+                }
             }
         }
     }
@@ -695,9 +705,17 @@ function meinTasting(array $daten): ?array
     if ($treffer !== null) {
         return $treffer[0];
     }
-    $ts = $daten['tastings'];
-    usort($ts, static fn(array $a, array $b): int => ((int)($b['zeit'] ?? 0)) <=> ((int)($a['zeit'] ?? 0)));
-    return $ts[0] ?? null;
+    if ($meine !== []) {
+        $ts = array_values($meine);
+        usort($ts, static fn(array $a, array $b): int => ((int)($b['zeit'] ?? 0)) <=> ((int)($a['zeit'] ?? 0)));
+        return $ts[0];
+    }
+    if ($istAdmin) { // Administrator ohne eigenes Tasting: das neueste überhaupt
+        $ts = $daten['tastings'];
+        usort($ts, static fn(array $a, array $b): int => ((int)($b['zeit'] ?? 0)) <=> ((int)($a['zeit'] ?? 0)));
+        return $ts[0] ?? null;
+    }
+    return null;
 }
 
 /** Ein Tasting zum „aktuellen“ machen – Header, Listen und Neuanlagen folgen. */
@@ -836,44 +854,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (($_POST['agb'] ?? '') !== 'ja') {
             zurueck('?mitbewerten=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
         }
-        $_SESSION['tasting_ok'] = true;
+        // WICHTIG: Der QR-Code erlaubt NUR, dieses eine Getränk zu bewerten.
+        // Er macht NICHT zum Teilnehmer des Tastings und gibt KEINEN Zugriff
+        // auf dessen Fotos oder übrige Inhalte. Darum hier bewusst KEIN
+        // tastingWaehlen und KEIN Teilnehmer-Eintrag.
         $_SESSION['person'] = $name;
-        // Gehört das Getränk zu einem Tasting? Dann dort als Teilnehmer eintragen
-        // (mit Einladungs-Cookie, damit die Anmeldung dauerhaft hält)
-        $tid = (string)($getraenk['tasting_id'] ?? '');
-        if ($tid !== '') {
-            $zielT = null;
-            foreach (datenLaden()['tastings'] as $t) {
-                if ($t['id'] === $tid) { $zielT = $t; break; }
-            }
-            if ($zielT !== null) {
-                tastingWaehlen($tid);
-                $token = '';
-                foreach (($zielT['teilnehmer'] ?? []) as $p) {
-                    if (mb_strtolower((string)$p['name']) === mb_strtolower($name)) {
-                        $token = (string)$p['token'];
-                        break;
-                    }
-                }
-                if ($token === '' && !teilnehmerLimitErreicht($zielT)) {
-                    $token = bin2hex(random_bytes(8));
-                    datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
-                        foreach ($d['tastings'] as &$t) {
-                            if ($t['id'] === $tid) {
-                                $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'agb_zeit' => time()];
-                            }
-                        }
-                        return $d;
-                    });
-                }
-                if ($token !== '') {
-                    setcookie('einladung', $token, [
-                        'expires' => time() + 60 * 60 * 24 * 3650,
-                        'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
-                    ]);
-                }
-            }
-        }
+        $_SESSION['gast_bewerten'] = $cid;   // Freigabe: darf genau dieses Getränk bewerten
+        unset($_SESSION['tasting_ok']);        // kein globaler Zugang
         zurueck('?bewerten=' . rawurlencode($cid) . '&ok=' . rawurlencode('Willkommen, ' . $name . '! Sag uns, wie dir „' . $getraenk['name'] . '“ schmeckt. 🥂'));
     }
 
@@ -1034,7 +1021,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . $alias . '! Dein Konto ist fertig – du kannst sofort Tastings anlegen (du + 1 Person). Für größere Runden schaltet dich der Administrator frei.'));
     }
 
-    if (!$eingeloggt) {
+    // Gast per QR-Code darf genau das eine freigegebene Getränk bewerten –
+    // ohne globalen Zugang zum Tasting.
+    $gastDarfBewerten = $aktion === 'bewerten'
+        && ($_SESSION['gast_bewerten'] ?? '') !== ''
+        && ($_SESSION['gast_bewerten'] ?? '') === (string)($_POST['champagner_id'] ?? '');
+    if (!$eingeloggt && !$gastDarfBewerten) {
         zurueck('?fehler=' . rawurlencode('Bitte zuerst mit dem Passwort anmelden.'));
     }
 
@@ -3297,12 +3289,23 @@ function etikettErkennen(string $fotoName): array
     if ($key === '' || !function_exists('curl_init')) {
         return $leer;
     }
-    // Die kleine Vorschau reicht der KI und spart Übertragung
-    $thumb = thumbVerzeichnis() . '/' . $fotoName . '.jpg';
-    if (!is_file($thumb) && !thumbErzeugen(BILDER_DIR . '/' . $fotoName, $thumb, 1024)) {
-        return $leer;
+    // Für die Erkennung ein eigenes, hochauflösendes Bild verwenden – NICHT die
+    // 640-px-Anzeigevorschau. Dicht bedruckte Etiketten (z. B. Bier) werden auf
+    // dem kleinen Bild oft falsch gelesen.
+    $erkennBild = thumbVerzeichnis() . '/erk-' . $fotoName . '.jpg';
+    $tempBild = true;
+    if (!thumbErzeugen(BILDER_DIR . '/' . $fotoName, $erkennBild, 1568)) {
+        // Fallback: vorhandene Anzeigevorschau (oder eine in 1024 px)
+        $tempBild = false;
+        $erkennBild = thumbVerzeichnis() . '/' . $fotoName . '.jpg';
+        if (!is_file($erkennBild) && !thumbErzeugen(BILDER_DIR . '/' . $fotoName, $erkennBild, 1024)) {
+            return $leer;
+        }
     }
-    $bild = base64_encode((string)file_get_contents($thumb));
+    $bild = base64_encode((string)file_get_contents($erkennBild));
+    if ($tempBild) {
+        @unlink($erkennBild); // Erkennungsbild war nur zum Vorlesen da
+    }
     $body = json_encode([
         'model'      => 'claude-haiku-4-5',
         'max_tokens' => 200,
@@ -3310,7 +3313,7 @@ function etikettErkennen(string $fotoName): array
             'role'    => 'user',
             'content' => [
                 ['type' => 'image', 'source' => ['type' => 'base64', 'media_type' => 'image/jpeg', 'data' => $bild]],
-                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies das Etikett und antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut oder Brauerei), name die Bezeichnung des Getränks (mit Cuvée und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil (nur wenn auf dem Etikett lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein oder bier. Was du nicht erkennst, lässt du als leeren String.'],
+                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche/-dose mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies GENAU den tatsächlich abgebildeten Text – erfinde nichts. Der Erzeuger/die Marke ist meist der größte, auffälligste Schriftzug (z. B. bei Bier die Brauerei wie „Augustiner“, „Paulaner“). Wenn du dir bei einem Feld nicht sicher bist, lass es leer statt zu raten. Antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut oder Brauerei), name die Bezeichnung des Getränks (mit Cuvée/Sorte und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil (nur wenn lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein oder bier.'],
             ],
         ]],
     ]);
@@ -3893,6 +3896,13 @@ if (isset($_GET['bewerten'])) {
                 break;
             }
         }
+    }
+    // Datenschutz: Ein Tasting (mit Fotos, Album, Teilnehmern) darf NUR öffnen,
+    // wer wirklich dazugehört (Teilnehmer/Besitzer) – oder der Administrator.
+    // Der QR-„Mitbewerten“-Code macht ausdrücklich NICHT zum Teilnehmer.
+    if ($aktivesTasting !== null && !$istAdmin && !isset(meineTastings($daten)[$aktivesTasting['id']])) {
+        $ansicht = 'tasting_gesperrt';
+        $aktivesTasting = null;
     }
     // Ein geöffnetes Tasting wird zum „aktuellen“ – Header und Listen folgen
     if ($aktivesTasting !== null && (string)($_COOKIE['tasting_aktuell'] ?? '') !== $aktivesTasting['id']) {
@@ -4547,6 +4557,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'beitreten'): ?>
       <h1>Mitmachen 🥂</h1>
       <p class="untertitel">Du wurdest zu einem Tasting eingeladen.</p>
+    <?php elseif ($ansicht === 'tasting_gesperrt'): ?>
+      <h1>Kein Zugriff 🔒</h1>
+      <p class="untertitel">Dieses Tasting gehört jemand anderem.</p>
     <?php elseif ($ansicht === 'verwaltung'): ?>
       <p class="zurueck"><a href="?tasting=1">&larr; Zur Tasting-&Uuml;bersicht</a></p>
       <h1>Verwaltung 🛠️</h1>
@@ -4710,10 +4723,27 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         if ($vkKat !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$vkKat])) {
             $vkKat = 'alle';
         }
+        // Sichtbar sind nur Getränke aus den eigenen Tastings des Nutzers plus
+        // die selbst bewerteten (bzw. alles für den Administrator).
+        $vkMeineTs = meineTastings($daten);
+        $vkMeineNamen = meineNamen($daten);
+        $selbstBewertet = [];
+        foreach ($daten['bewertungen'] as $sb) {
+            if (isset($vkMeineNamen[mb_strtolower(trim((string)($sb['person'] ?? '')))])) {
+                $selbstBewertet[(string)$sb['champagner_id']] = true;
+            }
+        }
         $verkostete = [];
         foreach ($daten['champagner'] as $c) {
             if (!isset($letzteBewertungZeit[$c['id']])) {
                 continue; // noch nie verkostet
+            }
+            $ctid = (string)($c['tasting_id'] ?? '');
+            $darf = $istAdmin
+                || ($ctid !== '' && isset($vkMeineTs[$ctid]))
+                || isset($selbstBewertet[$c['id']]);
+            if (!$darf) {
+                continue;
             }
             if ($vkKat !== 'alle' && (string)($c['typ'] ?? 'champagner') !== $vkKat) {
                 continue;
@@ -5378,6 +5408,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
       <?php endif; ?>
+
+    <?php elseif ($ansicht === 'tasting_gesperrt'): ?>
+      <!-- ==================== KEIN ZUGRIFF AUFS TASTING ==================== -->
+      <div class="card">
+        <p style="margin-bottom:0.8rem;">🔒 Du bist nicht Teil dieses Tastings, deshalb kannst du seine Fotos, Weingüter und Getränke nicht sehen.</p>
+        <p class="anzahl" style="margin-bottom:0.8rem;">Ein QR-Code zum Mitbewerten erlaubt nur, das eine Getränk zu bewerten – er gibt keinen Zugriff auf das ganze Tasting. Wenn du wirklich dabei sein sollst, bitte den Gastgeber um seinen Einladungslink.</p>
+        <div class="knopfreihe">
+          <a class="knopf" href="./">🥂 Zu meinen Verkostungen</a>
+          <a class="knopf zweit" href="?tasting=1">👥 Meine Tastings</a>
+        </div>
+      </div>
 
     <?php elseif ($ansicht === 'beitreten'): ?>
       <!-- ==================== GRUPPEN-BEITRITT (per QR/Link) ==================== -->
@@ -6273,7 +6314,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
     <?php elseif ($ansicht === 'bewerten'): ?>
       <!-- ==================== BEWERTUNGSFORMULAR ==================== -->
-      <?php if (!$eingeloggt): ?>
+      <?php $gastDarfDies = ($_SESSION['gast_bewerten'] ?? '') === (string)$aktiverChampagner['id'] && ($_SESSION['gast_bewerten'] ?? '') !== ''; ?>
+      <?php if (!$eingeloggt && !$gastDarfDies): ?>
         <div class="card">
           <?= loginFormular('?bewerten=' . rawurlencode($aktiverChampagner['id'])) ?>
         </div>
