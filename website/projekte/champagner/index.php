@@ -559,6 +559,10 @@ if (isset($_GET['bildinfo'])) {
     } elseif (str_starts_with($datei, 'pf-')) {
         $zeilen[] = ['👤 Gehört zu', 'Profilbild'];
     }
+    $uploader = $d['bilder'][$datei] ?? null;
+    if ($uploader !== null && trim((string)($uploader['person'] ?? '')) !== '') {
+        $zeilen[] = ['⬆️ Hochgeladen von', trim((string)$uploader['person'])];
+    }
     $exif = (function_exists('exif_read_data') && preg_match('/\.jpe?g$/i', $datei))
         ? (@exif_read_data($pfad) ?: [])
         : [];
@@ -1440,6 +1444,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (rename(BILDER_DIR . '/' . $datei, BILDER_DIR . '/' . $neuName)) {
             thumbLoeschen($datei);
             thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+            bildEintraegeUmbenennen([$datei => $neuName]);
         }
         unset($_SESSION['foto_vorschlag']);
         zurueck('?fotos=1&ok=' . rawurlencode('Foto zugeordnet.'));
@@ -1547,6 +1552,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (rename($pfad, BILDER_DIR . '/' . $neuName)) {
                     thumbLoeschen($datei);
                     thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+                    bildEintraegeUmbenennen([$datei => $neuName]);
                     $autoZugeordnet[] = $zielName;
                 } else {
                     $offenNeu++;
@@ -2643,6 +2649,7 @@ function fotosUmhaengen(string $praefix, string $erwarteterTyp, string $zielPrae
     if (!preg_match('/^' . $erwarteterTyp . '-[a-f0-9]{8}$/', $praefix)) {
         return;
     }
+    $umbenannt = [];
     foreach (glob(BILDER_DIR . '/' . $praefix . '-*') ?: [] as $alt) {
         $basis = basename($alt);
         if (!preg_match('/\.(jpe?g|png|gif|webp)$/i', $basis, $m)) {
@@ -2652,8 +2659,10 @@ function fotosUmhaengen(string $praefix, string $erwarteterTyp, string $zielPrae
         if (rename($alt, BILDER_DIR . '/' . $neuerName)) {
             thumbLoeschen($basis);
             thumbErzeugen(BILDER_DIR . '/' . $neuerName, thumbVerzeichnis() . '/' . $neuerName . '.jpg');
+            $umbenannt[$basis] = $neuerName;
         }
     }
+    bildEintraegeUmbenennen($umbenannt);
 }
 
 function weingutHolen(array $daten, string $id): ?array
@@ -2664,6 +2673,52 @@ function weingutHolen(array $daten, string $id): ?array
         }
     }
     return null;
+}
+
+/**
+ * Festhalten, wer diese Bilddateien hochgeladen hat – wichtig, wenn jemand
+ * später seine Daten löschen will. Räumt dabei Einträge zu inzwischen
+ * gelöschten Dateien gleich mit auf.
+ */
+function bildUploaderMerken(array $dateien): void
+{
+    if ($dateien === []) {
+        return;
+    }
+    $konto = aktuellerBenutzer(datenLaden());
+    $eintrag = [
+        'person' => trim((string)($_SESSION['person'] ?? '')),
+        'benutzer_id' => $konto !== null ? (string)$konto['id'] : '',
+        'zeit' => time(),
+    ];
+    datenAendern(function (array $d) use ($dateien, $eintrag): array {
+        foreach (($d['bilder'] ?? []) as $name => $info) {
+            if (!is_file(BILDER_DIR . '/' . $name)) {
+                unset($d['bilder'][$name]); // Datei existiert nicht mehr
+            }
+        }
+        foreach ($dateien as $datei) {
+            $d['bilder'][$datei] = $eintrag;
+        }
+        return $d;
+    });
+}
+
+/** Uploader-Einträge beim Umbenennen von Bilddateien mitnehmen ([alt => neu]). */
+function bildEintraegeUmbenennen(array $paare): void
+{
+    if ($paare === []) {
+        return;
+    }
+    datenAendern(function (array $d) use ($paare): array {
+        foreach ($paare as $alt => $neu) {
+            if (isset($d['bilder'][$alt])) {
+                $d['bilder'][$neu] = $d['bilder'][$alt];
+                unset($d['bilder'][$alt]);
+            }
+        }
+        return $d;
+    });
 }
 
 /** Hochgeladene Fotos aus $_FILES['fotos'] speichern; gibt [hochgeladen, abgelehnt] zurück. */
@@ -2678,6 +2733,7 @@ function fotoUploadVerarbeiten(array $bildTypen, string $praefix): array
     }
     $hochgeladen = 0;
     $abgelehnt   = 0;
+    $gespeichert = [];
     $finfo       = new finfo(FILEINFO_MIME_TYPE);
     foreach ((array)$dateien['name'] as $i => $originalName) {
         if (($dateien['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
@@ -2699,10 +2755,12 @@ function fotoUploadVerarbeiten(array $bildTypen, string $praefix): array
             @chmod($ziel, 0644);
             thumbErzeugen($ziel, thumbVerzeichnis() . '/' . basename($ziel) . '.jpg');
             $hochgeladen++;
+            $gespeichert[] = basename($ziel);
         } else {
             $abgelehnt++;
         }
     }
+    bildUploaderMerken($gespeichert);
     return [$hochgeladen, $abgelehnt];
 }
 
