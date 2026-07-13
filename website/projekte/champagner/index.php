@@ -1373,6 +1373,158 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($text));
     }
 
+    if ($aktion === 'tasting_album_upload') {
+        // Fotoalbum des Tastings: viele Fotos auf einmal – Dubletten aussortieren,
+        // Getränke am Etikett erkennen, Weingüter am Aufnahmeort, alles chronologisch
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $zielT = null;
+        foreach (datenLaden()['tastings'] as $t) {
+            if ($t['id'] === $tid) { $zielT = $t; break; }
+        }
+        if ($zielT === null) {
+            zurueck('?tasting=1&fehler=' . rawurlencode('Dieses Tasting existiert nicht (mehr).'));
+        }
+        [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'ts-' . $tid);
+        $teile = [];
+        if ($hochgeladen > 0) {
+            @set_time_limit(600);
+            $neue = array_slice(tastingFotos($tid), 0, $hochgeladen);
+            $doppelt = doppelteAussortieren($neue);
+            if ($doppelt > 0) {
+                $teile[] = $doppelt . ' Dublette(n) aussortiert';
+            }
+            $neue = array_values(array_filter($neue, static fn(string $f): bool => is_file(BILDER_DIR . '/' . $f)));
+            // Aufnahmezeit aus den Fotodaten übernehmen – Album und Trip sortieren danach
+            foreach ($neue as $datei) {
+                $z = aufnahmeZeit(BILDER_DIR . '/' . $datei);
+                if ($z !== null) {
+                    @touch(BILDER_DIR . '/' . $datei, $z);
+                }
+            }
+            $d0 = datenLaden();
+            $anGetraenk = 0;
+            $anWeingut = 0;
+            $imAlbum = 0;
+            $ohneAnalyse = 0;
+            $neueGetraenke = [];
+            $analyseStart = time();
+            foreach ($neue as $datei) {
+                $pfad = BILDER_DIR . '/' . $datei;
+                // Zeitbudget: bei sehr großen Uploads bleibt der Rest einfach im Album,
+                // bevor der Server die Verbindung kappt
+                if (time() - $analyseStart > 75) {
+                    $ohneAnalyse++;
+                    continue;
+                }
+                $mtime = (int)filemtime($pfad);
+                $endung = strtolower(pathinfo($datei, PATHINFO_EXTENSION));
+                $gps = gpsAusFoto($pfad);
+                $erkannt = etikettErkennen($datei);
+                if ($erkannt['name'] !== '') {
+                    // Getränkefoto: Gibt es das Getränk schon? (eigenes Tasting leicht bevorzugt)
+                    $best = null;
+                    $bestScore = 0.0;
+                    foreach ($d0['champagner'] as $c) {
+                        similar_text(mb_strtolower($c['name']), mb_strtolower($erkannt['name']), $proz);
+                        $score = $proz + (champagnerInTasting($c, $tid) ? 5 : 0);
+                        if ($score > $bestScore) {
+                            $bestScore = $score;
+                            $best = $c;
+                        }
+                    }
+                    if ($best !== null && $bestScore >= 60) {
+                        $neuName = sprintf('%s-%s-%s.%s', $best['id'], date('Ymd-His', $mtime), bin2hex(random_bytes(3)), $endung);
+                        if (rename($pfad, BILDER_DIR . '/' . $neuName)) {
+                            thumbLoeschen($datei);
+                            thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+                            @touch(BILDER_DIR . '/' . $neuName, $mtime);
+                            bildEintraegeUmbenennen([$datei => $neuName]);
+                            $anGetraenk++;
+                        }
+                        continue;
+                    }
+                    // Unbekanntes Getränk: anlegen – Weingut über GPS, sonst über das Etikett
+                    $weingutId = '';
+                    $weingutNeu = '';
+                    if ($gps !== null && ($wgTreffer = weingutPerKoordinaten($d0, $gps[0], $gps[1])) !== null) {
+                        $weingutId = $wgTreffer['id'];
+                    } elseif ($erkannt['weingut'] !== '') {
+                        foreach ($d0['weingueter'] as $w) {
+                            if (mb_strtolower($w['name']) === mb_strtolower($erkannt['weingut'])) {
+                                $weingutId = $w['id'];
+                                break;
+                            }
+                        }
+                        if ($weingutId === '') {
+                            $weingutNeu = $erkannt['weingut'];
+                        }
+                    }
+                    $neueId = bin2hex(random_bytes(4));
+                    $neueWgId = bin2hex(random_bytes(4));
+                    $nName = $erkannt['name'];
+                    $nReb = (string)($erkannt['rebsorte'] ?? '');
+                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier'], true)
+                        ? (string)$erkannt['typ'] : 'champagner';
+                    datenAendern(function (array $d) use ($nName, $nReb, $nTyp, $weingutId, $weingutNeu, $neueId, $neueWgId, $tid, $mtime): array {
+                        if ($weingutNeu !== '') {
+                            $d['weingueter'][] = ['id' => $neueWgId, 'name' => $weingutNeu, 'notiz' => '', 'zeit' => $mtime];
+                            $weingutId = $neueWgId;
+                        }
+                        $d['champagner'][] = [
+                            'id' => $neueId, 'name' => $nName, 'preis' => '', 'rebsorte' => $nReb,
+                            'weingut_id' => $weingutId, 'typ' => $nTyp, 'tasting_id' => $tid, 'zeit' => $mtime,
+                        ];
+                        return $d;
+                    });
+                    $d0 = datenLaden(); // damit Folgefotos das neue Getränk gleich wiederfinden
+                    $neuName = sprintf('%s-%s-%s.%s', $neueId, date('Ymd-His', $mtime), bin2hex(random_bytes(3)), $endung);
+                    if (rename($pfad, BILDER_DIR . '/' . $neuName)) {
+                        thumbLoeschen($datei);
+                        thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+                        @touch(BILDER_DIR . '/' . $neuName, $mtime);
+                        bildEintraegeUmbenennen([$datei => $neuName]);
+                    }
+                    $neueGetraenke[] = $nName;
+                    continue;
+                }
+                // Kein Etikett: Weingut/Brauerei über den Aufnahmeort?
+                if ($gps !== null && ($wgTreffer = weingutPerKoordinaten($d0, $gps[0], $gps[1])) !== null) {
+                    $wgId = $wgTreffer['id'];
+                    $neuName = sprintf('wg-%s-%s-%s.%s', $wgId, date('Ymd-His', $mtime), bin2hex(random_bytes(3)), $endung);
+                    if (rename($pfad, BILDER_DIR . '/' . $neuName)) {
+                        thumbLoeschen($datei);
+                        thumbErzeugen(BILDER_DIR . '/' . $neuName, thumbVerzeichnis() . '/' . $neuName . '.jpg');
+                        @touch(BILDER_DIR . '/' . $neuName, $mtime);
+                        bildEintraegeUmbenennen([$datei => $neuName]);
+                        $anWeingut++;
+                        continue;
+                    }
+                }
+                // Sonst: Gruppenfoto o. ä. – bleibt im Album des Tastings
+                $imAlbum++;
+            }
+            if ($anGetraenk > 0) {
+                $teile[] = $anGetraenk . ' Foto(s) an vorhandene Getränke angehängt';
+            }
+            if ($neueGetraenke !== []) {
+                $teile[] = count($neueGetraenke) . ' neue(s) Getränk(e) angelegt (' . implode(', ', array_slice($neueGetraenke, 0, 4)) . (count($neueGetraenke) > 4 ? ', …' : '') . ')';
+            }
+            if ($anWeingut > 0) {
+                $teile[] = $anWeingut . ' Weingut-Foto(s) über den Aufnahmeort zugeordnet';
+            }
+            if ($imAlbum > 0) {
+                $teile[] = $imAlbum . ' im Fotoalbum';
+            }
+            if ($ohneAnalyse > 0) {
+                $teile[] = $ohneAnalyse . ' ohne Analyse ins Album (Zeitlimit – bei Bedarf einzeln zuordnen)';
+            }
+        }
+        if ($abgelehnt > 0) {
+            $teile[] = $abgelehnt . ' Datei(en) übersprungen (kein Bild, zu groß oder Fehler)';
+        }
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($hochgeladen . ' Foto(s) geprüft: ' . ($teile === [] ? 'nichts zu tun.' : implode(' · ', $teile))));
+    }
+
     if ($aktion === 'tasting_foto_loeschen') {
         $name = basename((string)($_POST['datei'] ?? ''));
         $pfad = BILDER_DIR . '/' . $name;
@@ -2779,7 +2931,7 @@ function uploadText(int $hochgeladen, int $abgelehnt): string
  */
 function etikettErkennen(string $fotoName): array
 {
-    $leer = ['name' => '', 'weingut' => '', 'rebsorte' => ''];
+    $leer = ['name' => '', 'weingut' => '', 'rebsorte' => '', 'typ' => ''];
     $keyDatei = __DIR__ . '/daten/apikey.php';
     if (!is_file($keyDatei)) {
         return $leer;
@@ -2801,7 +2953,7 @@ function etikettErkennen(string $fotoName): array
             'role'    => 'user',
             'content' => [
                 ['type' => 'image', 'source' => ['type' => 'base64', 'media_type' => 'image/jpeg', 'data' => $bild]],
-                ['type' => 'text', 'text' => 'Auf dem Foto ist eine Getränkeflasche (Champagner, Wein oder Bier). Lies das Etikett und antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut oder Brauerei), name die Bezeichnung des Getränks (mit Cuvée und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil (nur wenn auf dem Etikett lesbar). Was du nicht erkennst, lässt du als leeren String.'],
+                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies das Etikett und antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut oder Brauerei), name die Bezeichnung des Getränks (mit Cuvée und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil (nur wenn auf dem Etikett lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein oder bier. Was du nicht erkennst, lässt du als leeren String.'],
             ],
         ]],
     ]);
@@ -2831,6 +2983,7 @@ function etikettErkennen(string $fotoName): array
                 'name'     => mb_substr(trim((string)($e['name'] ?? '')), 0, 60),
                 'weingut'  => mb_substr(trim((string)($e['weingut'] ?? '')), 0, 60),
                 'rebsorte' => mb_substr(trim((string)($e['rebsorte'] ?? '')), 0, 80),
+                'typ'      => mb_strtolower(trim((string)($e['typ'] ?? ''))),
             ];
         }
     }
@@ -2897,6 +3050,25 @@ function weingutKontaktErmitteln(string $name): string
         }
     }
     return mb_substr(trim(implode('', $teile)), 0, 900);
+}
+
+/** Aufnahmezeitpunkt aus den EXIF-Daten eines Fotos (oder null). */
+function aufnahmeZeit(string $pfad): ?int
+{
+    if (!function_exists('exif_read_data') || !is_file($pfad) || !preg_match('/\.jpe?g$/i', $pfad)) {
+        return null;
+    }
+    $exif = @exif_read_data($pfad);
+    if (!is_array($exif)) {
+        return null;
+    }
+    foreach (['DateTimeOriginal', 'DateTimeDigitized', 'DateTime'] as $k) {
+        $roh = (string)($exif[$k] ?? '');
+        if ($roh !== '' && ($ts = strtotime($roh)) !== false && $ts > 0) {
+            return $ts;
+        }
+    }
+    return null;
 }
 
 /** GPS-Koordinaten aus den EXIF-Daten eines Fotos lesen (oder null). */
@@ -4363,10 +4535,47 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               }
           }
           $letzterTripTag = array_key_last($tripTage);
+
+          // 🗺️ Alle Orte des Tastings als Markierungen: eindeutige Punkte aus
+          // Weingut-Standorten, Bewertungs-Orten und Foto-GPS (Nahes zusammengefasst)
+          $alleOrte = [];
+          foreach ($trip as $st) {
+              $pt = $ptFuer($st);
+              if ($pt === null) {
+                  continue;
+              }
+              $schonDa = false;
+              foreach ($alleOrte as $o) {
+                  if (distanzMeter($o[0], $o[1], $pt[0], $pt[1]) < 120) {
+                      $schonDa = true;
+                      break;
+                  }
+              }
+              if (!$schonDa) {
+                  $alleOrte[] = $pt;
+              }
+          }
+          if (count($alleOrte) > 10) { // Google Maps nimmt nur begrenzt viele Stationen an
+              $schritt = count($alleOrte) / 10;
+              $gekuerzt = [];
+              for ($ri = 0.0; $ri < count($alleOrte); $ri += $schritt) {
+                  $gekuerzt[] = $alleOrte[(int)$ri];
+              }
+              $alleOrte = $gekuerzt;
+          }
+          $orteUrl = '';
+          if (count($alleOrte) >= 2) {
+              $orteUrl = 'https://www.google.com/maps/dir/' . implode('/', array_map(fn($pt) => $pt[0] . ',' . $pt[1], $alleOrte));
+          } elseif (count($alleOrte) === 1) {
+              $orteUrl = 'https://www.google.com/maps/search/?api=1&query=' . $alleOrte[0][0] . ',' . $alleOrte[0][1];
+          }
         ?>
         <?php if ($trip !== []): ?>
           <div class="card">
             <h2>📖 Der Trip – euer Verlauf</h2>
+            <?php if ($orteUrl !== ''): ?>
+              <p style="margin:0 0 0.5rem;"><a class="knopf klein zweit" target="_blank" rel="noopener" href="<?= e($orteUrl) ?>">🗺️ Alle Orte des Tastings auf Google Maps</a></p>
+            <?php endif; ?>
             <div class="trip">
               <?php foreach ($tripTage as $tag => $stationen): ?>
                 <?php $zuAlt = $tag !== $letzterTripTag; // nur der aktuellste Tag startet offen ?>
@@ -4442,10 +4651,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $albumBilder = array_keys($albumBilder);
           usort($albumBilder, fn($a, $b) => (is_file(BILDER_DIR . '/' . $a) ? filemtime(BILDER_DIR . '/' . $a) : 0) <=> (is_file(BILDER_DIR . '/' . $b) ? filemtime(BILDER_DIR . '/' . $b) : 0));
         ?>
-        <?php if ($albumBilder !== []): ?>
-          <details class="card">
-            <summary>📸 Fotoalbum des Tastings (<?= count($albumBilder) ?>)</summary>
-            <div class="foto-galerie" style="margin-top:0.6rem;">
+        <details class="card"<?= $albumBilder === [] ? ' open' : '' ?>>
+          <summary>📸 Fotoalbum des Tastings (<?= count($albumBilder) ?>)</summary>
+          <form method="post" enctype="multipart/form-data" style="margin:0.6rem 0 0.3rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="tasting_album_upload">
+            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+            <?= fotoUploadFelder('ts-album') ?>
+          </form>
+          <p class="anzahl" style="margin-bottom:0.6rem;">Lade ruhig viele Fotos auf einmal hoch: Dubletten werden aussortiert, Getränke am Etikett erkannt, Weingüter am Aufnahmeort zugeordnet – und alles landet zeitlich richtig im Album und im Trip.</p>
+          <?php if ($albumBilder !== []): ?>
+            <div class="foto-galerie" style="margin-top:0.3rem;">
               <?php foreach ($albumBilder as $ab): ?>
                 <div class="foto">
                   <a href="bilder/<?= e(rawurlencode($ab)) ?>" target="_blank">
@@ -4454,8 +4670,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 </div>
               <?php endforeach; ?>
             </div>
-          </details>
-        <?php endif; ?>
+          <?php endif; ?>
+        </details>
 
         <?php
           $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? '');
