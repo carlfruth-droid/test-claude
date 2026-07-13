@@ -744,6 +744,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?konto=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
     }
 
+    if ($aktion === 'mitbewerten_start') {
+        // Per QR-Code gekommen: Alias + E-Mail genügen, dann direkt bewerten
+        $cid = (string)($_POST['cid'] ?? '');
+        $getraenk = champagnerHolen(datenLaden(), $cid);
+        if ($getraenk === null) {
+            zurueck('?fehler=' . rawurlencode('Dieses Getränk gibt es nicht (mehr).'));
+        }
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
+        if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?mitbewerten=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte Alias und eine gültige E-Mail angeben.'));
+        }
+        if (($_POST['agb'] ?? '') !== 'ja') {
+            zurueck('?mitbewerten=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+        }
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = $name;
+        // Gehört das Getränk zu einem Tasting? Dann dort als Teilnehmer eintragen
+        // (mit Einladungs-Cookie, damit die Anmeldung dauerhaft hält)
+        $tid = (string)($getraenk['tasting_id'] ?? '');
+        if ($tid !== '') {
+            $zielT = null;
+            foreach (datenLaden()['tastings'] as $t) {
+                if ($t['id'] === $tid) { $zielT = $t; break; }
+            }
+            if ($zielT !== null) {
+                tastingWaehlen($tid);
+                $token = '';
+                foreach (($zielT['teilnehmer'] ?? []) as $p) {
+                    if (mb_strtolower((string)$p['name']) === mb_strtolower($name)) {
+                        $token = (string)$p['token'];
+                        break;
+                    }
+                }
+                if ($token === '' && !teilnehmerLimitErreicht($zielT)) {
+                    $token = bin2hex(random_bytes(8));
+                    datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
+                        foreach ($d['tastings'] as &$t) {
+                            if ($t['id'] === $tid) {
+                                $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'agb_zeit' => time()];
+                            }
+                        }
+                        return $d;
+                    });
+                }
+                if ($token !== '') {
+                    setcookie('einladung', $token, [
+                        'expires' => time() + 60 * 60 * 24 * 3650,
+                        'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+                    ]);
+                }
+            }
+        }
+        zurueck('?bewerten=' . rawurlencode($cid) . '&ok=' . rawurlencode('Willkommen, ' . $name . '! Sag uns, wie dir „' . $getraenk['name'] . '“ schmeckt. 🥂'));
+    }
+
     if ($aktion === 'einladung_bestaetigen') {
         // Erster Klick auf einen Einladungslink: Nutzungsbedingungen bestätigen
         $token = (string)($_POST['token'] ?? '');
@@ -921,6 +977,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $kat = (string)($_POST['kat'] ?? 'champagner');
         if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
             $kat = 'champagner';
+        }
+        // Was für ein Getränk das ist, erkennt die KI selbst vom Etikett
+        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+            $kat = (string)$erkannt['typ'];
         }
 
         // Etikett erkannt? Dann sofort loslegen – ohne weitere Rückfragen.
@@ -3508,6 +3568,22 @@ if (isset($_GET['bewerten'])) {
             $_SESSION['vk_zuletzt'] = $kontextWeingut['id'];
         }
     }
+} elseif (isset($_GET['mitbewerten'])) {
+    // QR-Code von „Du/Ihr trinkt gerade“: dieses Getränk direkt mitbewerten
+    $mitCid = (string)$_GET['mitbewerten'];
+    $mitGetraenk = champagnerHolen($daten, $mitCid);
+    if ($mitGetraenk === null) {
+        header('Location: ./?fehler=' . rawurlencode('Dieses Getränk gibt es nicht (mehr).'));
+        exit;
+    }
+    if ($eingeloggt) {
+        if ((string)($mitGetraenk['tasting_id'] ?? '') !== '') {
+            tastingWaehlen((string)$mitGetraenk['tasting_id']);
+        }
+        header('Location: ./?bewerten=' . rawurlencode($mitCid));
+        exit;
+    }
+    $ansicht = 'mitbewerten';
 } elseif (isset($_GET['liste'])) {
     $ansicht = 'liste';
 } elseif (isset($_GET['tasting'])) {
@@ -4195,6 +4271,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'einladung_frage'): ?>
       <h1>Willkommen bei TasteLog 🥂</h1>
       <p class="untertitel">Du wurdest zu einem Tasting eingeladen.</p>
+    <?php elseif ($ansicht === 'mitbewerten'): ?>
+      <h1>Mitbewerten 🥂</h1>
+      <p class="untertitel">Sag uns kurz, wer du bist – dann geht’s direkt zur Bewertung.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
@@ -4243,20 +4322,67 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php endif; ?>
 
     <?php
-      // "Gerade im Glas" der eigenen Gruppe oben anpinnen (Verkosten + Arbeitsfläche)
+      // "Gerade im Glas" oben anpinnen (Verkosten + Arbeitsfläche):
+      // links das Bild, rechts ein QR-Code zum Mitbewerten – dazwischen die
+      // Verbindung, wer dieses Getränk auch schon bewertet hat
       if (in_array($ansicht, ['verkosten', 'werkstatt'], true)) {
           $meins = meinTasting($daten);
           $imGlas = $meins !== null ? champagnerHolen($daten, (string)($meins['aktiv_cid'] ?? '')) : null;
           if ($imGlas !== null) {
-              echo '<div class="card" style="border-left:5px solid var(--accent); display:flex; align-items:center; gap:0.8rem; justify-content:space-between; flex-wrap:wrap;">'
-                  . '<span>🥂 <b>Ihr trinkt gerade:</b> ' . e($imGlas['name']) . '<br><span class="anzahl">' . e($meins['titel']) . '</span></span>'
-                  . '<a class="knopf" href="?bewerten=' . e(rawurlencode($imGlas['id'])) . '">' . (meineBewertung($daten, $imGlas['id']) !== null ? '🔁 Nochmal' : 'Bewerten') . '</a>'
-                  . '</div>';
+              $istGruppe = count($meins['teilnehmer'] ?? []) > 1; // „Ihr“ nur bei Gruppen-Tastings
+              $glasFotos = mitTitelbild(fotosFuer($imGlas['id']), (string)($imGlas['titelbild'] ?? ''));
+              $mitUrl = 'https://fruthzeug.de/projekte/champagner/?mitbewerten=' . rawurlencode($imGlas['id']);
+              $meineB = meineBewertung($daten, $imGlas['id']);
+              // Die Verbindung: Wer hat dieses Getränk auch bewertet – und wann?
+              $ichKlein = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
+              $auchBewertet = [];
+              foreach ($daten['bewertungen'] as $vb) {
+                  if ((string)$vb['champagner_id'] !== (string)$imGlas['id']) {
+                      continue;
+                  }
+                  $wer = trim((string)$vb['person']);
+                  if ($wer === '' || mb_strtolower($wer) === $ichKlein) {
+                      continue;
+                  }
+                  $auchBewertet[$wer] = max((int)($vb['zeit'] ?? 0), $auchBewertet[$wer] ?? 0);
+              }
+              arsort($auchBewertet);
           }
       }
     ?>
+    <?php if (in_array($ansicht, ['verkosten', 'werkstatt'], true) && $imGlas !== null): ?>
+      <div class="card" style="border-left:5px solid var(--accent);">
+        <div style="display:flex; align-items:center; gap:0.8rem;">
+          <?php if ($glasFotos !== []): ?>
+            <a href="bilder/<?= e(rawurlencode($glasFotos[0])) ?>" style="flex-shrink:0;" class="bild">
+              <img src="<?= e(thumbUrl($glasFotos[0])) ?>" alt="" style="width:76px; height:76px; border-radius:12px; object-fit:cover; display:block;">
+            </a>
+          <?php else: ?>
+            <span style="width:76px; text-align:center; font-size:2rem; flex-shrink:0;"><?= $KATEGORIEN_GETRAENKE[(string)($imGlas['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
+          <?php endif; ?>
+          <span style="flex:1; min-width:0;">🥂 <b><?= $istGruppe ? 'Ihr trinkt gerade' : 'Du trinkst gerade' ?>:</b> <?= e($imGlas['name']) ?><br>
+            <span class="anzahl"><?= $istGruppe ? e($meins['titel']) . ' · ' : '' ?>QR-Code scannen und mitbewerten</span><br>
+            <a class="knopf klein" style="margin-top:0.4rem; display:inline-block;" href="?bewerten=<?= e(rawurlencode($imGlas['id'])) ?>"><?= $meineB !== null ? '🔁 Noch einmal bewerten' : 'Jetzt bewerten' ?></a>
+          </span>
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&amp;margin=4&amp;data=<?= e(rawurlencode($mitUrl)) ?>"
+               alt="QR-Code: dieses Getränk mitbewerten" width="96" height="96"
+               style="border-radius:10px; border:1px solid var(--border); background:#fff; flex-shrink:0;">
+        </div>
+        <?php if ($auchBewertet !== []): ?>
+          <div style="margin-top:0.6rem; border-top:1px solid var(--border); padding-top:0.5rem;">
+            <?php foreach (array_slice($auchBewertet, 0, 6, true) as $werName => $wann): ?>
+              <p class="anzahl" style="margin:0.15rem 0;">👤 <b><?= e($werName) ?></b> hat dieses Getränk auch bewertet – am <?= date('d.m.Y', $wann) ?></p>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+      </div>
+    <?php endif; ?>
     <?php if ($ansicht === 'verkosten'): ?>
       <!-- ==================== VERKOSTEN-START ==================== -->
+      <a class="kachel" href="?neu=1" style="border-left:5px solid var(--accent);">
+        <span class="k-icon">🍾</span>
+        <span class="k-text"><b>Neues Getränk</b><small>Foto, Galerie oder von Hand – Art, Name &amp; Weingut werden erkannt, dann direkt bewerten</small></span>
+      </a>
       <a class="kachel" href="?vk=ohne">
         <span class="k-icon">🏠</span>
         <span class="k-text"><b>Ohne Weingut verkosten</b><small>Zu Hause, im Restaurant, unterwegs</small></span>
@@ -5444,6 +5570,33 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </label>
           <button class="knopf" type="submit">🥂 Bestätigen &amp; mitmachen</button>
         </form>
+      </div>
+
+    <?php elseif ($ansicht === 'mitbewerten'): ?>
+      <!-- ==================== MITBEWERTEN (per QR vom „trinkt gerade“-Kärtchen) ==================== -->
+      <?php $mitFotos = mitTitelbild(fotosFuer($mitGetraenk['id']), (string)($mitGetraenk['titelbild'] ?? '')); ?>
+      <div class="card">
+        <div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:0.8rem;">
+          <?php if ($mitFotos !== []): ?>
+            <img src="<?= e(thumbUrl($mitFotos[0])) ?>" alt="" style="width:64px; height:64px; border-radius:12px; object-fit:cover; flex-shrink:0;">
+          <?php else: ?>
+            <span style="font-size:2rem; flex-shrink:0;"><?= $KATEGORIEN_GETRAENKE[(string)($mitGetraenk['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
+          <?php endif; ?>
+          <span><b><?= e($mitGetraenk['name']) ?></b><br><span class="anzahl">Du wurdest eingeladen, dieses Getränk mitzubewerten.</span></span>
+        </div>
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="mitbewerten_start">
+          <input type="hidden" name="cid" value="<?= e($mitGetraenk['id']) ?>">
+          <input type="text" name="name" placeholder="Dein Alias / Name" maxlength="40" required>
+          <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
+          <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
+            <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
+            <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
+          </label>
+          <button class="knopf" type="submit">🥂 Los geht’s – bewerten</button>
+        </form>
+        <p class="anzahl" style="margin-top:0.6rem;">Schon dabei gewesen? Dann melde dich einfach über dein <a href="?konto=1">Benutzerkonto</a> oder deinen Einladungslink an.</p>
       </div>
 
     <?php elseif ($ansicht === 'impressum'): ?>
