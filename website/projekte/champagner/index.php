@@ -3758,10 +3758,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     ?>
     <?php if ($ansicht === 'verkosten'): ?>
       <!-- ==================== VERKOSTEN-START ==================== -->
-      <a class="kachel" href="?wneu=1&amp;vkmodus=1">
-        <span class="k-icon">📷</span>
-        <span class="k-text"><b>Weingut per Foto erkennen</b><small>Vor Ort fotografieren – GPS findet das Weingut</small></span>
-      </a>
       <a class="kachel" href="?vk=ohne">
         <span class="k-icon">🏠</span>
         <span class="k-text"><b>Ohne Weingut verkosten</b><small>Zu Hause, im Restaurant, unterwegs</small></span>
@@ -3906,25 +3902,57 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <p style="color:var(--muted); font-style:italic;">Noch nichts festgelegt – das zuletzt erfasste Getränk wird automatisch das aktuelle, oder unten von Hand wählen.</p>
           <?php endif; ?>
           <a class="knopf" href="?neu=1" style="margin-top:0.8rem; display:inline-block;">📷&nbsp; Neues Getränk erfassen</a>
-          <p class="anzahl" style="margin-top:0.3rem;">Etikett fotografieren – das neue Getränk ist danach automatisch das aktuelle der Runde.</p>
-          <form method="post" style="margin-top:0.8rem;">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="glas_setzen">
-            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <?php
-              // Nur die Weine dieses Tastings zur Auswahl anbieten
-              $auswahl = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
-              usort($auswahl, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
-            ?>
-            <select name="champagner_id">
-              <option value="">– nichts ausgewählt –</option>
-              <?php foreach (array_slice($auswahl, 0, 30) as $c): ?>
-                <?php $optWg = weingutHolen($daten, (string)($c['weingut_id'] ?? '')); ?>
-                <option value="<?= e($c['id']) ?>"<?= ($aktivesTasting['aktiv_cid'] ?? '') === $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?><?= $optWg !== null ? ' — ' . e($optWg['name']) : '' ?></option>
-              <?php endforeach; ?>
-            </select>
-            <button class="knopf zweit" type="submit">Als aktuelles Getränk festlegen</button>
-          </form>
+          <?php
+            // Liste statt Dropdown: Getränke des aktuellen Weinguts, sonst die letzten 7 – chronologisch
+            $auswahl = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
+            usort($auswahl, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+            $vkAktuell = (string)($_SESSION['vk_zuletzt'] ?? '');
+            $listeTitel = 'Zuletzt erfasst:';
+            $glasListe = $auswahl;
+            if (preg_match('/^[a-f0-9]{8}$/', $vkAktuell)) {
+                $wgAktuell = weingutHolen($daten, $vkAktuell);
+                $vomWeingut = $wgAktuell !== null ? array_values(array_filter($auswahl, fn($c) => ($c['weingut_id'] ?? '') === $vkAktuell)) : [];
+                if ($vomWeingut !== []) {
+                    $glasListe = $vomWeingut;
+                    $listeTitel = '🍇 ' . $wgAktuell['name'] . ':';
+                }
+            }
+            $glasListe = array_slice($glasListe, 0, 7);
+          ?>
+          <?php if ($glasListe !== []): ?>
+            <p class="anzahl" style="margin:0.7rem 0 0.3rem;"><?= e($listeTitel) ?> <span style="font-style:italic;">antippen fürs Ergebnis, 🥂 = „trinken wir gerade“</span></p>
+            <?php foreach ($glasListe as $gc): ?>
+              <?php
+                $gcWg = weingutHolen($daten, (string)($gc['weingut_id'] ?? ''));
+                $gcFotos = mitTitelbild(fotosFuer($gc['id']), (string)($gc['titelbild'] ?? ''));
+                $gcBew = bewertungenFuer($daten, $gc['id']);
+                $istAktuell = ($aktivesTasting['aktiv_cid'] ?? '') === $gc['id'];
+              ?>
+              <div style="display:flex; align-items:center; gap:0.55rem; border-bottom:1px solid var(--border); padding:0.4rem 0;<?= $istAktuell ? ' background:var(--accent-hell); border-radius:8px; padding-left:0.4rem;' : '' ?>">
+                <a href="?ergebnis=<?= e(rawurlencode($gc['id'])) ?>" style="display:flex; align-items:center; gap:0.55rem; flex:1; min-width:0; text-decoration:none; color:var(--text);">
+                  <?php if ($gcFotos !== []): ?>
+                    <img src="<?= e(thumbUrl($gcFotos[0])) ?>" alt="" loading="lazy" style="width:40px; height:40px; border-radius:9px; object-fit:cover; flex-shrink:0;">
+                  <?php else: ?>
+                    <span style="width:40px; text-align:center; font-size:1.2rem; flex-shrink:0;"><?= $KATEGORIEN_GETRAENKE[(string)($gc['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
+                  <?php endif; ?>
+                  <span style="flex:1; min-width:0;"><b><?= e($gc['name']) ?></b><br>
+                    <span class="anzahl"><?= date('d.m., H:i', (int)$gc['zeit']) ?><?= $gcWg !== null && $listeTitel === 'Zuletzt erfasst:' ? ' · ' . e($gcWg['name']) : '' ?> · <?= sterneAnzeige(gesamtSchnitt($gcBew)) ?></span>
+                  </span>
+                </a>
+                <?php if ($istAktuell): ?>
+                  <span title="trinken wir gerade">🥂</span>
+                <?php else: ?>
+                  <form method="post" style="margin:0;">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="glas_setzen">
+                    <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+                    <input type="hidden" name="champagner_id" value="<?= e($gc['id']) ?>">
+                    <button type="submit" title="Als aktuelles Getränk festlegen" style="background:none; border:1px solid var(--border); border-radius:8px; padding:0.25rem 0.5rem; cursor:pointer; font-size:1rem;">🥂</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          <?php endif; ?>
         </div>
 
         <?php
@@ -4051,9 +4079,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         <?php endif; ?>
 
-        <?php if ($tastingWeingutIds !== []): ?>
-          <details class="card">
+        <details class="card">
             <summary>🍇 Unsere Weingüter (<?= count($tastingWeingutIds) ?>)</summary>
+            <a class="knopf zweit" href="?wneu=1&amp;vkmodus=1" style="margin-top:0.5rem; display:inline-block;">📷&nbsp; Neues Weingut per Foto erkennen</a>
             <div style="margin-top:0.5rem;">
               <?php foreach ($daten['weingueter'] as $w): ?>
                 <?php if (!isset(array_flip($tastingWeingutIds)[$w['id']])) { continue; } ?>
@@ -4071,8 +4099,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 </a>
               <?php endforeach; ?>
             </div>
-          </details>
-        <?php endif; ?>
+        </details>
 
         <?php
           // 📸 Album des Tastings: alle Bilder (Flaschen, Weingüter, Gruppenfotos) chronologisch
