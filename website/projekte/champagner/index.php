@@ -516,7 +516,9 @@ if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['benutzer'])) 
     if ($kontoTreffer !== null) {
         $_SESSION['tasting_ok'] = true;
         if (trim((string)($_SESSION['person'] ?? '')) === '') {
-            $_SESSION['person'] = (string)($kontoTreffer['vorname'] ?? '');
+            $_SESSION['person'] = trim((string)($kontoTreffer['alias'] ?? '')) !== ''
+                ? (string)$kontoTreffer['alias']
+                : (string)($kontoTreffer['vorname'] ?? '');
         }
     }
 }
@@ -783,9 +785,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'expires' => time() + 60 * 60 * 24 * 3650, // läuft nicht ab
             'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
         ]);
+        $anzeige = trim((string)($gefunden['alias'] ?? '')) !== '' ? (string)$gefunden['alias'] : (string)($gefunden['vorname'] ?? '');
         $_SESSION['tasting_ok'] = true;
-        $_SESSION['person'] = (string)($gefunden['vorname'] ?? '');
-        zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . ($gefunden['vorname'] ?? '') . '! Du bleibst auf diesem Gerät dauerhaft angemeldet.'));
+        $_SESSION['person'] = $anzeige;
+        zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . $anzeige . '! Du bleibst auf diesem Gerät dauerhaft angemeldet.'));
     }
 
     if ($aktion === 'benutzer_logout') {
@@ -956,6 +959,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['tasting_ok'] = true;
         $_SESSION['person'] = $name;
         zurueck('?ok=' . rawurlencode('Willkommen, ' . $name . '! Du bist dabei bei „' . $ziel['titel'] . '“. 🥂'));
+    }
+
+    if ($aktion === 'benutzer_registrieren') {
+        // Selbst-Registrierung: sofort nutzbar, auch ohne vorherige Anmeldung –
+        // Tastings bis 2 Personen, größere Runden schaltet der Administrator frei
+        $alias = mb_substr(trim((string)($_POST['alias'] ?? '')), 0, 40);
+        $vorname = mb_substr(trim((string)($_POST['vorname'] ?? '')), 0, 40);
+        $nachname = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
+        $pw = (string)($_POST['passwort'] ?? '');
+        if ($alias === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?konto=1&fehler=' . rawurlencode('Bitte mindestens einen Alias (Anzeigename) und eine gültige E-Mail angeben.'));
+        }
+        if (mb_strlen($pw) < 6) {
+            zurueck('?konto=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+        }
+        if (($_POST['agb'] ?? '') !== 'ja') {
+            zurueck('?konto=1&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+        }
+        $neuerBenutzer = [
+            'id' => bin2hex(random_bytes(4)),
+            'alias' => $alias,
+            'vorname' => $vorname,
+            'name' => $nachname,
+            'email' => $email,
+            'pw_hash' => password_hash($pw, PASSWORD_DEFAULT),
+            'admin' => false,
+            'darf_tasting' => false, // = noch keine großen Tastings (unbegrenzt Personen)
+            'token' => bin2hex(random_bytes(16)),
+            'agb_zeit' => time(), // wann die Nutzungsbedingungen bestätigt wurden
+            'zeit' => time(),
+        ];
+        datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
+            foreach ($d['benutzer'] as $b) {
+                if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
+                    zurueck('?konto=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
+                }
+            }
+            $d['benutzer'][] = $neuerBenutzer;
+            return $d;
+        });
+        setcookie('benutzer', $neuerBenutzer['token'], [
+            'expires' => time() + 60 * 60 * 24 * 3650,
+            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = $alias;
+        zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . $alias . '! Dein Konto ist fertig – du kannst sofort Tastings anlegen (du + 1 Person). Für größere Runden schaltet dich der Administrator frei.'));
     }
 
     if (!$eingeloggt) {
@@ -2174,50 +2225,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?tasting=' . rawurlencode($neueId) . '&ok=' . rawurlencode('Tasting „' . $titel . '“ angelegt – jetzt Teilnehmer einladen!'));
     }
 
-    if ($aktion === 'benutzer_registrieren') {
-        // Selbst-Registrierung: sofort nutzbar, Tastings bis 2 Personen –
-        // größere Runden schaltet der Administrator frei
+    if ($aktion === 'benutzer_aktualisieren') {
+        // Eigene Stammdaten ändern (nur angemeldet)
+        $konto = aktuellerBenutzer(datenLaden());
+        if ($konto === null) {
+            zurueck('?konto=1&fehler=' . rawurlencode('Bitte zuerst anmelden.'));
+        }
+        $alias = mb_substr(trim((string)($_POST['alias'] ?? '')), 0, 40);
         $vorname = mb_substr(trim((string)($_POST['vorname'] ?? '')), 0, 40);
         $nachname = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
         $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
-        $pw = (string)($_POST['passwort'] ?? '');
-        if ($vorname === '' || $nachname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            zurueck('?konto=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
+        $pwNeu = (string)($_POST['passwort'] ?? '');
+        if ($alias === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?konto=1&fehler=' . rawurlencode('Alias und eine gültige E-Mail sind Pflicht.'));
         }
-        if (mb_strlen($pw) < 6) {
-            zurueck('?konto=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+        if ($pwNeu !== '' && mb_strlen($pwNeu) < 6) {
+            zurueck('?konto=1&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
         }
-        if (($_POST['agb'] ?? '') !== 'ja') {
-            zurueck('?konto=1&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
-        }
-        $neuerBenutzer = [
-            'id' => bin2hex(random_bytes(4)),
-            'vorname' => $vorname,
-            'name' => $nachname,
-            'email' => $email,
-            'pw_hash' => password_hash($pw, PASSWORD_DEFAULT),
-            'admin' => false,
-            'darf_tasting' => false, // = noch keine großen Tastings (unbegrenzt Personen)
-            'token' => bin2hex(random_bytes(16)),
-            'agb_zeit' => time(), // wann die Nutzungsbedingungen bestätigt wurden
-            'zeit' => time(),
-        ];
-        datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
+        $kontoId = (string)$konto['id'];
+        datenAendern(function (array $d) use ($kontoId, $alias, $vorname, $nachname, $email, $pwNeu): array {
             foreach ($d['benutzer'] as $b) {
-                if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
-                    zurueck('?konto=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
+                if ((string)$b['id'] !== $kontoId && mb_strtolower((string)($b['email'] ?? '')) === $email) {
+                    zurueck('?konto=1&fehler=' . rawurlencode('Diese E-Mail gehört schon zu einem anderen Konto.'));
                 }
             }
-            $d['benutzer'][] = $neuerBenutzer;
+            foreach ($d['benutzer'] as &$b) {
+                if ((string)$b['id'] === $kontoId) {
+                    $b['alias'] = $alias;
+                    $b['vorname'] = $vorname;
+                    $b['name'] = $nachname;
+                    $b['email'] = $email;
+                    if ($pwNeu !== '') {
+                        $b['pw_hash'] = password_hash($pwNeu, PASSWORD_DEFAULT);
+                    }
+                }
+            }
+            unset($b);
             return $d;
         });
-        setcookie('benutzer', $neuerBenutzer['token'], [
-            'expires' => time() + 60 * 60 * 24 * 3650,
-            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
-        ]);
-        $_SESSION['tasting_ok'] = true;
-        $_SESSION['person'] = $vorname;
-        zurueck('?meine=1&ok=' . rawurlencode('Willkommen, ' . $vorname . '! Dein Konto ist fertig – du kannst sofort Tastings anlegen (du + 1 Person). Für größere Runden schaltet dich der Administrator frei.'));
+        $_SESSION['person'] = $alias;
+        zurueck('?konto=1&ok=' . rawurlencode('Deine Angaben sind gespeichert.'));
     }
 
     if ($aktion === 'konto_anfragen') {
@@ -4017,6 +4064,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     #nav-toggle:checked ~ .burger span:nth-child(2) { opacity: 0; }
     #nav-toggle:checked ~ .burger span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
 
+    .feld-label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--muted); margin: 0.6rem 0 0.2rem; }
     main { flex: 1; width: 100%; max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 4.2rem; }
     .zurueck { margin-bottom: 0.7rem; }
     .zurueck a { text-decoration: none; font-size: 1.05rem; }
@@ -4556,7 +4604,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
           <span style="flex:1; min-width:0;">🥂 <b><?= $istGruppe ? 'Ihr trinkt gerade' : 'Du trinkst gerade' ?>:</b> <?= e($imGlas['name']) ?><br>
             <span class="anzahl"><?= $istGruppe ? e($meins['titel']) . ' · ' : '' ?>QR-Code scannen und mitbewerten</span><br>
-            <a class="knopf klein" style="margin-top:0.4rem; display:inline-block;" href="?bewerten=<?= e(rawurlencode($imGlas['id'])) ?>"><?= $meineB !== null ? '🔁 Noch einmal bewerten' : 'Jetzt bewerten' ?></a>
+            <span class="knopfreihe" style="margin-top:0.4rem;">
+              <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($imGlas['id'])) ?>"><?= $meineB !== null ? '🔁 Noch einmal bewerten' : 'Jetzt bewerten' ?></a>
+              <?php if ($meins !== null): ?>
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="glas_setzen">
+                  <input type="hidden" name="tasting_id" value="<?= e($meins['id']) ?>">
+                  <input type="hidden" name="champagner_id" value="">
+                  <button class="knopf klein zweit" type="submit">🍽️ Glas leer</button>
+                </form>
+              <?php endif; ?>
+            </span>
           </span>
           <img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&amp;margin=4&amp;data=<?= e(rawurlencode($mitUrl)) ?>"
                alt="QR-Code: dieses Getränk mitbewerten" width="96" height="96"
@@ -5043,33 +5102,78 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </details>
 
         <?php
-          // Getränke aus anderen Tastings, die man hierher holen kann
-          $fremdeGetraenke = array_values(array_filter(
-              $daten['champagner'],
-              fn($c) => (string)($c['tasting_id'] ?? '') !== (string)$aktivesTasting['id']
-          ));
-          usort($fremdeGetraenke, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
-          $tastingTitel = [];
-          foreach ($daten['tastings'] as $t) {
-              $tastingTitel[$t['id']] = $t['titel'];
+          // Getränke hierher holen: nur aus den EIGENEN Tastings des Nutzers
+          // (Teilnehmer/Besitzer) sowie direkt (ohne Tasting) verkostete.
+          $meineTsHolen = meineTastings($daten);
+          unset($meineTsHolen[$aktivesTasting['id']]); // aktuelles ist schon hier
+          $holbarProQuelle = []; // quellId (tid oder 'direkt') => [drinks]
+          $quellTitel = [];
+          foreach ($daten['champagner'] as $c) {
+              $ctid = (string)($c['tasting_id'] ?? '');
+              if ($ctid === (string)$aktivesTasting['id']) { continue; }
+              if ($ctid === '') {
+                  $holbarProQuelle['direkt'][] = $c;
+                  $quellTitel['direkt'] = 'Direkt verkostet';
+              } elseif (isset($meineTsHolen[$ctid])) {
+                  $holbarProQuelle[$ctid][] = $c;
+                  $quellTitel[$ctid] = (string)$meineTsHolen[$ctid]['titel'];
+              }
           }
+          // Getränke je Quelle nach Zeit sortieren
+          foreach ($holbarProQuelle as &$grp) {
+              usort($grp, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
+          }
+          unset($grp);
         ?>
-        <?php if ($fremdeGetraenke !== []): ?>
+        <?php if ($holbarProQuelle !== []): ?>
           <details class="card">
             <summary>➕ Getränk aus anderem Tasting hierher holen</summary>
             <form method="post" style="margin-top:0.6rem;">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="tasting_zuordnen">
               <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-              <select name="champagner_id" required>
-                <option value="">– Getränk wählen –</option>
-                <?php foreach (array_slice($fremdeGetraenke, 0, 60) as $fg): ?>
-                  <?php $herkunft = $tastingTitel[(string)($fg['tasting_id'] ?? '')] ?? 'ohne Tasting'; ?>
-                  <option value="<?= e($fg['id']) ?>"><?= e($fg['name']) ?> (<?= e($herkunft) ?>)</option>
+              <label class="feld-label">1. Woher?</label>
+              <select id="holen-quelle">
+                <option value="">– Tasting wählen –</option>
+                <?php foreach ($holbarProQuelle as $qid => $grp): ?>
+                  <option value="<?= e((string)$qid) ?>"><?= e($quellTitel[$qid]) ?> (<?= count($grp) ?>)</option>
                 <?php endforeach; ?>
               </select>
-              <button class="knopf zweit" type="submit">Hierher holen</button>
+              <label class="feld-label">2. Welches Getränk?</label>
+              <select name="champagner_id" id="holen-getraenk" required disabled>
+                <option value="">– zuerst Tasting wählen –</option>
+              </select>
+              <button class="knopf zweit" type="submit" style="margin-top:0.6rem;">Hierher holen</button>
             </form>
+            <script>
+              (function () {
+                var quellen = <?= json_encode(array_map(
+                    fn($grp) => array_map(fn($c) => ['id' => (string)$c['id'], 'name' => (string)$c['name']], $grp),
+                    $holbarProQuelle
+                ), JSON_UNESCAPED_UNICODE) ?>;
+                var qs = document.getElementById('holen-quelle');
+                var gs = document.getElementById('holen-getraenk');
+                if (!qs || !gs) { return; }
+                qs.addEventListener('change', function () {
+                  var liste = quellen[qs.value] || [];
+                  gs.innerHTML = '';
+                  if (liste.length === 0) {
+                    gs.innerHTML = '<option value="">– zuerst Tasting wählen –</option>';
+                    gs.disabled = true;
+                    return;
+                  }
+                  var leer = document.createElement('option');
+                  leer.value = ''; leer.textContent = '– Getränk wählen –';
+                  gs.appendChild(leer);
+                  liste.forEach(function (g) {
+                    var o = document.createElement('option');
+                    o.value = g.id; o.textContent = g.name;
+                    gs.appendChild(o);
+                  });
+                  gs.disabled = false;
+                });
+              })();
+            </script>
           </details>
         <?php endif; ?>
 
@@ -6065,9 +6169,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="benutzer_registrieren">
-              <input type="text" name="vorname" placeholder="Vorname" maxlength="40" required>
-              <input type="text" name="name" placeholder="Nachname" maxlength="40" required>
-              <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
+              <input type="text" name="alias" placeholder="Alias / Anzeigename (Pflicht)" maxlength="40" required>
+              <input type="text" name="vorname" placeholder="Vorname (optional)" maxlength="40">
+              <input type="text" name="name" placeholder="Nachname (optional)" maxlength="40">
+              <input type="text" name="email" placeholder="E-Mail (Pflicht)" maxlength="80" inputmode="email" autocomplete="email" required>
               <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
               <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
                 <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
@@ -6079,15 +6184,27 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php else: ?>
           <div class="card">
             <h2>👤 Dein Konto</h2>
-            <p>Angemeldet als <b><?= e(trim((string)($benutzerAktiv['vorname'] ?? '') . ' ' . (string)($benutzerAktiv['name'] ?? ''))) ?></b>
-              <span class="anzahl">(<?= e((string)($benutzerAktiv['email'] ?? '')) ?>)</span>
-              <?php if (!empty($benutzerAktiv['admin'])): ?><span class="bewerter-chip">🛡️ Administrator</span><?php endif; ?>
-            </p>
-            <p class="anzahl" style="margin:0.3rem 0 0.6rem;">Dauerhaft angemeldet – die Anmeldung läuft nicht ab.</p>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Dauerhaft angemeldet – die Anmeldung läuft nicht ab.<?php if (!empty($benutzerAktiv['admin'])): ?> <span class="bewerter-chip">🛡️ Administrator</span><?php endif; ?><?php if (!empty($benutzerAktiv['darf_tasting'])): ?> <span class="bewerter-chip">✅ große Tastings</span><?php endif; ?></p>
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_aktualisieren">
+              <label class="feld-label">Alias / Anzeigename <span class="anzahl">(so erscheinst du in Bewertungen)</span></label>
+              <input type="text" name="alias" value="<?= e((string)($benutzerAktiv['alias'] ?? ($benutzerAktiv['vorname'] ?? ''))) ?>" maxlength="40" required>
+              <label class="feld-label">Vorname</label>
+              <input type="text" name="vorname" value="<?= e((string)($benutzerAktiv['vorname'] ?? '')) ?>" maxlength="40">
+              <label class="feld-label">Nachname</label>
+              <input type="text" name="name" value="<?= e((string)($benutzerAktiv['name'] ?? '')) ?>" maxlength="40">
+              <label class="feld-label">E-Mail</label>
+              <input type="text" name="email" value="<?= e((string)($benutzerAktiv['email'] ?? '')) ?>" maxlength="80" inputmode="email" autocomplete="email" required>
+              <label class="feld-label">Neues Passwort <span class="anzahl">(leer lassen = unverändert)</span></label>
+              <input type="password" name="passwort" placeholder="mind. 6 Zeichen" minlength="6" autocomplete="new-password">
+              <button class="knopf" type="submit" style="margin-top:0.6rem;">Änderungen speichern</button>
+            </form>
+            <p class="anzahl" style="margin:0.7rem 0 0.3rem;">Konto-ID: <?= e((string)($benutzerAktiv['id'] ?? '')) ?> · angelegt am <?= date('d.m.Y', (int)($benutzerAktiv['zeit'] ?? time())) ?></p>
+            <form method="post" style="margin-top:0.5rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="benutzer_logout">
-              <button class="loeschen" type="submit">Vom Konto abmelden</button>
+              <button class="knopf zweit" type="submit">Vom Konto abmelden</button>
             </form>
           </div>
         <?php endif; ?>
