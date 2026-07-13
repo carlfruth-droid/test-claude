@@ -246,6 +246,12 @@ function sortenLabel(string $typ): string
     return $typ === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
 }
 
+/** Beim Bier ist der Erzeuger eine Brauerei, sonst ein Weingut/Haus. */
+function erzeugerLabel(string $typ): string
+{
+    return $typ === 'bier' ? 'Brauerei' : 'Weingut';
+}
+
 /**
  * Gängige Rebsorten, Weinstile bzw. Bierstile je Getränkeart – zum Antippen
  * statt Tippen, jeweils mit kurzer Erklärung (erscheint beim Antippen).
@@ -1086,6 +1092,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Nichts erkannt: kurzes Formular zum Eintragen zeigen
         $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? ''), 'vk' => $vk, 'kat' => $kat];
         zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
+    }
+
+    if ($aktion === 'schnell_foto_mehr') {
+        // Weitere Fotos zu einem noch nicht gespeicherten Getränk hinzufügen
+        $praefix = (string)($_SESSION['neu']['praefix'] ?? '');
+        if (!preg_match('/^neu-[a-f0-9]{8}$/', $praefix)) {
+            zurueck('?neu=1&fehler=' . rawurlencode('Bitte zuerst ein erstes Foto aufnehmen.'));
+        }
+        [$hochgeladen, ] = fotoUploadVerarbeiten($BILD_TYPEN, $praefix);
+        zurueck('?neu=2&ok=' . rawurlencode($hochgeladen > 0 ? $hochgeladen . ' weitere(s) Foto(s) hinzugefügt.' : 'Kein Foto hinzugefügt.'));
     }
 
     if ($aktion === 'schnell_anlegen') {
@@ -6556,16 +6572,44 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               $neuKat = 'champagner';
           }
         ?>
+        <?php
+          // Alle bisher zu diesem neuen Getränk aufgenommenen Fotos (Zwischen-Präfix)
+          $neuPraefix = (string)($neu['praefix'] ?? '');
+          $neuFotos = [];
+          if (preg_match('/^neu-[a-f0-9]{8}$/', $neuPraefix)) {
+              foreach (glob(BILDER_DIR . '/' . $neuPraefix . '-*') ?: [] as $pf) {
+                  if (preg_match('/\.(jpe?g|png|gif|webp)$/i', $pf)) { $neuFotos[] = basename($pf); }
+              }
+          }
+          $erzLabel = erzeugerLabel($neuKat);
+        ?>
+        <?php if ($neuFotos !== []): ?>
+          <div class="card">
+            <h2>Fotos (<?= count($neuFotos) ?>)</h2>
+            <div class="foto-galerie" style="margin-bottom:0.7rem;">
+              <?php foreach ($neuFotos as $nf): ?>
+                <div class="foto"><a href="bilder/<?= e(rawurlencode($nf)) ?>" target="_blank"><img src="<?= e(thumbUrl($nf)) ?>" alt="" loading="lazy"></a></div>
+              <?php endforeach; ?>
+            </div>
+            <form method="post" enctype="multipart/form-data">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="schnell_foto_mehr">
+              <input type="file" name="fotos[]" accept="image/*" capture="environment" id="mehr-kamera" class="upload-direkt" style="display:none;">
+              <input type="file" name="fotos[]" accept="image/*" multiple id="mehr-galerie" class="upload-direkt" style="display:none;">
+              <div class="knopfreihe">
+                <label class="knopf zweit" for="mehr-kamera">📷&nbsp; Weiteres Foto</label>
+                <label class="knopf zweit" for="mehr-galerie">🖼️&nbsp; Weitere aus Galerie</label>
+              </div>
+            </form>
+          </div>
+        <?php endif; ?>
         <form method="post" class="card">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="schnell_anlegen">
           <input type="hidden" name="vk" value="<?= e($vkAktiv) ?>">
           <input type="hidden" name="foto" value="<?= e($neu['foto']) ?>">
-          <?php if ($neu['foto'] !== ''): ?>
-            <img src="<?= e(thumbUrl($neu['foto'])) ?>" alt="" style="max-width:180px; border-radius:10px; border:1px solid var(--border); display:block; margin-bottom:1rem;">
-          <?php endif; ?>
           <h2>Getränk</h2>
-          <select name="kat">
+          <select name="kat" id="neu-kat">
             <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kI, $kN]): ?>
               <option value="<?= e($kS) ?>"<?= $neuKat === $kS ? ' selected' : '' ?>><?= $kI ?> <?= e($kN) ?></option>
             <?php endforeach; ?>
@@ -6574,21 +6618,36 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="text" name="rebsorte" id="rebsorte-neu" value="<?= e((string)($neu['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($neuKat)) ?>" maxlength="80">
           <?= sortenChips('rebsorte-neu', $neuKat) ?>
           <input type="text" name="preis" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
-          <h2>Weingut</h2>
+          <h2 id="neu-erzeuger-titel"><?= e($erzLabel) ?></h2>
           <?php if ($daten['weingueter'] !== []): ?>
             <select name="weingut_id">
-              <option value="">– vorhandenes Weingut wählen –</option>
+              <option value="">– vorhandene(s) <?= e($erzLabel) ?> wählen –</option>
               <?php foreach ($daten['weingueter'] as $w): ?>
                 <option value="<?= e($w['id']) ?>"<?= $erkanntesWeingut !== null && $erkanntesWeingut['id'] === $w['id'] ? ' selected' : '' ?>><?= e($w['name']) ?></option>
               <?php endforeach; ?>
             </select>
           <?php endif; ?>
-          <input type="text" name="weingut_neu" value="<?= e($erkanntesWeingut === null ? $neu['weingut'] : '') ?>" placeholder="… oder neues Weingut eintragen" maxlength="60">
+          <input type="text" name="weingut_neu" id="neu-erzeuger-feld" value="<?= e($erkanntesWeingut === null ? $neu['weingut'] : '') ?>" placeholder="… oder neue(s) <?= e($erzLabel) ?> eintragen" maxlength="60">
           <div class="knopfreihe" style="margin-top:0.6rem;">
             <button class="knopf" type="submit">Speichern &amp; bewerten</button>
-            <a class="knopf zweit" href="?neu=1">Anderes Foto</a>
+            <a class="knopf zweit" href="?neu=1">Neu fotografieren</a>
           </div>
         </form>
+        <script>
+          (function () {
+            var kat = document.getElementById('neu-kat');
+            if (!kat) { return; }
+            kat.addEventListener('change', function () {
+              var label = kat.value === 'bier' ? 'Brauerei' : 'Weingut';
+              var titel = document.getElementById('neu-erzeuger-titel');
+              if (titel) { titel.textContent = label; }
+              var feld = document.getElementById('neu-erzeuger-feld');
+              if (feld) { feld.placeholder = '… oder neue(s) ' + label + ' eintragen'; }
+              var wahl = document.querySelector('select[name="weingut_id"] option[value=""]');
+              if (wahl) { wahl.textContent = '– vorhandene(s) ' + label + ' wählen –'; }
+            });
+          })();
+        </script>
       <?php else: ?>
         <form method="post" enctype="multipart/form-data" class="card" id="schnellfoto">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -6710,10 +6769,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
     <?php elseif ($ansicht === 'fotos'): ?>
       <!-- ==================== FOTOALBUM ==================== -->
-      <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf zweit" href="?liste=1">Champagner</a>
-        <a class="knopf zweit" href="?weingueter=1">Weingüter</a>
-        <a class="knopf" href="?fotos=1">Fotos</a>
+      <div class="sortier-leiste" style="margin-bottom:1rem;">Zeigen:
+        <a href="?liste=1">🥂 Getränke</a>
+        <a href="?weingueter=1">🍇 Weingüter</a>
+        <a class="aktiv" href="?fotos=1">📸 Fotos</a>
       </div>
 
       <?php
@@ -6850,13 +6909,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
     <?php elseif ($ansicht === 'weingueter'): ?>
       <!-- ==================== WEINGUT-LISTE ==================== -->
-      <div class="knopfreihe" style="margin-bottom:1.2rem;">
-        <a class="knopf zweit" href="?liste=1">Champagner</a>
-        <a class="knopf" href="?weingueter=1">Weingüter</a>
-        <a class="knopf zweit" href="?fotos=1">Fotos</a>
+      <div class="sortier-leiste" style="margin-bottom:1rem;">Zeigen:
+        <a href="?liste=1">🥂 Getränke</a>
+        <a class="aktiv" href="?weingueter=1">🍇 Weingüter</a>
+        <a href="?fotos=1">📸 Fotos</a>
       </div>
-
-      <a class="knopf gross" href="?wneu=1">📷&nbsp; Neues Weingut per Foto</a>
       <?php
         // Standard: nur die Weingüter des aktuellen Tastings; „Alle“ = Archiv (Admin-Funktion)
         $alleWgZeigen = isset($_GET['alle']) && $istAdmin;
