@@ -401,6 +401,31 @@ function aktuellerBenutzer(array $daten): ?array
     return benutzerZuToken($daten, (string)($_COOKIE['benutzer'] ?? ''));
 }
 
+/**
+ * Alle Namen (klein geschrieben), unter denen der aktuelle Nutzer bewertet
+ * haben kann: aktueller Anzeigename plus – falls angemeldet – Alias, Vorname
+ * und Nachname des Kontos. So bleiben ältere Bewertungen auch nach einer
+ * Alias-Änderung dem Nutzer zugeordnet.
+ */
+function meineNamen(array $daten): array
+{
+    $namen = [];
+    $person = trim((string)($_SESSION['person'] ?? ''));
+    if ($person !== '') {
+        $namen[mb_strtolower($person)] = true;
+    }
+    $konto = aktuellerBenutzer($daten);
+    if ($konto !== null) {
+        foreach (['alias', 'vorname', 'name'] as $feld) {
+            $wert = trim((string)($konto[$feld] ?? ''));
+            if ($wert !== '') {
+                $namen[mb_strtolower($wert)] = true;
+            }
+        }
+    }
+    return $namen;
+}
+
 /** Darf dieser Benutzer Tastings anlegen? (Admin oder freigeschaltet) */
 function darfTastingsAnlegen(?array $b): bool
 {
@@ -2243,7 +2268,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?konto=1&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
         }
         $kontoId = (string)$konto['id'];
-        datenAendern(function (array $d) use ($kontoId, $alias, $vorname, $nachname, $email, $pwNeu): array {
+        // Bisherige Anzeigenamen dieses Kontos – darunter stehen die alten
+        // Bewertungen. Ändert sich der Alias, wandern sie mit auf den neuen.
+        $altNamen = [];
+        foreach ([(string)($konto['alias'] ?? ''), (string)($konto['vorname'] ?? ''), (string)($_SESSION['person'] ?? '')] as $an) {
+            $an = trim($an);
+            if ($an !== '' && mb_strtolower($an) !== mb_strtolower($alias)) {
+                $altNamen[mb_strtolower($an)] = true;
+            }
+        }
+        datenAendern(function (array $d) use ($kontoId, $alias, $vorname, $nachname, $email, $pwNeu, $altNamen): array {
             foreach ($d['benutzer'] as $b) {
                 if ((string)$b['id'] !== $kontoId && mb_strtolower((string)($b['email'] ?? '')) === $email) {
                     zurueck('?konto=1&fehler=' . rawurlencode('Diese E-Mail gehört schon zu einem anderen Konto.'));
@@ -2261,10 +2295,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             unset($b);
+            if ($altNamen !== []) {
+                // Bewertungen unter altem Namen → neuer Alias
+                foreach ($d['bewertungen'] as &$bw) {
+                    if (isset($altNamen[mb_strtolower(trim((string)($bw['person'] ?? '')))])) {
+                        $bw['person'] = $alias;
+                    }
+                }
+                unset($bw);
+                // Teilnehmer-Einträge in Tastings mitziehen
+                foreach ($d['tastings'] as &$t) {
+                    foreach (($t['teilnehmer'] ?? []) as &$p) {
+                        if (isset($altNamen[mb_strtolower(trim((string)($p['name'] ?? '')))])) {
+                            $p['name'] = $alias;
+                        }
+                    }
+                    unset($p);
+                }
+                unset($t);
+                // Profilbild-Zuordnung auf den neuen Namen umhängen
+                if (isset($d['profile']) && is_array($d['profile'])) {
+                    foreach (array_keys($altNamen) as $altLower) {
+                        if (isset($d['profile'][$altLower])) {
+                            $d['profile'][mb_strtolower($alias)] = $d['profile'][$altLower];
+                            unset($d['profile'][$altLower]);
+                        }
+                    }
+                }
+            }
             return $d;
         });
         $_SESSION['person'] = $alias;
-        zurueck('?konto=1&ok=' . rawurlencode('Deine Angaben sind gespeichert.'));
+        zurueck('?konto=1&ok=' . rawurlencode('Deine Angaben sind gespeichert.' . ($altNamen !== [] ? ' Deine bisherigen Bewertungen laufen jetzt unter „' . $alias . '“.' : '')));
     }
 
     if ($aktion === 'konto_anfragen') {
@@ -5960,8 +6022,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php if (!$eingeloggt): ?>
         <div class="card"><?= loginFormular('?meine=1') ?></div>
       <?php else: ?>
-        <?php $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? ''))); ?>
-        <?php if ($ich === ''): ?>
+        <?php $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? ''))); $meineNamenSet = meineNamen($daten); ?>
+        <?php if ($meineNamenSet === []): ?>
           <div class="card">
             <p style="margin-bottom:0.8rem;">Wir kennen deinen Namen noch nicht. Tritt einem Tasting bei oder gib bei deiner ersten Bewertung deinen Namen an – danach sammelt sich hier dein Verkostungsbuch.</p>
             <a class="knopf" href="?tasting=1">Zu den Tastings</a>
@@ -5976,7 +6038,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             $eintraege = [];
             $flaschenSumme = 0;
             foreach ($daten['bewertungen'] as $b) {
-                if (mb_strtolower(trim((string)$b['person'])) !== $ich) {
+                if (!isset($meineNamenSet[mb_strtolower(trim((string)$b['person']))])) {
                     continue;
                 }
                 $c = champagnerHolen($daten, (string)$b['champagner_id']);
