@@ -1734,6 +1734,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (mb_strlen($pw) < 6) {
             zurueck('?meine=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
         }
+        if (($_POST['agb'] ?? '') !== 'ja') {
+            zurueck('?meine=1&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+        }
         $neuerBenutzer = [
             'id' => bin2hex(random_bytes(4)),
             'vorname' => $vorname,
@@ -1743,6 +1746,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'admin' => false,
             'darf_tasting' => false, // = noch keine großen Tastings (unbegrenzt Personen)
             'token' => bin2hex(random_bytes(16)),
+            'agb_zeit' => time(), // wann die Nutzungsbedingungen bestätigt wurden
             'zeit' => time(),
         ];
         datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
@@ -3241,6 +3245,8 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'meine';
 } elseif (isset($_GET['ueber'])) {
     $ansicht = 'ueber';
+} elseif (isset($_GET['nutzung'])) {
+    $ansicht = 'nutzung';
 }
 
 // Bereich für die Tab-Leiste unten
@@ -3271,7 +3277,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex">
-  <title>Tasting – fruthzeug.de</title>
+  <title>TasteLog</title>
   <style>
     :root {
       --bg: #faf6ee;
@@ -3770,7 +3776,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php endif; ?>
       </div>
     <?php else: ?>
-      <a class="brand" href="./"><strong>Tasting</strong></a>
+      <a class="brand" href="./"><strong>TasteLog</strong></a>
     <?php endif; ?>
     <button type="button" id="info-knopf" aria-label="Anleitung: So wird verkostet" title="So wird verkostet">ℹ️</button>
     <input type="checkbox" id="nav-toggle" aria-hidden="true">
@@ -3783,7 +3789,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?liste=1">🔍 Entdecken</a>
       <a href="?tasting=1">👥 Tastings</a>
       <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
-      <a href="?ueber=1">💛 Über diese App</a>
+      <a href="?ueber=1">💛 Über TasteLog</a>
+      <a href="?nutzung=1">📜 Nutzungsbedingungen</a>
       <?php if ($istAdmin): ?>
         <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
         <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
@@ -3833,8 +3840,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1>Meine Verkostungen 📖</h1>
       <p class="untertitel">Dein persönliches Verkostungsbuch – alles, was du probiert und bewertet hast.</p>
     <?php elseif ($ansicht === 'ueber'): ?>
-      <h1>Über diese App 🥂</h1>
-      <p class="untertitel">Warum es sie gibt – und was sie für dich tut.</p>
+      <h1>Über TasteLog 🥂</h1>
+      <p class="untertitel">Warum es diese App gibt – und was sie für dich tut.</p>
+    <?php elseif ($ansicht === 'nutzung'): ?>
+      <h1>Nutzungsbedingungen 📜</h1>
+      <p class="untertitel">Für TasteLog · Stand: Juli 2026</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
@@ -4810,6 +4820,215 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <a class="knopf" href="./">🥂 Loslegen: Verkosten</a>
         <a class="knopf zweit" href="?meine=1">📖 Meine Verkostungen</a>
       </div>
+      <p style="text-align:center; margin-top:0.8rem;"><a href="?nutzung=1">📜 Nutzungsbedingungen</a></p>
+
+    <?php elseif ($ansicht === 'nutzung'): ?>
+      <!-- ==================== NUTZUNGSBEDINGUNGEN ==================== -->
+      <div class="card">
+        <p style="margin-bottom:0.7rem;">Willkommen bei TasteLog.</p>
+        <p>TasteLog ist eine privat betriebene Plattform zur sensorischen Beschreibung, Dokumentation und zum Austausch über Getränke aller Art. Mit der Registrierung oder Nutzung der Plattform erklärst du dich mit den nachfolgenden Nutzungsbedingungen einverstanden.</p>
+      </div>
+
+      <div class="card" style="border-left:5px solid var(--accent);">
+        <h2>Kurzfassung</h2>
+        <p style="margin-bottom:0.5rem;">Mit der Nutzung von TasteLog bestätigst du insbesondere, dass du:</p>
+        <ul style="margin:0 0 0 1.2rem; padding:0;">
+          <li>mindestens 18 Jahre alt bist,</li>
+          <li>diese Nutzungsbedingungen akzeptierst,</li>
+          <li>für deine Inhalte selbst verantwortlich bist,</li>
+          <li>wichtige Daten selbst sicherst,</li>
+          <li>keinen Anspruch auf dauerhafte Speicherung oder Verfügbarkeit der Plattform hast,</li>
+          <li>die Plattform ausschließlich rechtmäßig nutzt.</li>
+        </ul>
+      </div>
+
+      <details class="card">
+        <summary>1. Mindestalter</summary>
+        <p style="margin-bottom:0.7rem;">Die Nutzung von TasteLog ist ausschließlich Personen gestattet, die das 18. Lebensjahr vollendet haben.</p>
+        <p style="margin-bottom:0.7rem;">Mit der Registrierung bestätigst du, mindestens 18 Jahre alt zu sein.</p>
+        <p>Der Betreiber ist berechtigt, Nutzerkonten zu sperren oder zu löschen, wenn begründete Zweifel an der Einhaltung dieser Voraussetzung bestehen.</p>
+      </details>
+
+      <details class="card">
+        <summary>2. Zweck der Plattform</summary>
+        <p style="margin-bottom:0.7rem;">TasteLog dient der persönlichen Dokumentation und Beschreibung sensorischer Eindrücke sowie dem Austausch über Getränke.</p>
+        <p style="margin-bottom:0.5rem;">Die Plattform kann insbesondere für folgende Getränkekategorien genutzt werden:</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>Champagner</li>
+          <li>Wein</li>
+          <li>Bier</li>
+          <li>Spirituosen</li>
+          <li>Kaffee</li>
+          <li>Tee</li>
+          <li>Cocktails</li>
+          <li>alkoholfreie Getränke</li>
+          <li>weitere Genussmittel</li>
+        </ul>
+        <p>TasteLog ist keine wissenschaftliche Datenbank und kein objektives Bewertungssystem. Sämtliche Inhalte spiegeln persönliche Wahrnehmungen und subjektive Geschmackseindrücke wider.</p>
+      </details>
+
+      <details class="card">
+        <summary>3. Registrierung</summary>
+        <p style="margin-bottom:0.7rem;">Für bestimmte Funktionen ist die Erstellung eines Nutzerkontos erforderlich.</p>
+        <p style="margin-bottom:0.5rem;">Der Nutzer ist verpflichtet,</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>wahrheitsgemäße Angaben zu machen,</li>
+          <li>seine Zugangsdaten vertraulich zu behandeln und</li>
+          <li>sein Konto nicht an Dritte weiterzugeben.</li>
+        </ul>
+        <p>Für sämtliche Aktivitäten unter dem eigenen Benutzerkonto ist der Nutzer selbst verantwortlich.</p>
+      </details>
+
+      <details class="card">
+        <summary>4. Nutzerinhalte</summary>
+        <p style="margin-bottom:0.7rem;">Der Nutzer bleibt Eigentümer der von ihm eingestellten Inhalte.</p>
+        <p style="margin-bottom:0.5rem;">Hierzu gehören insbesondere</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>Bewertungen</li>
+          <li>Verkostungsnotizen</li>
+          <li>Bilder</li>
+          <li>Audioaufnahmen</li>
+          <li>Videos</li>
+          <li>Kommentare</li>
+          <li>Listen</li>
+          <li>Sammlungen</li>
+          <li>persönliche Beschreibungen</li>
+          <li>KI-generierte Inhalte</li>
+        </ul>
+        <p style="margin-bottom:0.7rem;">Mit dem Hochladen räumt der Nutzer dem Betreiber ein unentgeltliches, nicht ausschließliches, räumlich unbeschränktes Recht ein, diese Inhalte innerhalb von TasteLog zu speichern, zu verarbeiten, darzustellen und für den Betrieb der Plattform zu verwenden.</p>
+        <p>Eine Nutzung außerhalb der Plattform erfolgt ausschließlich im Rahmen der gesetzlichen Bestimmungen oder mit Zustimmung des Nutzers.</p>
+      </details>
+
+      <details class="card">
+        <summary>5. KI-Unterstützung</summary>
+        <p style="margin-bottom:0.5rem;">TasteLog kann künstliche Intelligenz einsetzen, um beispielsweise</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>Geschmacksbeschreibungen vorzuschlagen,</li>
+          <li>Verkostungsnotizen zusammenzufassen,</li>
+          <li>Aromaprofile zu erstellen,</li>
+          <li>Getränke zu vergleichen,</li>
+          <li>Trainingsaufgaben zu erzeugen,</li>
+          <li>Blindverkostungen auszuwerten,</li>
+          <li>Empfehlungen auszusprechen.</li>
+        </ul>
+        <p style="margin-bottom:0.7rem;">Diese Inhalte dienen ausschließlich der Unterstützung.</p>
+        <p>Es besteht kein Anspruch auf Richtigkeit, Vollständigkeit oder wissenschaftliche Genauigkeit.</p>
+      </details>
+
+      <details class="card">
+        <summary>6. Verhaltensregeln</summary>
+        <p style="margin-bottom:0.5rem;">Nicht zulässig sind insbesondere</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>rechtswidrige Inhalte,</li>
+          <li>beleidigende oder diskriminierende Inhalte,</li>
+          <li>pornografische Inhalte,</li>
+          <li>Spam,</li>
+          <li>Werbung ohne Zustimmung,</li>
+          <li>automatisierte Datensammlung,</li>
+          <li>Manipulation von Bewertungen,</li>
+          <li>missbräuchliche Nutzung der Plattform.</li>
+        </ul>
+        <p>Der Betreiber kann entsprechende Inhalte oder Nutzerkonten jederzeit entfernen oder sperren.</p>
+      </details>
+
+      <details class="card">
+        <summary>7. Datenspeicherung</summary>
+        <p style="margin-bottom:0.7rem;">TasteLog dient nicht als Datensicherung.</p>
+        <p style="margin-bottom:0.7rem;">Der Betreiber übernimmt keine Gewähr dafür, dass Daten dauerhaft gespeichert werden.</p>
+        <p style="margin-bottom:0.7rem;">Der Nutzer ist selbst dafür verantwortlich, wichtige Inhalte regelmäßig zu sichern.</p>
+        <p>Ein Anspruch auf Wiederherstellung gelöschter Daten besteht nicht.</p>
+      </details>
+
+      <details class="card">
+        <summary>8. Verfügbarkeit</summary>
+        <p style="margin-bottom:0.7rem;">TasteLog wird als private Plattform betrieben.</p>
+        <p style="margin-bottom:0.5rem;">Der Betreiber übernimmt keine Gewähr für</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>eine unterbrechungsfreie Erreichbarkeit,</li>
+          <li>bestimmte Funktionen,</li>
+          <li>eine Mindestverfügbarkeit,</li>
+          <li>Kompatibilität mit bestimmten Geräten oder Betriebssystemen.</li>
+        </ul>
+        <p>Wartungsarbeiten, technische Änderungen oder vorübergehende Ausfälle können jederzeit erfolgen.</p>
+      </details>
+
+      <details class="card">
+        <summary>9. Haftung</summary>
+        <p style="margin-bottom:0.7rem;">Die Nutzung von TasteLog erfolgt auf eigenes Risiko.</p>
+        <p style="margin-bottom:0.5rem;">Der Betreiber haftet insbesondere nicht für</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>Datenverlust,</li>
+          <li>Verlust von Bildern,</li>
+          <li>Verlust von Bewertungen,</li>
+          <li>Verlust von Notizen,</li>
+          <li>Verlust von Sammlungen,</li>
+          <li>Serverausfälle,</li>
+          <li>Softwarefehler,</li>
+          <li>Synchronisationsfehler,</li>
+          <li>Übertragungsfehler,</li>
+          <li>technische Störungen,</li>
+          <li>fehlerhafte KI-Auswertungen,</li>
+          <li>indirekte Schäden,</li>
+          <li>Folgeschäden,</li>
+          <li>entgangenen Gewinn,</li>
+          <li>entgangene Nutzungsmöglichkeiten.</li>
+        </ul>
+        <p style="margin-bottom:0.7rem;">Soweit gesetzlich zulässig, haftet der Betreiber ausschließlich bei Vorsatz oder grober Fahrlässigkeit.</p>
+        <p>Die gesetzlich zwingende Haftung, insbesondere für Schäden aus der Verletzung von Leben, Körper oder Gesundheit sowie nach dem Produkthaftungsgesetz, bleibt unberührt.</p>
+      </details>
+
+      <details class="card">
+        <summary>10. Änderungen der Plattform</summary>
+        <p style="margin-bottom:0.7rem;">TasteLog befindet sich in kontinuierlicher Weiterentwicklung.</p>
+        <p style="margin-bottom:0.5rem;">Der Betreiber ist berechtigt,</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>Funktionen zu ändern,</li>
+          <li>Funktionen hinzuzufügen,</li>
+          <li>Funktionen einzustellen,</li>
+          <li>Inhalte zu löschen,</li>
+          <li>Datenstrukturen anzupassen,</li>
+          <li>Benutzeroberflächen zu ändern,</li>
+          <li>Schnittstellen zu ändern.</li>
+        </ul>
+        <p>Ein Anspruch auf unveränderte Funktionen besteht nicht.</p>
+      </details>
+
+      <details class="card">
+        <summary>11. Einstellung des Dienstes</summary>
+        <p style="margin-bottom:0.7rem;">Der Betreiber kann TasteLog jederzeit ganz oder teilweise dauerhaft oder vorübergehend einstellen.</p>
+        <p>Ein Anspruch auf Fortführung der Plattform, Export von Daten oder Wiederherstellung gespeicherter Inhalte besteht nicht.</p>
+      </details>
+
+      <details class="card">
+        <summary>12. Kündigung und Sperrung</summary>
+        <p style="margin-bottom:0.7rem;">Der Nutzer kann sein Konto jederzeit löschen.</p>
+        <p>Der Betreiber kann Nutzerkonten jederzeit sperren oder löschen, insbesondere bei Verstößen gegen diese Nutzungsbedingungen oder wenn dies für den sicheren Betrieb der Plattform erforderlich ist.</p>
+      </details>
+
+      <details class="card">
+        <summary>13. Geistiges Eigentum</summary>
+        <p style="margin-bottom:0.7rem;">Die Software, das Design, Logos, Datenbanken, Grafiken und sonstigen Bestandteile von TasteLog sind urheberrechtlich geschützt.</p>
+        <p>Eine Vervielfältigung, Verbreitung oder Nutzung außerhalb der von TasteLog vorgesehenen Funktionen ist ohne vorherige Zustimmung des Betreibers nicht gestattet.</p>
+      </details>
+
+      <details class="card">
+        <summary>14. Änderungen der Nutzungsbedingungen</summary>
+        <p style="margin-bottom:0.7rem;">Der Betreiber kann diese Nutzungsbedingungen jederzeit mit Wirkung für die Zukunft ändern.</p>
+        <p style="margin-bottom:0.7rem;">Die jeweils aktuelle Fassung wird innerhalb der Plattform veröffentlicht.</p>
+        <p>Die weitere Nutzung der Plattform nach Veröffentlichung gilt als Zustimmung zu den geänderten Nutzungsbedingungen.</p>
+      </details>
+
+      <details class="card">
+        <summary>15. Schlussbestimmungen</summary>
+        <p style="margin-bottom:0.7rem;">Es gilt das Recht der Bundesrepublik Deutschland.</p>
+        <p style="margin-bottom:0.7rem;">Gerichtsstand ist – soweit gesetzlich zulässig – der Sitz des Betreibers.</p>
+        <p>Sollte eine Bestimmung dieser Nutzungsbedingungen ganz oder teilweise unwirksam oder undurchführbar sein oder werden, bleibt die Wirksamkeit der übrigen Bestimmungen hiervon unberührt. An die Stelle der unwirksamen Bestimmung tritt die gesetzliche Regelung.</p>
+      </details>
+
+      <div class="card">
+        <h2>✉️ Kontakt</h2>
+        <p>Fragen zu diesen Nutzungsbedingungen: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
+      </div>
 
     <?php elseif ($ansicht === 'meine'): ?>
       <!-- ==================== MEIN VERKOSTUNGSBUCH ==================== -->
@@ -5027,6 +5246,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <input type="text" name="name" placeholder="Nachname" maxlength="40" required>
               <input type="text" name="email" placeholder="E-Mail" maxlength="80" inputmode="email" autocomplete="email" required>
               <input type="password" name="passwort" placeholder="Passwort (mind. 6 Zeichen)" minlength="6" required>
+              <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
+                <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
+                <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
+              </label>
               <button class="knopf" type="submit">Registrieren &amp; loslegen</button>
             </form>
           </details>
