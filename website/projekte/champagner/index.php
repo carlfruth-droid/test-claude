@@ -4383,39 +4383,59 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <span class="k-icon">🍾</span>
         <span class="k-text"><b>Neues Getränk</b><small>Foto, Galerie oder von Hand – Art, Name &amp; Weingut werden erkannt, dann direkt bewerten</small></span>
       </a>
-      <a class="kachel" href="?vk=ohne">
-        <span class="k-icon">🏠</span>
-        <span class="k-text"><b>Ohne Weingut verkosten</b><small>Zu Hause, im Restaurant, unterwegs</small></span>
-      </a>
       <?php
-        // Nur die Weingüter des aktuellen Tastings – alles andere gehört ins Archiv
-        $tastingWgIds = weingutIdsImTasting($daten, $blickTastingId);
-        $wgSortiert = array_values(array_filter($daten['weingueter'], fn($w) => isset($tastingWgIds[$w['id']])));
-        usort($wgSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+        // Schlichte Liste aller bisherigen Verkostungen: neueste Bewertung oben,
+        // die ältesten unten. Wer neu bewertet, rückt mit dem Getränk nach oben.
+        $letzteBewertungZeit = [];
+        foreach ($daten['bewertungen'] as $lb) {
+            $lbCid = (string)$lb['champagner_id'];
+            $letzteBewertungZeit[$lbCid] = max($letzteBewertungZeit[$lbCid] ?? 0, (int)($lb['zeit'] ?? 0));
+        }
+        $vkKat = (string)($_GET['kat'] ?? 'alle');
+        if ($vkKat !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$vkKat])) {
+            $vkKat = 'alle';
+        }
+        $verkostete = [];
+        foreach ($daten['champagner'] as $c) {
+            if (!isset($letzteBewertungZeit[$c['id']])) {
+                continue; // noch nie verkostet
+            }
+            if ($vkKat !== 'alle' && (string)($c['typ'] ?? 'champagner') !== $vkKat) {
+                continue;
+            }
+            $verkostete[] = $c;
+        }
+        usort($verkostete, fn(array $x, array $y): int => $letzteBewertungZeit[$y['id']] <=> $letzteBewertungZeit[$x['id']]);
       ?>
-      <?php if ($wgSortiert !== []): ?>
-        <p class="untertitel" style="margin-top:1.4rem;">… oder Weingut deines Tastings wählen:</p>
-        <?php if (count($wgSortiert) > 3): ?>
-          <input type="search" class="filter-feld" placeholder="🔍 Weingut suchen …" data-ziel="#wg-wahl">
-        <?php endif; ?>
-        <div id="wg-wahl">
-        <?php foreach ($wgSortiert as $w): ?>
-          <?php $wFotos = mitTitelbild(weingutFotos($w['id']), (string)($w['titelbild'] ?? '')); ?>
-          <a class="kachel filterbar" href="?vk=<?= e(rawurlencode($w['id'])) ?>">
-            <?php if ($wFotos !== []): ?>
-              <img class="thumb" src="<?= e(thumbUrl($wFotos[0])) ?>" alt="" loading="lazy" style="width:52px;height:52px;border-radius:14px;">
-            <?php else: ?>
-              <span class="k-icon">🍇</span>
-            <?php endif; ?>
-            <span class="k-text"><b><?= e($w['name']) ?></b>
-              <small><?= count(array_filter($daten['champagner'], fn($c) => ($c['weingut_id'] ?? '') === $w['id'] && champagnerInTasting($c, $blickTastingId))) ?> Champagner erfasst</small>
-            </span>
-          </a>
+      <div class="sortier-leiste" style="margin:1.1rem 0 0.6rem;">
+        <a class="<?= $vkKat === 'alle' ? 'aktiv' : '' ?>" href="./?kat=alle">⭐ Alle</a>
+        <?php foreach ($KATEGORIEN_GETRAENKE as $kSchluessel => [$kIcon, $kName, $kAktiviert]): ?>
+          <a class="<?= $vkKat === $kSchluessel ? 'aktiv' : '' ?>" href="./?kat=<?= e($kSchluessel) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
         <?php endforeach; ?>
+      </div>
+      <?php if ($verkostete === []): ?>
+        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Verkostungen<?= $vkKat !== 'alle' ? ' in dieser Kategorie' : '' ?> – leg mit „Neues Getränk“ los! 🥂</p></div>
+      <?php else: ?>
+        <div class="card" style="padding-top:0.4rem; padding-bottom:0.4rem;">
+          <?php foreach ($verkostete as $c): ?>
+            <?php
+              $cFotos = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
+              $cBews = bewertungenFuer($daten, $c['id']);
+              $cWg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
+              $cSchnitt = gesamtSchnitt($cBews);
+            ?>
+            <a href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>" style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.45rem 0; text-decoration:none; color:var(--text);">
+              <?php if ($cFotos !== []): ?>
+                <img src="<?= e(thumbUrl($cFotos[0])) ?>" alt="" loading="lazy" style="width:44px; height:44px; border-radius:10px; object-fit:cover; flex-shrink:0;">
+              <?php else: ?>
+                <span style="width:44px; text-align:center; font-size:1.3rem; flex-shrink:0;"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
+              <?php endif; ?>
+              <span style="flex:1; min-width:0;"><b><?= e($c['name']) ?></b><br>
+                <span class="anzahl"><?= $cWg !== null ? e($cWg['name']) . ' · ' : '' ?><?= sterneAnzeige($cSchnitt) ?> (<?= count($cBews) ?>) · bewertet am <?= date('d.m.Y', $letzteBewertungZeit[$c['id']]) ?></span>
+              </span>
+            </a>
+          <?php endforeach; ?>
         </div>
-      <?php endif; ?>
-      <?php if ($istAdmin && count($daten['weingueter']) > count($wgSortiert)): ?>
-        <p class="anzahl" style="margin-top:0.6rem;"><a href="?weingueter=1&amp;alle=1">Alle Weingüter ansehen (Archiv)</a></p>
       <?php endif; ?>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
