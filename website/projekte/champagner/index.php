@@ -3343,14 +3343,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       border: none; border-radius: 999px; padding: 0.4rem 0.9rem;
       font-size: 0.9rem; font-weight: 600; cursor: pointer; font-family: inherit;
     }
-    #anleitung-box, #tasting-bild-box { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
-    #anleitung-box[hidden], #tasting-bild-box[hidden] { display: none !important; }
-    #anleitung-box .blatt, #tasting-bild-box .blatt {
+    #anleitung-box, #tasting-bild-box, #profil-box { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end; justify-content: center; }
+    #anleitung-box[hidden], #tasting-bild-box[hidden], #profil-box[hidden] { display: none !important; }
+    #anleitung-box .blatt, #tasting-bild-box .blatt, #profil-box .blatt {
       background: var(--bg); width: 100%; max-width: 46rem; max-height: 90dvh;
       overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 18px 18px 0 0; padding: 1rem 1.2rem 3rem;
     }
-    #anleitung-box .blatt-kopf, #tasting-bild-box .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
-    #anleitung-box .blatt-kopf button, #tasting-bild-box .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
+    #anleitung-box .blatt-kopf, #tasting-bild-box .blatt-kopf, #profil-box .blatt-kopf { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); padding: 0.3rem 0 0.6rem; }
+    #anleitung-box .blatt-kopf button, #tasting-bild-box .blatt-kopf button, #profil-box .blatt-kopf button { background: var(--card); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; font-size: 1.15rem; cursor: pointer; color: var(--text); }
     .anleitung h3 { margin: 1.1rem 0 0.2rem; font-size: 1.1rem; color: var(--accent); }
     .anleitung p { margin-bottom: 0.4rem; }
     .anleitung-chips { display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
@@ -4681,24 +4681,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 default   => usort($eintraege, fn($x, $y) => $y['zeit'] <=> $x['zeit']),
             };
           ?>
-          <div class="card" style="border-left:5px solid var(--accent);">
+          <div class="card" style="border-left:5px solid var(--accent); padding:0.6rem 0.9rem;">
             <?php $meinProfil = profilFoto($daten, (string)$_SESSION['person']); ?>
-            <div style="display:flex; align-items:center; gap:0.8rem;">
+            <button type="button" id="profil-knopf" style="display:flex; align-items:center; gap:0.7rem; width:100%; background:none; border:none; padding:0; cursor:pointer; text-align:left; font-family:inherit; font-size:1rem; color:var(--text);">
               <?php if ($meinProfil !== ''): ?>
-                <img class="avatar" src="<?= e(thumbUrl($meinProfil)) ?>" alt="" style="width:56px; height:56px; flex-shrink:0;">
+                <img class="avatar" src="<?= e(thumbUrl($meinProfil)) ?>" alt="" style="width:46px; height:46px; flex-shrink:0;">
               <?php else: ?>
-                <span style="width:56px; height:56px; border-radius:50%; border:2px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:1.5rem; flex-shrink:0;">👤</span>
+                <span style="width:46px; height:46px; border-radius:50%; border:2px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:1.3rem; flex-shrink:0;">👤</span>
               <?php endif; ?>
-              <p style="flex:1;"><b><?= e(trim((string)$_SESSION['person'])) ?></b> – du hast <b><?= count($eintraege) ?></b> Getränk(e) bewertet<?= $flaschenSumme > 0 ? ' und <b>' . $flaschenSumme . '</b> Flasche(n) mitgenommen' : '' ?>. 🥂</p>
-            </div>
-            <form method="post" enctype="multipart/form-data" style="margin-top:0.6rem;">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="profil_foto_upload">
-              <?= fotoUploadFelder('pf-up') ?>
-            </form>
+              <span style="flex:1; min-width:0;"><b><?= e(trim((string)$_SESSION['person'])) ?></b> – <b><?= count($eintraege) ?></b> Getränk(e)<?= $flaschenSumme > 0 ? ', <b>' . $flaschenSumme . '</b> Flasche(n)' : '' ?> 🥂<br><span class="anzahl">Antippen: Profilfoto &amp; „So verkostest du“</span></span>
+            </button>
           </div>
 
-          <?php if (count($eintraege) >= 2): ?>
             <?php
               // 🪞 Selbst-Profil: Wie verkoste ich eigentlich?
               $meineSumme = 0.0;
@@ -4742,8 +4736,22 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               $meinSchnitt = $meineAnz > 0 ? $meineSumme / $meineAnz : null;
               $deltaSchnitt = $deltaAnz > 0 ? $delta / $deltaAnz : null;
             ?>
-            <div class="card">
-              <h2>🪞 So verkostest du</h2>
+            <div id="profil-box" hidden>
+              <div class="blatt">
+                <div class="blatt-kopf">
+                  <b>👤 <?= e(trim((string)$_SESSION['person'])) ?></b>
+                  <button type="button" aria-label="Schließen">&#10005;</button>
+                </div>
+                <?php if ($meinProfil !== ''): ?>
+                  <img class="avatar" src="<?= e(thumbUrl($meinProfil)) ?>" alt="" style="width:96px; height:96px; display:block; margin:0 auto 0.7rem;">
+                <?php endif; ?>
+                <form method="post" enctype="multipart/form-data" style="margin-bottom:1rem;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="profil_foto_upload">
+                  <?= fotoUploadFelder('pf-up') ?>
+                </form>
+                <?php if (count($eintraege) >= 2): ?>
+                <h2>🪞 So verkostest du</h2>
               <?php if ($meinSchnitt !== null): ?>
                 <p>Deine Durchschnittswertung: <b><?= number_format($meinSchnitt, 1, ',', '') ?> ★</b>
                 <?php if ($deltaSchnitt !== null && abs($deltaSchnitt) >= 0.05): ?>
@@ -4764,8 +4772,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php if ($top !== null): ?>
                 <p>Dein Favorit: <b><?= e($top['c']['name']) ?></b> mit <?= number_format((float)$top['sterne'], 1, ',', '') ?> ★</p>
               <?php endif; ?>
+              <?php endif; ?>
+              </div>
             </div>
-          <?php endif; ?>
           <?php if ($eintraege !== []): ?>
             <div class="sortier-leiste">Sortieren:
               <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=datum">Datum</a>
@@ -4804,7 +4813,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                       <?php endif; ?>
                     </span>
                   </a>
-                  <a class="knopf klein" href="?bewerten=<?= e(rawurlencode($c['id'])) ?>&amp;person=<?= e(rawurlencode((string)$_SESSION['person'])) ?>">Ändern</a>
                 </div>
               <?php endforeach; ?>
             </div>
@@ -6283,6 +6291,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       h.addEventListener('click', function () { h.parentNode.classList.toggle('zu'); });
     });
 
+    // Profil: Tipp auf Name/Avatar öffnet Foto & „So verkostest du“
+    (function () {
+      var box = document.getElementById('profil-box');
+      var knopf = document.getElementById('profil-knopf');
+      if (!box || !knopf) { return; }
+      function zu() { box.hidden = true; document.body.style.overflow = ''; }
+      knopf.addEventListener('click', function () { box.hidden = false; document.body.style.overflow = 'hidden'; });
+      box.querySelector('.blatt-kopf button').addEventListener('click', zu);
+      box.addEventListener('click', function (e) { if (e.target === box) { zu(); } });
+    })();
+
     // Tasting-Bild: Tipp auf Titel oder Avatar öffnet das Foto-Overlay
     (function () {
       var box = document.getElementById('tasting-bild-box');
@@ -6405,7 +6424,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         document.querySelectorAll('.filter-feld').forEach(function (f) { if (f.value.trim() !== '') { tippt = true; } });
         document.querySelectorAll('input[type="file"]').forEach(function (f) { if (f.files && f.files.length > 0) { tippt = true; } });
         if (tippt) { return; } // Suchfilter oder gewähltes Foto → nicht wegreloaden
-        var offenes = ['overlay', 'grossansicht', 'anleitung-box', 'tasting-bild-box'].some(function (id) {
+        var offenes = ['overlay', 'grossansicht', 'anleitung-box', 'tasting-bild-box', 'profil-box'].some(function (id) {
           var el = document.getElementById(id);
           return el && !el.hidden;
         });
