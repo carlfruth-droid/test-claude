@@ -728,7 +728,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         if ($gefunden === null || !password_verify($pw, (string)($gefunden['pw_hash'] ?? ''))) {
-            zurueck('?meine=1&fehler=' . rawurlencode('E-Mail oder Passwort stimmt nicht.'));
+            zurueck('?konto=1&fehler=' . rawurlencode('E-Mail oder Passwort stimmt nicht.'));
         }
         setcookie('benutzer', (string)$gefunden['token'], [
             'expires' => time() + 60 * 60 * 24 * 3650, // läuft nicht ab
@@ -741,7 +741,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'benutzer_logout') {
         setcookie('benutzer', '', ['expires' => time() - 3600, 'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax']);
-        zurueck('?meine=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
+        zurueck('?konto=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
     }
 
     if ($aktion === 'einladung_bestaetigen') {
@@ -1803,13 +1803,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = mb_strtolower(mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80));
         $pw = (string)($_POST['passwort'] ?? '');
         if ($vorname === '' || $nachname === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            zurueck('?meine=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
+            zurueck('?konto=1&fehler=' . rawurlencode('Bitte die Stammdaten vollständig ausfüllen: Vorname, Nachname und eine gültige E-Mail.'));
         }
         if (mb_strlen($pw) < 6) {
-            zurueck('?meine=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
+            zurueck('?konto=1&fehler=' . rawurlencode('Das Passwort braucht mindestens 6 Zeichen.'));
         }
         if (($_POST['agb'] ?? '') !== 'ja') {
-            zurueck('?meine=1&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+            zurueck('?konto=1&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
         }
         $neuerBenutzer = [
             'id' => bin2hex(random_bytes(4)),
@@ -1826,7 +1826,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         datenAendern(function (array $d) use ($neuerBenutzer, $email): array {
             foreach ($d['benutzer'] as $b) {
                 if (mb_strtolower((string)($b['email'] ?? '')) === $email) {
-                    zurueck('?meine=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
+                    zurueck('?konto=1&fehler=' . rawurlencode('Diese E-Mail hat schon ein Konto – einfach oben anmelden.'));
                 }
             }
             $d['benutzer'][] = $neuerBenutzer;
@@ -3373,6 +3373,8 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'verwaltung';
 } elseif (isset($_GET['meine'])) {
     $ansicht = 'meine';
+} elseif (isset($_GET['konto'])) {
+    $ansicht = 'konto';
 } elseif (isset($_GET['ueber'])) {
     $ansicht = 'ueber';
 } elseif (isset($_GET['nutzung'])) {
@@ -3942,6 +3944,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?meine=1">📖 Meine Liste</a>
       <a href="?liste=1">🔍 Entdecken</a>
       <a href="?tasting=1">👥 Tastings</a>
+      <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
         <summary>ℹ️ Hilfe &amp; Info</summary>
         <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
@@ -4005,6 +4008,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'meine'): ?>
       <h1>Meine Verkostungen 📖</h1>
       <p class="untertitel">Dein persönliches Verkostungsbuch – alles, was du probiert und bewertet hast.</p>
+    <?php elseif ($ansicht === 'konto'): ?>
+      <h1>Benutzerkonto 👤</h1>
+      <p class="untertitel">Anmelden, registrieren oder abmelden.</p>
     <?php elseif ($ansicht === 'ueber'): ?>
       <h1>Über TasteLog 🥂</h1>
       <p class="untertitel">Warum es diese App gibt – und was sie für dich tut.</p>
@@ -4754,7 +4760,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <!-- ==================== VERWALTUNG (nur Admin) ==================== -->
       <?php if ($benutzerAktiv === null || empty($benutzerAktiv['admin'])): ?>
         <div class="card">
-          <p style="margin-bottom:0.8rem;">Die Verwaltung ist nur für Administratoren. Melde dich unter „📖 Meine Liste“ mit deinem Benutzerkonto an.</p>
+          <p style="margin-bottom:0.8rem;">Die Verwaltung ist nur für Administratoren. Melde dich im Menü unter „👤 Benutzerkonto“ an.</p>
           <a class="knopf" href="?meine=1">Zu Meine Liste</a>
         </div>
       <?php else: ?>
@@ -5455,9 +5461,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
         <?php endif; ?>
       <?php endif; ?>
+    <?php elseif ($ansicht === 'konto'): ?>
+      <!-- ==================== BENUTZERKONTO ==================== -->
         <?php if ($benutzerAktiv === null): ?>
-          <div class="card zu" style="margin-top:0.6rem;">
-            <h2>👤 Benutzerkonto</h2>
+          <div class="card">
+            <h2>👤 Anmelden</h2>
             <p class="anzahl" style="margin-bottom:0.7rem;">Kostenfrei, Anmeldung läuft nie ab. Registrierte legen sofort Tastings an (du + 1 Person); größere Runden schaltet der Administrator frei.</p>
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -5467,7 +5475,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <button class="knopf zweit" type="submit">Anmelden</button>
             </form>
           </div>
-          <details class="card">
+          <details class="card" open>
             <summary>✍️ Neu hier? Jetzt registrieren (kostenfrei)</summary>
             <p class="anzahl" style="margin:0.5rem 0 0.7rem;">Stammdaten vollständig ausfüllen – dein Konto ist sofort nutzbar, ganz ohne Wartezeit.</p>
             <form method="post">
@@ -5485,8 +5493,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </form>
           </details>
         <?php else: ?>
-          <div class="card zu" style="margin-top:0.6rem;">
-            <h2>👤 Benutzerkonto</h2>
+          <div class="card">
+            <h2>👤 Dein Konto</h2>
             <p>Angemeldet als <b><?= e(trim((string)($benutzerAktiv['vorname'] ?? '') . ' ' . (string)($benutzerAktiv['name'] ?? ''))) ?></b>
               <span class="anzahl">(<?= e((string)($benutzerAktiv['email'] ?? '')) ?>)</span>
               <?php if (!empty($benutzerAktiv['admin'])): ?><span class="bewerter-chip">🛡️ Administrator</span><?php endif; ?>
@@ -5498,13 +5506,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <button class="loeschen" type="submit">Vom Konto abmelden</button>
             </form>
           </div>
-        <?php endif; ?>
-
-        <?php if ($benutzerAktiv !== null && !empty($benutzerAktiv['admin'])): ?>
-          <a class="kachel" href="?verwaltung=1">
-            <span class="k-icon">🛠️</span>
-            <span class="k-text"><b>Verwaltung</b><small>Benutzer, alle Getränke und Weingüter – mit Filtern</small></span>
-          </a>
         <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
