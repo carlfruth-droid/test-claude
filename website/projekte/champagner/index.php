@@ -487,11 +487,17 @@ if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['benutzer'])) 
     }
 }
 
-// Einladungslink angeklickt? Cookie setzen und automatisch anmelden.
+// Einladungslink angeklickt? Beim ersten Mal einmalig die Nutzungsbedingungen
+// bestätigen lassen, danach Cookie setzen und automatisch anmelden.
+$einladungFrage = null;
 if (isset($_GET['einladung'])) {
     $treffer = teilnehmerZuToken(datenLaden(), (string)$_GET['einladung']);
-    if ($treffer !== null) {
-        [$einladungsTasting, $teilnehmer] = $treffer;
+    if ($treffer === null) {
+        header('Location: ./?fehler=' . rawurlencode('Dieser Einladungslink ist nicht (mehr) gültig.'));
+        exit;
+    }
+    [$einladungsTasting, $teilnehmer] = $treffer;
+    if (!empty($teilnehmer['agb_zeit'])) {
         setcookie('einladung', $teilnehmer['token'], [
             'expires' => time() + 60 * 60 * 24 * 3650, // läuft praktisch nie ab
             'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
@@ -502,8 +508,12 @@ if (isset($_GET['einladung'])) {
         header('Location: ./?ok=' . rawurlencode('Willkommen, ' . $teilnehmer['name'] . '! Du bist angemeldet für „' . $einladungsTasting['titel'] . '“. 🥂'));
         exit;
     }
-    header('Location: ./?fehler=' . rawurlencode('Dieser Einladungslink ist nicht (mehr) gültig.'));
-    exit;
+    // Noch keine Bestätigung: Frage-Seite anzeigen (kein Redirect)
+    $einladungFrage = [
+        'tasting' => $einladungsTasting,
+        'teilnehmer' => $teilnehmer,
+        'token' => (string)$_GET['einladung'],
+    ];
 }
 
 // Wiederkehrende Gäste am Einladungs-Cookie erkennen
@@ -688,6 +698,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $weiter = '';
         }
         $anhang = $weiter === '' ? '?' : $weiter . '&';
+        if (($_POST['agb'] ?? '') !== 'ja') {
+            zurueck($anhang . 'fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+        }
         if (hash_equals(PASSWORT, (string)($_POST['passwort'] ?? ''))) {
             $_SESSION['tasting_ok'] = true;
             zurueck($anhang . 'ok=' . rawurlencode('Willkommen zur Verkostung!'));
@@ -727,6 +740,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?meine=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
     }
 
+    if ($aktion === 'einladung_bestaetigen') {
+        // Erster Klick auf einen Einladungslink: Nutzungsbedingungen bestätigen
+        $token = (string)($_POST['token'] ?? '');
+        $treffer = teilnehmerZuToken(datenLaden(), $token);
+        if ($treffer === null) {
+            zurueck('?fehler=' . rawurlencode('Dieser Einladungslink ist nicht (mehr) gültig.'));
+        }
+        if (($_POST['agb'] ?? '') !== 'ja') {
+            zurueck('?einladung=' . rawurlencode($token) . '&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+        }
+        [$bestTasting, $bestTeilnehmer] = $treffer;
+        $bestTid = $bestTasting['id'];
+        $bestToken = (string)$bestTeilnehmer['token'];
+        datenAendern(function (array $d) use ($bestTid, $bestToken): array {
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] !== $bestTid) {
+                    continue;
+                }
+                foreach ($t['teilnehmer'] as &$p) {
+                    if (hash_equals((string)$p['token'], $bestToken)) {
+                        $p['agb_zeit'] = time(); // wann die Nutzungsbedingungen bestätigt wurden
+                    }
+                }
+            }
+            return $d;
+        });
+        setcookie('einladung', $bestToken, [
+            'expires' => time() + 60 * 60 * 24 * 3650,
+            'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+        tastingWaehlen($bestTid);
+        $_SESSION['tasting_ok'] = true;
+        $_SESSION['person'] = $bestTeilnehmer['name'];
+        zurueck('?ok=' . rawurlencode('Willkommen, ' . $bestTeilnehmer['name'] . '! Du bist angemeldet für „' . $bestTasting['titel'] . '“. 🥂'));
+    }
+
     if ($aktion === 'beitreten') {
         // Beitritt per QR-Code/Gruppenlink – braucht keine Anmeldung
         $beitritt = (string)($_POST['beitritt'] ?? '');
@@ -748,6 +797,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($name === '') {
             zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Bitte deinen Namen eintragen.'));
         }
+        if (($_POST['agb'] ?? '') !== 'ja') {
+            zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
+        }
         // Gleicher Name schon dabei? Dann dessen Zugang übernehmen statt doppelt anlegen.
         $token = '';
         foreach (($ziel['teilnehmer'] ?? []) as $p) {
@@ -756,16 +808,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
         }
+        $tid = $ziel['id'];
         if ($token === '') {
             if (teilnehmerLimitErreicht($ziel)) {
                 zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Dieses Tasting ist voll (2 Teilnehmer). Für große Runden kann der Administrator den Gastgeber freischalten.'));
             }
             $token = bin2hex(random_bytes(8));
-            $tid = $ziel['id'];
             datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
                 foreach ($d['tastings'] as &$t) {
                     if ($t['id'] === $tid) {
-                        $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email];
+                        $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'agb_zeit' => time()];
+                    }
+                }
+                return $d;
+            });
+        } else {
+            // Bestehender Zugang: Bestätigung der Nutzungsbedingungen festhalten
+            $tokenAlt = $token;
+            datenAendern(function (array $d) use ($tid, $tokenAlt): array {
+                foreach ($d['tastings'] as &$t) {
+                    if ($t['id'] !== $tid) {
+                        continue;
+                    }
+                    foreach ($t['teilnehmer'] as &$p) {
+                        if (hash_equals((string)$p['token'], (string)$tokenAlt) && empty($p['agb_zeit'])) {
+                            $p['agb_zeit'] = time();
+                        }
                     }
                 }
                 return $d;
@@ -3112,6 +3180,10 @@ function loginFormular(string $weiter = ''): string
         <input type="hidden" name="csrf" value="' . $csrf . '">
         <input type="hidden" name="aktion" value="login">' . $weiterFeld . '
         <input type="password" name="passwort" placeholder="Passwort" autocomplete="current-password" required>
+        <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
+          <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
+          <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
+        </label>
         <button class="knopf" type="submit">Anmelden</button>
       </form>';
 }
@@ -3247,6 +3319,11 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'ueber';
 } elseif (isset($_GET['nutzung'])) {
     $ansicht = 'nutzung';
+} elseif (isset($_GET['impressum'])) {
+    $ansicht = 'impressum';
+}
+if ($einladungFrage !== null) {
+    $ansicht = 'einladung_frage'; // Einladung zuerst bestätigen lassen
 }
 
 // Bereich für die Tab-Leiste unten
@@ -3791,6 +3868,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="#" class="anleitung-oeffnen">ℹ️ So wird verkostet</a>
       <a href="?ueber=1">💛 Über TasteLog</a>
       <a href="?nutzung=1">📜 Nutzungsbedingungen</a>
+      <a href="?impressum=1">⚖️ Impressum &amp; Datenschutz</a>
       <?php if ($istAdmin): ?>
         <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
         <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
@@ -3845,6 +3923,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'nutzung'): ?>
       <h1>Nutzungsbedingungen 📜</h1>
       <p class="untertitel">Für TasteLog · Stand: Juli 2026</p>
+    <?php elseif ($ansicht === 'impressum'): ?>
+      <h1>Impressum &amp; Datenschutz ⚖️</h1>
+      <p class="untertitel">Angaben gemäß § 5 DDG · Datenschutzerklärung</p>
+    <?php elseif ($ansicht === 'einladung_frage'): ?>
+      <h1>Willkommen bei TasteLog 🥂</h1>
+      <p class="untertitel">Du wurdest zu einem Tasting eingeladen.</p>
     <?php elseif ($ansicht === 'liste'): ?>
       <h1>Entdecken 🔍</h1>
       <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
@@ -4502,6 +4586,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="beitritt" value="<?= e($beitrittToken) ?>">
             <input type="text" name="name" placeholder="Dein Name" maxlength="40" required>
             <input type="text" name="email" placeholder="E-Mail (optional, kannst du weglassen)" maxlength="80" inputmode="email">
+            <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
+              <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
+              <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
+            </label>
             <button class="knopf" type="submit">🥂 Dabei sein</button>
           </form>
         </div>
@@ -5029,6 +5117,61 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <h2>✉️ Kontakt</h2>
         <p>Fragen zu diesen Nutzungsbedingungen: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
       </div>
+      <p style="text-align:center; margin-top:0.8rem;"><a href="?impressum=1">⚖️ Impressum &amp; Datenschutz</a></p>
+
+    <?php elseif ($ansicht === 'einladung_frage'): ?>
+      <!-- ==================== EINLADUNG: EINMALIGE BESTÄTIGUNG ==================== -->
+      <div class="card">
+        <h2>👥 <?= e($einladungFrage['tasting']['titel']) ?></h2>
+        <p style="margin-bottom:0.8rem;">Hallo <b><?= e($einladungFrage['teilnehmer']['name']) ?></b>! Bevor es losgeht, brauchen wir einmalig deine Bestätigung – danach bist du auf diesem Gerät dauerhaft angemeldet.</p>
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="einladung_bestaetigen">
+          <input type="hidden" name="token" value="<?= e($einladungFrage['token']) ?>">
+          <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
+            <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
+            <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
+          </label>
+          <button class="knopf" type="submit">🥂 Bestätigen &amp; mitmachen</button>
+        </form>
+      </div>
+
+    <?php elseif ($ansicht === 'impressum'): ?>
+      <!-- ==================== IMPRESSUM & DATENSCHUTZ ==================== -->
+      <div class="card">
+        <h2>Impressum</h2>
+        <p class="anzahl" style="margin-bottom:0.7rem;">Angaben gemäß § 5 DDG</p>
+        <p style="margin-bottom:0.5rem;"><b>Betreiber</b></p>
+        <p style="margin-bottom:0.7rem;">Carl Fruth<br>Ändresenweg 11<br>92331 Lupburg<br>Deutschland</p>
+        <p style="margin-bottom:0.7rem;">E-Mail: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
+        <p style="margin-bottom:0.5rem;"><b>Verantwortlich für den Inhalt nach § 18 Abs. 2 MStV</b></p>
+        <p>Carl Fruth<br>Ändresenweg 11<br>92331 Lupburg<br>Deutschland</p>
+      </div>
+
+      <div class="card">
+        <h2>Datenschutzerklärung</h2>
+        <p style="margin-bottom:0.7rem;">Der Schutz deiner personenbezogenen Daten ist uns wichtig.</p>
+        <p style="margin-bottom:0.5rem;"><b>Verantwortlicher</b></p>
+        <p style="margin-bottom:0.7rem;">Carl Fruth<br>Ändresenweg 11<br>92331 Lupburg<br>Deutschland</p>
+        <p style="margin-bottom:0.7rem;">E-Mail: <a href="mailto:tasting@fruthzeug.de">tasting@fruthzeug.de</a></p>
+        <p style="margin-bottom:0.5rem;"><b>Verarbeitung personenbezogener Daten</b></p>
+        <p style="margin-bottom:0.5rem;">TasteLog verarbeitet ausschließlich personenbezogene Daten, die für den Betrieb der Plattform erforderlich sind.</p>
+        <p style="margin-bottom:0.5rem;">Hierzu gehören insbesondere:</p>
+        <ul style="margin:0 0 0.7rem 1.2rem; padding:0;">
+          <li>Benutzerkonto</li>
+          <li>E-Mail-Adresse</li>
+          <li>freiwillig eingegebene Inhalte</li>
+          <li>hochgeladene Bilder</li>
+          <li>technisch notwendige Verbindungsdaten</li>
+        </ul>
+        <p style="margin-bottom:0.7rem;">Die Verarbeitung erfolgt ausschließlich zum Betrieb und zur Bereitstellung der Plattform.</p>
+        <p style="margin-bottom:0.5rem;"><b>Cookies</b></p>
+        <p style="margin-bottom:0.7rem;">TasteLog verwendet ausschließlich technisch notwendige Cookies. Es werden keine Werbe-, Analyse- oder Tracking-Cookies eingesetzt.</p>
+        <p style="margin-bottom:0.5rem;"><b>Löschung von Daten</b></p>
+        <p style="margin-bottom:0.7rem;">Der Nutzer kann sein Benutzerkonto und seine Inhalte jederzeit selbst löschen.</p>
+        <p>Soweit keine gesetzlichen oder zwingenden technischen Gründe entgegenstehen, werden personenbezogene Daten anschließend gelöscht.</p>
+      </div>
+      <p style="text-align:center; margin-top:0.8rem;"><a href="?nutzung=1">📜 Nutzungsbedingungen</a></p>
 
     <?php elseif ($ansicht === 'meine'): ?>
       <!-- ==================== MEIN VERKOSTUNGSBUCH ==================== -->
