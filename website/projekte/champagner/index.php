@@ -519,6 +519,73 @@ if (($_SESSION['tasting_ok'] ?? false) !== true && isset($_COOKIE['einladung']))
 
 $eingeloggt = ($_SESSION['tasting_ok'] ?? false) === true;
 
+// Bildinfo für die Großansicht: Aufnahmedatum, Kamera, Ort, Maße, Zuordnung.
+// Wird vom ℹ️-Knopf der Großansicht per fetch geholt und als JSON geliefert.
+if (isset($_GET['bildinfo'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!$eingeloggt) {
+        echo json_encode(['fehler' => 'Bitte zuerst anmelden.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $datei = basename((string)$_GET['bildinfo']);
+    $pfad = BILDER_DIR . '/' . $datei;
+    if (!preg_match('/\.(jpe?g|png|gif|webp)$/i', $datei) || !is_file($pfad)) {
+        echo json_encode(['fehler' => 'Bild nicht gefunden.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $d = datenLaden();
+    $zeilen = [];
+    // Zuordnung: das Dateipräfix verrät, wozu das Bild gehört
+    if (preg_match('/^([a-f0-9]{8})-/', $datei, $m) && ($c = champagnerHolen($d, $m[1])) !== null) {
+        $zeilen[] = ['🥂 Gehört zu', (string)$c['name']];
+    } elseif (preg_match('/^wg-([a-f0-9]{8})-/', $datei, $m) && ($w = weingutHolen($d, $m[1])) !== null) {
+        $zeilen[] = ['🍇 Gehört zu', 'Weingut ' . $w['name']];
+    } elseif (preg_match('/^ts-([a-f0-9]{8})-/', $datei, $m)) {
+        foreach ($d['tastings'] as $t) {
+            if ($t['id'] === $m[1]) { $zeilen[] = ['👥 Gehört zu', 'Tasting „' . $t['titel'] . '“']; break; }
+        }
+    } elseif (str_starts_with($datei, 'div-')) {
+        $zeilen[] = ['📸 Gehört zu', 'Fotoalbum (Gruppenfoto)'];
+    } elseif (str_starts_with($datei, 'pf-')) {
+        $zeilen[] = ['👤 Gehört zu', 'Profilbild'];
+    }
+    $exif = (function_exists('exif_read_data') && preg_match('/\.jpe?g$/i', $datei))
+        ? (@exif_read_data($pfad) ?: [])
+        : [];
+    $aufnahme = '';
+    foreach (['DateTimeOriginal', 'DateTimeDigitized', 'DateTime'] as $k) {
+        $roh = (string)($exif[$k] ?? '');
+        if ($roh !== '' && ($ts = strtotime($roh)) !== false) {
+            $aufnahme = date('d.m.Y, H:i', $ts) . ' Uhr';
+            break;
+        }
+    }
+    if ($aufnahme === '') {
+        $aufnahme = date('d.m.Y, H:i', (int)filemtime($pfad)) . ' Uhr (Zeitpunkt des Hochladens)';
+    }
+    $zeilen[] = ['📅 Aufnahme', $aufnahme];
+    $kamera = trim((string)($exif['Make'] ?? '') . ' ' . (string)($exif['Model'] ?? ''));
+    if ($kamera !== '') {
+        $zeilen[] = ['📷 Kamera', $kamera];
+    }
+    $karte = '';
+    $gps = gpsAusFoto($pfad);
+    if ($gps !== null) {
+        $ort = ortKurz($gps[0], $gps[1]);
+        $zeilen[] = ['📍 Ort', $ort !== '' ? $ort : sprintf('%.5f, %.5f', $gps[0], $gps[1])];
+        $karte = 'https://www.google.com/maps/search/?api=1&query=' . $gps[0] . ',' . $gps[1];
+    }
+    $groesse = @getimagesize($pfad);
+    if ($groesse !== false) {
+        $zeilen[] = ['🖼️ Maße', $groesse[0] . ' × ' . $groesse[1] . ' Pixel'];
+    }
+    $bytes = (int)filesize($pfad);
+    $zeilen[] = ['💾 Dateigröße', $bytes >= 1048576 ? round($bytes / 1048576, 1) . ' MB' : max(1, (int)round($bytes / 1024)) . ' kB'];
+    $zeilen[] = ['🗂️ Datei', $datei];
+    echo json_encode(['zeilen' => $zeilen, 'karte' => $karte], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /**
  * Das Tasting des aktuellen Nutzers: zuerst das ausdrücklich gewählte
  * (zuletzt geöffnet/beigetreten/angelegt), sonst das der Einladung,
@@ -1223,7 +1290,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?tasting=1&fehler=' . rawurlencode('Dieses Tasting existiert nicht (mehr).'));
         }
         [$hochgeladen, $abgelehnt] = fotoUploadVerarbeiten($BILD_TYPEN, 'ts-' . $tid);
-        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode(uploadText($hochgeladen, $abgelehnt)));
+        $doppelt = 0;
+        if ($hochgeladen > 0) {
+            // Doppelte sofort wieder aussortieren – identische Fotos landen
+            // nicht zweimal im Album
+            $doppelt = doppelteAussortieren(array_slice(tastingFotos($tid), 0, $hochgeladen));
+        }
+        $text = uploadText($hochgeladen - $doppelt, $abgelehnt)
+            . ($doppelt > 0 ? ' ' . $doppelt . ' doppelte(s) Foto(s) automatisch aussortiert.' : '');
+        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($text));
     }
 
     if ($aktion === 'tasting_foto_loeschen') {
@@ -2364,6 +2439,49 @@ function divFotos(): array
     return array_map('basename', $treffer);
 }
 
+/**
+ * Gerade hochgeladene Dateien wieder löschen, wenn ihr Inhalt (MD5) schon
+ * irgendwo im Bilderordner liegt – doppelte Fotos entstehen so gar nicht erst.
+ * Gibt die Zahl der aussortierten Duplikate zurück.
+ */
+function doppelteAussortieren(array $neueDateien): int
+{
+    if ($neueDateien === []) {
+        return 0;
+    }
+    $neuSet = array_flip($neueDateien);
+    $bekannt = [];
+    foreach (glob(BILDER_DIR . '/*.{jpg,jpeg,png,gif,webp,JPG,JPEG,PNG,GIF,WEBP}', GLOB_BRACE) ?: [] as $pfad) {
+        $basis = basename($pfad);
+        if (isset($neuSet[$basis]) || str_starts_with($basis, 'neu-') || str_starts_with($basis, 'wneu-')) {
+            continue;
+        }
+        $h = md5_file($pfad);
+        if ($h !== false) {
+            $bekannt[$h] = true;
+        }
+    }
+    $weg = 0;
+    foreach ($neueDateien as $datei) {
+        $pfad = BILDER_DIR . '/' . $datei;
+        if (!is_file($pfad)) {
+            continue;
+        }
+        $h = md5_file($pfad);
+        if ($h === false) {
+            continue;
+        }
+        if (isset($bekannt[$h])) {
+            unlink($pfad);
+            thumbLoeschen($datei);
+            $weg++;
+        } else {
+            $bekannt[$h] = true;
+        }
+    }
+    return $weg;
+}
+
 function thumbVerzeichnis(): string
 {
     return BILDER_DIR . '/thumbs';
@@ -3392,11 +3510,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     /* 📖 Der Trip: Zeitstrahl des Tastings */
     .trip { position: relative; padding-left: 1.3rem; }
     .trip::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: var(--border); border-radius: 1px; }
-    .trip-tag-zeile { display: flex; align-items: center; gap: 0.5rem; margin: 0.7rem 0 0.35rem; }
-    .trip-tag-knopf { background: none; border: none; padding: 0; font-family: inherit; font-size: 1rem; font-weight: 600; color: var(--accent); cursor: pointer; }
-    .trip-tag-knopf::before { content: '▾ '; font-size: 0.85em; }
-    .trip-tag-knopf.zu::before { content: '▸ '; }
-    .trip-karte { text-decoration: none; font-size: 1.15rem; }
+    .trip-tag-zeile { position: relative; margin: 0.7rem 0 0.35rem; }
+    details.trip-tag summary { list-style: none; cursor: pointer; padding: 0.15rem 1.8rem 0.15rem 0; font-size: 1rem; font-weight: 600; color: var(--accent); }
+    details.trip-tag summary::-webkit-details-marker { display: none; }
+    details.trip-tag summary::before { content: '▸ '; font-size: 0.85em; }
+    details.trip-tag[open] summary::before { content: '▾ '; }
+    .trip-karte { position: absolute; right: 0; top: 0.1rem; text-decoration: none; font-size: 1.15rem; }
     .trip-eintrag { position: relative; display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.55rem; text-decoration: none; color: var(--text); }
     .trip-eintrag::before { content: ''; position: absolute; left: -1.02rem; top: 50%; transform: translateY(-50%); width: 9px; height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); }
     .trip-eintrag img { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
@@ -3561,6 +3680,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       width: 44px; height: 44px; font-size: 1.5rem; line-height: 1;
       cursor: pointer;
     }
+    #grossansicht .bild-info-knopf {
+      position: absolute; bottom: max(1rem, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+      background: rgba(255, 255, 255, 0.18); color: #fff;
+      border: none; border-radius: 999px;
+      padding: 0.55rem 1.1rem; font-size: 0.95rem; font-family: inherit;
+      cursor: pointer;
+    }
+    #grossansicht .bild-info-blatt {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 3.2rem);
+      width: min(92vw, 26rem); max-height: 55vh; overflow-y: auto;
+      background: var(--card); color: var(--text);
+      border-radius: 14px; padding: 0.9rem 1rem;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+      text-align: left; font-size: 0.92rem;
+    }
+    #grossansicht .bild-info-blatt[hidden] { display: none; }
+    #grossansicht .bild-info-blatt .bi-zeile { padding: 0.25rem 0; border-bottom: 1px solid var(--border); }
+    #grossansicht .bild-info-blatt .bi-zeile:last-child { border-bottom: none; }
+    #grossansicht .bild-info-blatt b { color: var(--accent); font-weight: 600; margin-right: 0.3rem; }
 
     .notiz { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
     .notiz:last-of-type { border-bottom: none; }
@@ -4041,16 +4180,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <div class="card">
             <h2>📖 Der Trip – euer Verlauf</h2>
             <div class="trip">
-              <?php $tagNr = 0; ?>
-              <?php foreach ($tripTage as $tag => $stationen): $tagNr++; ?>
+              <?php foreach ($tripTage as $tag => $stationen): ?>
                 <?php $zuAlt = $tag !== $letzterTripTag; // nur der aktuellste Tag startet offen ?>
                 <div class="trip-tag-zeile">
-                  <button type="button" class="trip-tag-knopf<?= $zuAlt ? ' zu' : '' ?>" data-ziel="trip-tag-<?= $tagNr ?>"><?= e($tag) ?> <span class="anzahl">(<?= count($stationen) ?>)</span></button>
-                  <?php if (isset($tagRoute[$tag])): ?>
-                    <a class="trip-karte" target="_blank" rel="noopener" href="<?= e($tagRoute[$tag]) ?>" title="Bewegungsverlauf dieses Tages in Google Maps">🗺️</a>
-                  <?php endif; ?>
-                </div>
-                <div id="trip-tag-<?= $tagNr ?>"<?= $zuAlt ? ' hidden' : '' ?>>
+                  <details class="trip-tag"<?= $zuAlt ? '' : ' open' ?>>
+                    <summary><?= e($tag) ?> <span class="anzahl">(<?= count($stationen) ?>)</span></summary>
+                    <div class="trip-stationen">
                 <?php foreach ($stationen as $st): ?>
                   <?php if ($st['typ'] === 'weingut'): ?>
                     <?php $wFoto = mitTitelbild(weingutFotos($st['w']['id']), (string)($st['w']['titelbild'] ?? '')); ?>
@@ -4073,6 +4208,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     </span>
                   <?php endif; ?>
                 <?php endforeach; ?>
+                    </div>
+                  </details>
+                  <?php if (isset($tagRoute[$tag])): ?>
+                    <a class="trip-karte" target="_blank" rel="noopener" href="<?= e($tagRoute[$tag]) ?>" title="Bewegungsverlauf dieses Tages in Google Maps">🗺️</a>
+                  <?php endif; ?>
                 </div>
               <?php endforeach; ?>
             </div>
@@ -6103,7 +6243,38 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
   <div id="grossansicht" hidden>
     <button class="schliessen" type="button" aria-label="Schließen">&#10005;</button>
     <img src="" alt="">
+    <button class="bild-info-knopf" type="button" aria-label="Bildinfo">ℹ️ Bildinfo</button>
+    <div class="bild-info-blatt" hidden></div>
   </div>
+
+  <script>
+    // Auf- und Zuklappen der Karten – bewusst ein eigener, winziger Block:
+    // selbst wenn im großen Skript darunter irgendetwas schiefgeht, bleibt
+    // das Klappen auf jedem Gerät funktionsfähig.
+    (function () {
+      document.querySelectorAll('.card > h2').forEach(function (h) {
+        h.addEventListener('click', function () { h.parentNode.classList.toggle('zu'); });
+      });
+      // Klappzustände über automatische Neuladungen hinweg merken
+      var schluessel = 'klapp:' + location.pathname + location.search;
+      window.klappZustandSichern = function () {
+        var z = { details: [], karten: [], tage: [] };
+        document.querySelectorAll('details.card').forEach(function (d, i) { if (d.open) { z.details.push(i); } });
+        document.querySelectorAll('.card > h2').forEach(function (h, i) { if (!h.parentNode.classList.contains('zu')) { z.karten.push(i); } });
+        document.querySelectorAll('details.trip-tag').forEach(function (d, i) { if (d.open) { z.tage.push(i); } });
+        try { sessionStorage.setItem(schluessel, JSON.stringify(z)); } catch (e) {}
+      };
+      try {
+        var z = JSON.parse(sessionStorage.getItem(schluessel) || 'null');
+        if (z) {
+          sessionStorage.removeItem(schluessel);
+          document.querySelectorAll('details.card').forEach(function (d, i) { d.open = z.details.indexOf(i) !== -1; });
+          document.querySelectorAll('.card > h2').forEach(function (h, i) { h.parentNode.classList.toggle('zu', z.karten.indexOf(i) === -1); });
+          document.querySelectorAll('details.trip-tag').forEach(function (d, i) { d.open = (z.tage || []).indexOf(i) !== -1; });
+        }
+      } catch (e) {}
+    })();
+  </script>
 
   <script>
     // Weingut-Details als Overlay laden (holt die Detailseite und zeigt deren Inhalt)
@@ -6314,16 +6485,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       });
     });
 
-    // Trip: Tage auf- und zuklappen
-    document.querySelectorAll('.trip-tag-knopf').forEach(function (k) {
-      k.addEventListener('click', function () {
-        var ziel = document.getElementById(k.dataset.ziel);
-        if (!ziel) { return; }
-        ziel.hidden = !ziel.hidden;
-        k.classList.toggle('zu', ziel.hidden);
-      });
-    });
-
     // Zurück-Links: wirklich dahin zurück, wo man herkam
     document.querySelectorAll('.zurueck a').forEach(function (a) {
       a.addEventListener('click', function (e) {
@@ -6332,11 +6493,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           history.back();
         }
       });
-    });
-
-    // Einheitlich: Karten-Überschriften klappen ihre Karte auf und zu
-    document.querySelectorAll('.card > h2').forEach(function (h) {
-      h.addEventListener('click', function () { h.parentNode.classList.toggle('zu'); });
     });
 
     // Profil: Tipp auf Name/Avatar öffnet Foto & „So verkostest du“
@@ -6429,28 +6585,66 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     });
 
     // "Neu laden": Seite garantiert frisch am Zwischenspeicher vorbei holen
-    document.getElementById('neu-laden').addEventListener('click', function (e) {
-      e.preventDefault();
-      var u = new URL(location.href);
-      u.searchParams.set('_r', Date.now());
-      location.replace(u.toString());
-    });
+    (function () {
+      var nl = document.getElementById('neu-laden');
+      if (!nl) { return; }
+      nl.addEventListener('click', function (e) {
+        e.preventDefault();
+        var u = new URL(location.href);
+        u.searchParams.set('_r', Date.now());
+        location.replace(u.toString());
+      });
+    })();
 
-    // Fotos in der Großansicht öffnen statt die Seite zu verlassen
+    // Fotos in der Großansicht öffnen statt die Seite zu verlassen –
+    // mit ℹ️-Knopf für die Bildinfo (Ort, Aufnahmedatum, Kamera, Zuordnung …)
     (function () {
       var box = document.getElementById('grossansicht');
+      if (!box) { return; }
       var bild = box.querySelector('img');
+      var infoKnopf = box.querySelector('.bild-info-knopf');
+      var infoBlatt = box.querySelector('.bild-info-blatt');
+      var dateiname = '';
       document.querySelectorAll('.foto > a, .bild > a').forEach(function (link) {
         link.addEventListener('click', function (e) {
           e.preventDefault();
-          bild.src = link.getAttribute('href');
+          var href = link.getAttribute('href');
+          bild.src = href;
+          try { dateiname = decodeURIComponent(href.split('/').pop().split('?')[0]); } catch (err) { dateiname = ''; }
+          infoBlatt.hidden = true;
+          infoBlatt.innerHTML = '';
           box.hidden = false;
           document.body.style.overflow = 'hidden';
         });
       });
+      infoKnopf.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!infoBlatt.hidden) { infoBlatt.hidden = true; return; }
+        infoBlatt.hidden = false;
+        infoBlatt.innerHTML = '<p>Lade Bildinfo …</p>';
+        fetch('?bildinfo=' + encodeURIComponent(dateiname), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (info) {
+            if (info.fehler) { infoBlatt.innerHTML = '<p>' + info.fehler + '</p>'; return; }
+            var html = '';
+            info.zeilen.forEach(function (z) {
+              var b = document.createElement('b'); b.textContent = z[0];
+              var s = document.createElement('span'); s.textContent = z[1];
+              html += '<div class="bi-zeile">' + b.outerHTML + ' ' + s.outerHTML + '</div>';
+            });
+            if (info.karte) {
+              html += '<div class="bi-zeile"><a href="' + info.karte.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">🗺️ Aufnahmeort in Google Maps öffnen</a></div>';
+            }
+            infoBlatt.innerHTML = html;
+          })
+          .catch(function () { infoBlatt.innerHTML = '<p>Bildinfo konnte nicht geladen werden.</p>'; });
+      });
+      infoBlatt.addEventListener('click', function (e) { e.stopPropagation(); });
       function schliessen() {
         box.hidden = true;
         bild.src = '';
+        infoBlatt.hidden = true;
+        infoBlatt.innerHTML = '';
         document.body.style.overflow = '';
       }
       box.addEventListener('click', schliessen);
@@ -6487,33 +6681,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       }, 20000);
     })();
     <?php endif; ?>
-
-    // Klappzustände über automatische Neuladungen hinweg merken
-    (function () {
-      var schluessel = 'klapp:' + location.pathname + location.search;
-      window.klappZustandSichern = function () {
-        var z = { details: [], karten: [], tage: [] };
-        document.querySelectorAll('details.card').forEach(function (d, i) { if (d.open) { z.details.push(i); } });
-        document.querySelectorAll('.card > h2').forEach(function (h, i) { if (!h.parentNode.classList.contains('zu')) { z.karten.push(i); } });
-        document.querySelectorAll('.trip-tag-knopf').forEach(function (k, i) {
-          var g = document.getElementById(k.dataset.ziel);
-          if (g && !g.hidden) { z.tage.push(i); }
-        });
-        try { sessionStorage.setItem(schluessel, JSON.stringify(z)); } catch (e) {}
-      };
-      try {
-        var z = JSON.parse(sessionStorage.getItem(schluessel) || 'null');
-        if (z) {
-          sessionStorage.removeItem(schluessel);
-          document.querySelectorAll('details.card').forEach(function (d, i) { d.open = z.details.indexOf(i) !== -1; });
-          document.querySelectorAll('.card > h2').forEach(function (h, i) { h.parentNode.classList.toggle('zu', z.karten.indexOf(i) === -1); });
-          document.querySelectorAll('.trip-tag-knopf').forEach(function (k, i) {
-            var g = document.getElementById(k.dataset.ziel);
-            if (g) { g.hidden = z.tage.indexOf(i) === -1; k.classList.toggle('zu', g.hidden); }
-          });
-        }
-      } catch (e) {}
-    })();
 
     // Beim Absenden sichtbar machen, dass gearbeitet wird (v. a. Foto-Upload)
     document.querySelectorAll('form').forEach(function (form) {
