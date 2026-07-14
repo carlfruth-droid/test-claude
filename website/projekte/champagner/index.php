@@ -402,12 +402,29 @@ function aktuellerBenutzer(array $daten): ?array
 }
 
 /**
- * Ein Tasting soll anonym bleiben: normale Mitglieder sehen NICHT, wer wie
- * bewertet hat oder wer sonst dabei ist – nur die anonyme Summe. Klarnamen
- * sieht ausschließlich der Gastgeber (Besitzer) und der Administrator.
+ * Wer im Tasting dabei ist (Teilnehmer/Besitzer), sieht die Mitglieder und
+ * ihre Bewertungen mit Namen – das ist der Sinn der gemeinsamen Runde.
+ * Außenstehende (Gäste, Betrachter eines fremden Getränks) sehen nur anonym.
+ * Kein Tasting-Kontext ⇒ anonym.
  */
 function darfBewerterNamen(array $daten, ?array $tasting): bool
 {
+    if ($tasting === null) {
+        return false;
+    }
+    $konto = aktuellerBenutzer($daten);
+    if ($konto !== null && !empty($konto['admin'])) {
+        return true;
+    }
+    return isset(meineTastings($daten)[$tasting['id']]);
+}
+
+/** Ein Tasting verwalten (Titel, Teilnehmer, löschen) darf nur Besitzer + Admin. */
+function darfTastingVerwalten(array $daten, ?array $tasting): bool
+{
+    if ($tasting === null) {
+        return false;
+    }
     $konto = aktuellerBenutzer($daten);
     if ($konto === null) {
         return false;
@@ -415,7 +432,7 @@ function darfBewerterNamen(array $daten, ?array $tasting): bool
     if (!empty($konto['admin'])) {
         return true;
     }
-    return $tasting !== null && (string)($tasting['besitzer'] ?? '') !== ''
+    return (string)($tasting['besitzer'] ?? '') !== ''
         && (string)($tasting['besitzer'] ?? '') === (string)$konto['id'];
 }
 
@@ -3924,6 +3941,11 @@ if (isset($_GET['bewerten'])) {
         header('Location: ./?fehler=' . rawurlencode('Dieses Getränk gibt es nicht (mehr).'));
         exit;
     }
+    // Wer hat eingeladen? Dessen Bewertung darf der Gast später sehen.
+    $vonName = mb_substr(trim((string)($_GET['von'] ?? '')), 0, 40);
+    if ($vonName !== '') {
+        $_SESSION['einlader'] = $vonName;
+    }
     if ($eingeloggt) {
         if ((string)($mitGetraenk['tasting_id'] ?? '') !== '') {
             tastingWaehlen((string)$mitGetraenk['tasting_id']);
@@ -4696,7 +4718,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           if ($imGlas !== null) {
               $istGruppe = count($meins['teilnehmer'] ?? []) > 1; // „Ihr“ nur bei Gruppen-Tastings
               $glasFotos = mitTitelbild(fotosFuer($imGlas['id']), (string)($imGlas['titelbild'] ?? ''));
-              $mitUrl = 'https://fruthzeug.de/projekte/champagner/?mitbewerten=' . rawurlencode($imGlas['id']);
+              $mitUrl = 'https://fruthzeug.de/projekte/champagner/?mitbewerten=' . rawurlencode($imGlas['id'])
+                  . (trim((string)($_SESSION['person'] ?? '')) !== '' ? '&von=' . rawurlencode(trim((string)$_SESSION['person'])) : '');
               $meineB = meineBewertung($daten, $imGlas['id']);
               // Die Verbindung: Wer hat dieses Getränk auch bewertet – und wann?
               $ichKlein = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
@@ -5232,6 +5255,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? '');
           $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($aktivesTasting['id']);
         ?>
+        <?php if (darfTastingVerwalten($daten, $aktivesTasting)): ?>
         <details class="card">
           <summary>📱 Einladen &amp; Mitschauen (QR-Codes)</summary>
           <div style="display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; text-align:center; margin-top:0.6rem;">
@@ -5255,6 +5279,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </div>
           </div>
         </details>
+        <?php endif; ?>
 
         <?php
           // Getränke hierher holen: nur aus den EIGENEN Tastings des Nutzers
@@ -5406,14 +5431,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           // Bewerter, die (noch) nicht in der Teilnehmerliste stehen
           $externAktiv = array_filter($aktivAnzeige, fn($n, $ln) => !isset($teilnNamen[$ln]), ARRAY_FILTER_USE_BOTH);
         ?>
-        <?php $darfTeilnehmer = darfBewerterNamen($daten, $aktivesTasting); ?>
-        <?php if (!$darfTeilnehmer): ?>
-          <div class="card">
-            <h2>Teilnehmer</h2>
-            <p class="anzahl">👥 <?= count($teiln) ?> dabei · 🟢 <?= $anzahlAktiv ?> haben schon bewertet</p>
-            <p class="anzahl" style="margin-top:0.5rem;">Wer genau dabei ist und wie jede/r bewertet, bleibt anonym – nur der Gastgeber sieht die Namen.</p>
-          </div>
-        <?php else: ?>
+        <?php $darfVerwalten = darfTastingVerwalten($daten, $aktivesTasting); ?>
         <div class="card">
           <h2>Teilnehmer</h2>
           <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($passiv) ?> passiv</p>
@@ -5428,7 +5446,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               $pFoto = profilFoto($daten, (string)$p['name']);
             ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
-              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
+              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b><?= $darfVerwalten && $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
+              <?php if ($darfVerwalten): ?>
               <span class="knopfreihe">
                 <button type="button" class="knopf klein zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?einladung=<?= e($p['token']) ?>">Link kopieren</button>
                 <?php if ($p['email'] !== ''): ?>
@@ -5448,8 +5467,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   <button class="loeschen" type="submit">✕</button>
                 </form>
               </span>
+              <?php endif; ?>
             </div>
           <?php endforeach; ?>
+          <?php if ($darfVerwalten): ?>
           <form method="post" style="margin-top:1rem;">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="teilnehmer_anlegen">
@@ -5459,10 +5480,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
           </form>
           <p class="anzahl" style="margin-top:0.5rem;">Jeder Teilnehmer bekommt einen persönlichen Link – ein Tipp darauf meldet ihn dauerhaft an (kein Passwort nötig).</p>
+          <?php endif; ?>
         </div>
-        <?php endif; ?>
 
-        <?php if ($darfTeilnehmer): ?>
+        <?php if ($darfVerwalten): ?>
         <div class="card zu">
           <h2>Tasting verwalten</h2>
           <form method="post">
@@ -6549,6 +6570,28 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
         </div>
       </div>
+
+      <?php
+        // Einladender: Wer dich per Link zum Mitbewerten geholt hat, dessen
+        // Bewertung darfst du sehen – auch wenn du sonst anonym bewertest.
+        $einladerName = trim((string)($_SESSION['einlader'] ?? ''));
+        $einladerB = null;
+        if (!$darfNamen && $einladerName !== '' && !isset($meineNamenErg[mb_strtolower($einladerName)])) {
+            foreach ($bewertungen as $b) {
+                if (mb_strtolower(trim((string)$b['person'])) === mb_strtolower($einladerName)) { $einladerB = $b; break; }
+            }
+        }
+      ?>
+      <?php if ($einladerB !== null): ?>
+        <?php $sE = 0; foreach ($KATEGORIEN as $bk => $bi) { $sE += (int)($einladerB['werte'][$bk] ?? 0); } $sE = $sE / count($KATEGORIEN); ?>
+        <div class="card" style="border-left:5px solid var(--accent);">
+          <p><b><?= e($einladerName) ?></b> hat dich eingeladen und so bewertet:
+            <?= sterneAnzeige($sE) ?> <b><?= number_format($sE, 1, ',', '') ?></b></p>
+          <?php if (trim((string)($einladerB['notiz'] ?? '')) !== ''): ?>
+            <p class="anzahl" style="margin-top:0.3rem;">„<?= e((string)$einladerB['notiz']) ?>“</p>
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
 
       <?php
         $fotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? ''));
