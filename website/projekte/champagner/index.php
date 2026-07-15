@@ -2907,8 +2907,10 @@ if ($brauchtMigration) {
 /** Gehört ein Champagner zum angegebenen Tasting? (Einträge ohne Zuordnung zählen überall mit.) */
 function champagnerInTasting(array $c, string $tid): bool
 {
-    $ct = (string)($c['tasting_id'] ?? '');
-    return $ct === '' || $tid === '' || $ct === $tid;
+    // Ein Getränk gehört genau zu SEINEM Tasting. Früher galten „ohne Tasting“
+    // erfasste Getränke als überall dabei – dadurch erschienen sie in jedem
+    // (auch frisch angelegten) Tasting. Jetzt strikt nach tasting_id.
+    return (string)($c['tasting_id'] ?? '') === $tid;
 }
 
 /** Weingüter, an denen in diesem Tasting verkostet wurde (IDs als Schlüssel). */
@@ -4924,7 +4926,23 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php
           $glasChampagner = champagnerHolen($daten, (string)($aktivesTasting['aktiv_cid'] ?? ''));
           $tsAlleFotos = $tsKopfFotos; // fürs Overlay (oben beim Titel berechnet)
+          $anzahlWeineTop = count(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
+          $darfVerwaltenTop = darfTastingVerwalten($daten, $aktivesTasting);
+          $beitrittUrlTop = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? '');
+          $qrPng = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' . rawurlencode($beitrittUrlTop);
         ?>
+        <?php if ($darfVerwaltenTop && $anzahlWeineTop === 0): ?>
+          <div class="card einladen-karte" style="border-left:5px solid var(--accent); text-align:center;">
+            <h2>👥 Zuerst deine Runde einladen</h2>
+            <p class="anzahl" style="margin-bottom:0.8rem;">Noch keine Getränke – hol erst die Leute dazu. Zeig ihnen diesen QR-Code zum Abfotografieren oder druck ihn aus: einmal scannen, Name eintragen, dabei.</p>
+            <img src="<?= e($qrPng) ?>" alt="QR-Code zum Beitreten" width="230" height="230" style="border-radius:14px; border:1px solid var(--border); background:#fff; max-width:80%;">
+            <div class="knopfreihe" style="justify-content:center; margin-top:0.7rem;">
+              <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($beitrittUrlTop) ?>">Link kopieren</button>
+              <a class="knopf klein zweit" href="<?= e($qrPng) ?>" target="_blank" rel="noopener">🖨️ Zum Drucken öffnen</a>
+            </div>
+            <p class="anzahl" style="margin-top:0.7rem;">Danach: unten „🥂 Was wir gerade trinken“ oder unter „Verkosten“ das erste Getränk erfassen.</p>
+          </div>
+        <?php endif; ?>
         <div class="card" style="border-left:5px solid var(--accent);">
           <h2>🥂 Was wir gerade trinken</h2>
           <?php if ($glasChampagner !== null): ?>
