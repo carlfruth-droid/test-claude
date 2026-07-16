@@ -5211,7 +5211,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php endif; ?>
         <?php if ($kopfWeingut !== null): ?>
           <a href="?vk=<?= e(rawurlencode($kopfWeingut['id'])) ?>">🍇&nbsp;<?= e($kopfWeingut['name']) ?></a>
-        <?php elseif ($kopfVk === 'ohne'): ?>
+        <?php else: ?>
           <a href="?vk=ohne">🏠&nbsp;ohne Weingut</a>
         <?php endif; ?>
         <?php if ($kopfGlas !== null): ?>
@@ -7448,7 +7448,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <p class="anzahl" style="margin-top:0.6rem;">Ausdrucken und auf Flasche/Glas kleben. Je Getränk gibt es drei Etiketten: <b>anonyme Bewertung</b>, <b>Auflösung</b> und ein <b>Kombi-Etikett</b> mit allen drei Bildern.</p>
         </div>
         <?php if ($meineBlind === []): ?>
-          <div class="card"><p style="font-style:italic; color:var(--muted);">Noch keine Blind-Etiketten. Öffne ein aufgenommenes Getränk und lege im Bereich „🕶️ Blindtasting“ eins an.</p></div>
+          <div class="card"><p style="font-style:italic; color:var(--muted);">Noch keine Blind-Etiketten. Öffne ein Getränk (Ergebnis-Seite) und lege unten im Bereich „🕶️ Blindtasting“ eins an.</p></div>
         <?php endif; ?>
         <?php foreach ($meineBlind as $bl): ?>
           <?php
@@ -7902,10 +7902,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
             </form>
           </div>
-          <?php if (!empty($aktiverChampagner['anregung'])): ?>
-            <?php
-              $blindDieses = array_values(array_filter(blindEintraege($daten), fn($b) => (string)$b['cid'] === (string)$aktiverChampagner['id']));
-            ?>
+          <?php
+            $blindDieses = array_values(array_filter(blindEintraege($daten), fn($b) => (string)$b['cid'] === (string)$aktiverChampagner['id']));
+          ?>
             <div class="card">
               <h2>🕶️ Blindtasting</h2>
               <p class="anzahl" style="margin-bottom:0.6rem;">Kreuze ein Getränk als Blindprobe an: gib eine kurze Kennung (z. B. A, B, C …) ein. Es entsteht ein QR-Etikett mit deiner Kennung in der Mitte – zum Ausdrucken und Aufkleben. Wer den QR-Code scannt, sieht nur die Bewertungsseite, nicht das Getränk. Ein zweiter QR-Code führt zur Auflösung.</p>
@@ -7940,7 +7939,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
               <a class="knopf" href="?blindetiketten=1" style="margin-top:0.7rem; display:inline-block;">🖨️ Alle Blind-Etiketten drucken / als PDF</a>
             </div>
-          <?php endif; ?>
         <?php endif; ?>
       <?php endif; ?>
 
