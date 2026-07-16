@@ -580,6 +580,33 @@ function teilnehmerLimitErreicht(array $t): bool
     return !empty($t['gast']) && count($t['teilnehmer'] ?? []) >= 2;
 }
 
+/** Blindtasting-Etiketten des aktuellen App-Administrators (individuell je Konto). */
+function blindEintraege(array $daten): array
+{
+    $konto = aktuellerBenutzer($daten);
+    if ($konto === null || empty($konto['admin'])) {
+        return [];
+    }
+    return array_values(array_filter(
+        $daten['blind'] ?? [],
+        fn($b) => (string)($b['admin'] ?? '') === (string)$konto['id']
+    ));
+}
+
+/** Ein Blind-Etikett per Token finden (unabhängig vom Konto – für die anonyme Seite). */
+function blindEintragZuToken(array $daten, string $token): ?array
+{
+    if (!preg_match('/^[a-f0-9]{16}$/', $token)) {
+        return null;
+    }
+    foreach (($daten['blind'] ?? []) as $b) {
+        if (hash_equals((string)($b['token'] ?? ''), $token)) {
+            return $b;
+        }
+    }
+    return null;
+}
+
 /**
  * Tastings, die wirklich zum aktuellen Nutzer gehören (Teilnehmer per Name
  * oder Einladung, oder Besitzer per Benutzerkonto) – id => tasting.
@@ -903,13 +930,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => [], 'blind' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => []]
-        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => [], 'blind' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => [], 'blind' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -1207,7 +1234,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ohne globalen Zugang zum Tasting.
     $gastDarfBewerten = $aktion === 'bewerten'
         && ($_SESSION['gast_bewerten'] ?? '') !== ''
-        && ($_SESSION['gast_bewerten'] ?? '') === (string)($_POST['champagner_id'] ?? '');
+        && (
+            ($_SESSION['gast_bewerten'] ?? '') === (string)($_POST['champagner_id'] ?? '')
+            // Blind-Bewertung: die cid steckt im Token, nicht im Formular
+            || (($_POST['blind'] ?? '') === '1'
+                && ($gastBlind = blindEintragZuToken(datenLaden(), (string)($_POST['blind_token'] ?? ''))) !== null
+                && ($_SESSION['gast_bewerten'] ?? '') === (string)$gastBlind['cid'])
+        );
     if (!$eingeloggt && !$gastDarfBewerten) {
         zurueck('?fehler=' . rawurlencode('Bitte zuerst mit dem Passwort anmelden.'));
     }
@@ -1601,6 +1634,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             return $d;
         });
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($an ? 'Getränk ist jetzt unter „Anregungen“ sichtbar.' : 'Getränk aus „Anregungen“ entfernt.'));
+    }
+
+    if ($aktion === 'blind_anlegen') {
+        // App-Administrator legt ein Blindtasting-Etikett an (individuell je Konto)
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $konto = aktuellerBenutzer(datenLaden());
+        if ($konto === null || empty($konto['admin'])) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Blindtasting-Etiketten darf nur der App-Administrator anlegen.'));
+        }
+        if (champagnerHolen(datenLaden(), $cid) === null) {
+            zurueck('?fehler=' . rawurlencode('Dieses Getränk existiert nicht (mehr).'));
+        }
+        $label = mb_substr(trim((string)($_POST['label'] ?? '')), 0, 24);
+        if ($label === '') {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte einen kurzen Text (z. B. A, B, C …) eingeben.'));
+        }
+        $token = bin2hex(random_bytes(8));
+        $kontoId = (string)$konto['id'];
+        datenAendern(function (array $d) use ($cid, $label, $token, $kontoId): array {
+            $d['blind'][] = ['token' => $token, 'cid' => $cid, 'label' => $label, 'admin' => $kontoId, 'zeit' => time()];
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Blind-Etikett „' . $label . '“ erzeugt. Unter „🕶️ Blind-Etiketten“ im Menü kannst du alle ausdrucken.'));
+    }
+
+    if ($aktion === 'blind_loeschen') {
+        $token = (string)($_POST['token'] ?? '');
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $konto = aktuellerBenutzer(datenLaden());
+        if ($konto === null || empty($konto['admin'])) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Das darf nur der App-Administrator.'));
+        }
+        $kontoId = (string)$konto['id'];
+        datenAendern(function (array $d) use ($token, $kontoId): array {
+            $d['blind'] = array_values(array_filter(
+                $d['blind'] ?? [],
+                fn($b) => !(hash_equals((string)($b['token'] ?? ''), $token) && (string)($b['admin'] ?? '') === $kontoId)
+            ));
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Blind-Etikett gelöscht.'));
     }
 
     if ($aktion === 'foto_upload') {
@@ -2999,9 +3073,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'bewerten') {
+        // Blindtasting: die Kennung kommt per Token (das Getränk bleibt anonym)
+        $blindModus = ($_POST['blind'] ?? '') === '1';
+        $blindLabelPost = '';
         $cid    = (string)($_POST['champagner_id'] ?? '');
-        // Betrachter (Viewer) dürfen im Tasting nicht bewerten – Gäste per QR schon
-        if (!$gastDarfBewerten) {
+        if ($blindModus) {
+            $bEintrag = blindEintragZuToken(datenLaden(), (string)($_POST['blind_token'] ?? ''));
+            if ($bEintrag === null) {
+                zurueck('?fehler=' . rawurlencode('Dieser Blind-Code ist nicht (mehr) gültig.'));
+            }
+            $cid = (string)$bEintrag['cid'];
+            $blindLabelPost = (string)$bEintrag['label'];
+        }
+        // Betrachter (Viewer) dürfen im Tasting nicht bewerten – Gäste per QR schon.
+        // Blind-Bewertungen kommen anonym von außen und sind immer erlaubt.
+        if (!$gastDarfBewerten && !$blindModus) {
             $cGet0 = champagnerHolen(datenLaden(), $cid);
             if ($cGet0 !== null && (string)($cGet0['tasting_id'] ?? '') !== '') {
                 $cTast0 = null;
@@ -3072,7 +3158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $umfeldLat = null;
             $umfeldLon = null;
         }
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $preisNeu, $bearbeiten, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $preisNeu, $bearbeiten, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon, $blindModus, $blindLabelPost): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -3109,6 +3195,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'preis'         => $preisNeu,
                 'detail'        => $detail,
                 'tasting_id'    => $meinTastingId,
+                // Blindtasting: anonym abgegeben (Kennung z. B. „A“), zählt aber normal mit
+                'blind'         => $blindModus,
+                'blind_label'   => $blindLabelPost,
                 // Umfeld: Ort und Wetter zum Zeitpunkt der Bewertung
                 'ort'           => $umfeldOrt !== '' ? $umfeldOrt : (string)($vorherige['ort'] ?? ''),
                 'wetter'        => $umfeldWetter !== '' ? $umfeldWetter : (string)($vorherige['wetter'] ?? ''),
@@ -3126,6 +3215,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
             return $d;
         });
+        if ($blindModus) {
+            // Blind bleibt blind: KEINE Weiterleitung zur Auflösung – nur ein Dankeschön
+            zurueck('?blinddanke=1');
+        }
         if ($vk !== '') {
             // Im Verkosten-Modus direkt zurück zur Arbeitsfläche – der nächste Wein wartet
             zurueck('?vk=' . rawurlencode($vk) . '&ok=' . rawurlencode('Danke, ' . $person . ' – gespeichert! Der nächste Wein kann kommen. 🥂'));
@@ -4218,7 +4311,27 @@ $aktiverChampagner = null;
 $aktivesWeingut = null;
 $kontextWeingut = null;   // Arbeitsfläche: aktives Weingut ('ohne' = zu Hause/ohne Weingut)
 $kontextOhne = false;
-if (isset($_GET['bewerten'])) {
+$blindLabel = '';         // Blindtasting: Kennung (z. B. „A“), sonst leer
+$blindToken = '';
+if (isset($_GET['blind'])) {
+    // Anonyme Blind-Bewertung per QR: nur bewerten, Getränk bleibt verdeckt
+    $blindEintrag = blindEintragZuToken($daten, (string)$_GET['blind']);
+    if ($blindEintrag !== null) {
+        $aktiverChampagner = champagnerHolen($daten, (string)$blindEintrag['cid']);
+    }
+    if ($aktiverChampagner !== null) {
+        $ansicht = 'bewerten';
+        $blindLabel = (string)$blindEintrag['label'];
+        $blindToken = (string)$blindEintrag['token'];
+        $_SESSION['gast_bewerten'] = $aktiverChampagner['id']; // anonymes Bewerten ohne Login erlauben
+    } else {
+        $ansicht = 'blind_ungueltig';
+    }
+} elseif (isset($_GET['blinddanke'])) {
+    $ansicht = 'blinddanke';
+} elseif (isset($_GET['blindetiketten'])) {
+    $ansicht = 'blindetiketten';
+} elseif (isset($_GET['bewerten'])) {
     $aktiverChampagner = champagnerHolen($daten, (string)$_GET['bewerten']);
     if ($aktiverChampagner !== null) {
         $ansicht = 'bewerten';
@@ -4662,6 +4775,32 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     details.unterkarte { border: 1px solid var(--border); border-radius: 12px; padding: 0.7rem 0.9rem; background: var(--bg); }
     details.unterkarte > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
     details.unterkarte > summary::-webkit-details-marker { display: none; }
+    /* Blind-Etiketten zum Ausdrucken */
+    .druck-kopf { text-align: center; margin-bottom: 1rem; }
+    .etikett-blatt { display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center; margin-bottom: 1.4rem; padding-bottom: 1.2rem; border-bottom: 1px dashed var(--border); }
+    .etikett { background: #fff; color: #111; border: 1px solid #ccc; border-radius: 14px; padding: 0.8rem; text-align: center; width: 240px; }
+    .etikett-titel { font-weight: 700; margin-bottom: 0.5rem; font-size: 0.95rem; }
+    .etikett-fuss { margin-top: 0.5rem; font-size: 0.85rem; color: #333; }
+    .qr-wrap { position: relative; display: inline-block; line-height: 0; }
+    .qr-wrap img { width: 200px; height: 200px; display: block; }
+    .qr-badge { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: #fff; border: 2px solid #111; border-radius: 50%;
+      width: 62px; height: 62px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .qr-badge small { font-size: 0.7rem; line-height: 1; }
+    .qr-badge b { font-size: 1.5rem; line-height: 1; }
+    .etikett-kombi { width: 100%; max-width: 380px; }
+    .kombi-reihe { display: flex; justify-content: space-around; gap: 0.5rem; }
+    .kombi-teil { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; }
+    .kombi-teil img { width: 108px; height: 108px; }
+    .kombi-teil small { font-size: 0.72rem; color: #333; }
+    .kombi-kein { width: 108px; height: 108px; display: flex; align-items: center; justify-content: center; font-size: 2.4rem; border: 1px solid #ccc; border-radius: 8px; }
+    .etikett-loeschen { width: 100%; text-align: center; }
+    @media print {
+      .site-header, .tab-leiste, footer, .druck-kopf button, .etikett-loeschen, #info-knopf { display: none !important; }
+      body { background: #fff !important; }
+      main { padding: 0 !important; }
+      .etikett-blatt { page-break-inside: avoid; border-bottom: none; }
+    }
     .avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--accent); vertical-align: middle; }
     details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
     details.card summary::-webkit-details-marker { display: none; }
@@ -4943,6 +5082,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <summary>🛠️ Administration</summary>
           <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
           <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
+          <a href="?blindetiketten=1">🕶️ Blind-Etiketten</a>
           <a href="?verwaltung=1">🛠️ Verwaltung</a>
         </details>
       <?php endif; ?>
@@ -5029,6 +5169,15 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'anregungen'): ?>
       <h1>Anregungen 💡</h1>
       <p class="untertitel">Alle bisher verkosteten Getränke – anonym zum Stöbern und Entdecken.</p>
+    <?php elseif ($ansicht === 'blindetiketten'): ?>
+      <h1>Blind-Etiketten 🕶️</h1>
+      <p class="untertitel">QR-Etiketten für Blindverkostungen – ausdrucken und aufkleben.</p>
+    <?php elseif ($ansicht === 'blinddanke'): ?>
+      <h1>Blindprobe 🕶️</h1>
+      <p class="untertitel">Danke fürs Mitmachen!</p>
+    <?php elseif ($ansicht === 'blind_ungueltig'): ?>
+      <h1>Blindprobe 🕶️</h1>
+      <p class="untertitel">Code nicht gültig.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
@@ -5048,9 +5197,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1><?= e($aktivesWeingut['name']) ?></h1>
       <p class="untertitel">Weingut</p>
     <?php elseif ($ansicht === 'bewerten'): ?>
-      <p class="zurueck"><a href="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">&larr; Zur&uuml;ck zu <?= e($aktiverChampagner['name']) ?></a></p>
-      <h1><?= e($aktiverChampagner['name']) ?></h1>
-      <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
+      <?php if ($blindLabel !== ''): ?>
+        <h1>🕶️ Blindprobe <?= e($blindLabel) ?></h1>
+        <p class="untertitel">Anonyme Verkostung – bewerte, was im Glas ist.</p>
+      <?php else: ?>
+        <p class="zurueck"><a href="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">&larr; Zur&uuml;ck zu <?= e($aktiverChampagner['name']) ?></a></p>
+        <h1><?= e($aktiverChampagner['name']) ?></h1>
+        <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
+      <?php endif; ?>
     <?php else: ?>
       <p class="zurueck"><a href="?meine=1">&larr; Zur&uuml;ck</a></p>
       <?php $kopfCFotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? '')); ?>
@@ -6945,10 +7099,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
       <?php else: ?>
         <?php
-          // Bestehende Bewertung der Person vorbelegen (Name aus ?person=… oder aus der Sitzung)
-          $formPerson = trim((string)($_GET['person'] ?? $personVorschlag));
+          // Bestehende Bewertung der Person vorbelegen (Name aus ?person=… oder aus der Sitzung).
+          // Im Blindmodus NICHT vorbelegen – sonst würde eine frühere Verkostung das Getränk verraten.
+          $formPerson = $blindLabel !== '' ? '' : trim((string)($_GET['person'] ?? $personVorschlag));
           $vorhandene = null;
-          if ($formPerson !== '') {
+          if ($formPerson !== '' && $blindLabel === '') {
               foreach (bewertungenFuer($daten, $aktiverChampagner['id']) as $b) {
                   if (mb_strtolower($b['person']) === mb_strtolower($formPerson)) {
                       $vorhandene = $b;
@@ -6960,16 +7115,24 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php if ($vorhandene !== null): ?>
           <div class="hinweis ok">Du änderst die Bewertung von <b><?= e($vorhandene['person']) ?></b> – die Antworten sind vorbelegt.</div>
         <?php endif; ?>
+        <?php if ($blindLabel !== ''): ?>
+          <div class="hinweis ok" style="text-align:center;">🕶️ <b>Blindprobe</b> – bewerte, was im Glas ist. Welches Getränk das ist, zeigt dir der Gastgeber später mit der Auflösung.</div>
+        <?php endif; ?>
         <div class="wz-kopf">
-          <span class="wz-titel"><?= e($aktiverChampagner['name']) ?></span>
+          <span class="wz-titel"><?= $blindLabel !== '' ? '🕶️ Blindprobe ' . e($blindLabel) : e($aktiverChampagner['name']) ?></span>
           <button type="button" id="wz-info-knopf" aria-label="Verkostungs-Tipps">ℹ️ So geht's</button>
         </div>
         <form method="post" id="wizard-form">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="bewerten">
-          <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-          <input type="hidden" name="bearbeiten" value="<?= isset($_GET['bearbeiten']) ? '1' : '0' ?>">
-          <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
+          <?php if ($blindLabel !== ''): ?>
+            <input type="hidden" name="blind" value="1">
+            <input type="hidden" name="blind_token" value="<?= e($blindToken) ?>">
+          <?php else: ?>
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+          <?php endif; ?>
+          <input type="hidden" name="bearbeiten" value="<?= isset($_GET['bearbeiten']) && $blindLabel === '' ? '1' : '0' ?>">
+          <input type="hidden" name="vk" value="<?= $blindLabel === '' ? e((string)($_GET['vk'] ?? '')) : '' ?>">
           <input type="hidden" name="detail" id="detail-feld" value="">
           <input type="hidden" name="geo_lat" id="geo-lat" value="">
           <input type="hidden" name="geo_lon" id="geo-lon" value="">
@@ -7034,6 +7197,95 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             'kategorien' => array_keys($KATEGORIEN),
             'titel' => array_map(fn(array $i): string => $i[0], kategorienFuer($typAktiv, $KATEGORIEN)),
         ], JSON_UNESCAPED_UNICODE) ?></script>
+      <?php endif; ?>
+
+    <?php elseif ($ansicht === 'blind_ungueltig'): ?>
+      <div class="card">
+        <p style="margin-bottom:0.8rem;">🕶️ Dieser Blind-Code ist nicht (mehr) gültig – frag den Gastgeber nach einem frischen Etikett.</p>
+        <a class="knopf" href="./">Zur Startseite</a>
+      </div>
+
+    <?php elseif ($ansicht === 'blinddanke'): ?>
+      <div class="card" style="text-align:center;">
+        <h2>🕶️ Danke für deine Blind-Bewertung!</h2>
+        <p style="margin:0.7rem 0 1rem;">Deine Wertung ist gespeichert. Welches Getränk das war, verrät dir der Gastgeber später mit der Auflösung.</p>
+        <a class="knopf" href="./">Fertig</a>
+      </div>
+
+    <?php elseif ($ansicht === 'blindetiketten'): ?>
+      <!-- ==================== BLIND-ETIKETTEN (Druck / PDF) ==================== -->
+      <?php if (!$istAdmin): ?>
+        <div class="card"><p>Diese Seite ist nur für den App-Administrator.</p></div>
+      <?php else: ?>
+        <?php
+          $meineBlind = blindEintraege($daten);
+          usort($meineBlind, fn($x, $y) => strcmp((string)$x['label'], (string)$y['label']));
+          $qrBasis = 'https://fruthzeug.de/projekte/champagner/';
+          $qr = fn(string $url, int $px = 300): string => 'https://api.qrserver.com/v1/create-qr-code/?size=' . $px . 'x' . $px . '&ecc=H&margin=6&data=' . rawurlencode($url);
+        ?>
+        <div class="druck-kopf">
+          <button type="button" class="knopf" onclick="window.print()">🖨️ Alle drucken / als PDF speichern</button>
+          <p class="anzahl" style="margin-top:0.6rem;">Ausdrucken und auf Flasche/Glas kleben. Je Getränk gibt es drei Etiketten: <b>anonyme Bewertung</b>, <b>Auflösung</b> und ein <b>Kombi-Etikett</b> mit allen drei Bildern.</p>
+        </div>
+        <?php if ($meineBlind === []): ?>
+          <div class="card"><p style="font-style:italic; color:var(--muted);">Noch keine Blind-Etiketten. Öffne ein aufgenommenes Getränk und lege im Bereich „🕶️ Blindtasting“ eins an.</p></div>
+        <?php endif; ?>
+        <?php foreach ($meineBlind as $bl): ?>
+          <?php
+            $blc = champagnerHolen($daten, (string)$bl['cid']);
+            if ($blc === null) { continue; }
+            $blFotos = mitTitelbild(fotosFuer($blc['id']), (string)($blc['titelbild'] ?? ''));
+            $blFoto = $blFotos[0] ?? '';
+            $urlAnon = $qrBasis . '?blind=' . rawurlencode((string)$bl['token']);
+            $urlAufl = $qrBasis . '?ergebnis=' . rawurlencode((string)$blc['id']);
+          ?>
+          <div class="etikett-blatt">
+            <div class="etikett">
+              <div class="etikett-titel">🕶️ Blind bewerten</div>
+              <div class="qr-wrap">
+                <img src="<?= e($qr($urlAnon)) ?>" alt="QR anonyme Bewertung" width="200" height="200">
+                <span class="qr-badge"><small>🍷</small><b><?= e($bl['label']) ?></b></span>
+              </div>
+              <div class="etikett-fuss">QR scannen &amp; anonym bewerten</div>
+            </div>
+            <div class="etikett">
+              <div class="etikett-titel">🔓 Auflösung</div>
+              <div class="qr-wrap">
+                <img src="<?= e($qr($urlAufl)) ?>" alt="QR Auflösung" width="200" height="200">
+              </div>
+              <div class="etikett-fuss">Probe <?= e($bl['label']) ?> = <?= e($blc['name']) ?></div>
+            </div>
+            <div class="etikett etikett-kombi">
+              <div class="etikett-titel">Probe <?= e($bl['label']) ?> – alles auf einen Blick</div>
+              <div class="kombi-reihe">
+                <div class="kombi-teil">
+                  <img src="<?= e($qr($urlAnon, 150)) ?>" alt="" width="108" height="108">
+                  <small>🕶️ anonym bewerten</small>
+                </div>
+                <div class="kombi-teil">
+                  <img src="<?= e($qr($urlAufl, 150)) ?>" alt="" width="108" height="108">
+                  <small>🔓 Auflösung</small>
+                </div>
+                <div class="kombi-teil">
+                  <?php if ($blFoto !== ''): ?>
+                    <img src="<?= e(thumbUrl($blFoto)) ?>" alt="" width="108" height="108" style="object-fit:cover; border-radius:8px;">
+                  <?php else: ?>
+                    <span class="kombi-kein"><?= $KATEGORIEN_GETRAENKE[(string)($blc['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
+                  <?php endif; ?>
+                  <small>🖼️ Original</small>
+                </div>
+              </div>
+              <div class="etikett-fuss"><b><?= e($blc['name']) ?></b><?= trim((string)($blc['jahrgang'] ?? '')) !== '' ? ' · ' . e((string)$blc['jahrgang']) : '' ?></div>
+            </div>
+            <form method="post" class="etikett-loeschen" onsubmit="return confirm('Blind-Etikett „<?= e($bl['label']) ?>“ löschen?');">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="blind_loeschen">
+              <input type="hidden" name="token" value="<?= e($bl['token']) ?>">
+              <input type="hidden" name="champagner_id" value="<?= e($blc['id']) ?>">
+              <button class="loeschen" type="submit">Dieses Blind-Etikett löschen</button>
+            </form>
+          </div>
+        <?php endforeach; ?>
       <?php endif; ?>
 
     <?php elseif ($ansicht === 'ergebnis'): ?>
@@ -7429,6 +7681,42 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
             </form>
           </div>
+          <?php if (!empty($aktiverChampagner['anregung'])): ?>
+            <?php
+              $blindDieses = array_values(array_filter(blindEintraege($daten), fn($b) => (string)$b['cid'] === (string)$aktiverChampagner['id']));
+            ?>
+            <div class="card">
+              <h2>🕶️ Blindtasting</h2>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Kreuze ein Getränk als Blindprobe an: gib eine kurze Kennung (z. B. A, B, C …) ein. Es entsteht ein QR-Etikett mit deiner Kennung in der Mitte – zum Ausdrucken und Aufkleben. Wer den QR-Code scannt, sieht nur die Bewertungsseite, nicht das Getränk. Ein zweiter QR-Code führt zur Auflösung.</p>
+              <form method="post" style="margin:0 0 0.6rem;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="blind_anlegen">
+                <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                <label style="display:flex; align-items:center; gap:0.55rem; margin-bottom:0.5rem; cursor:pointer;">
+                  <input type="checkbox" name="blind_an" value="ja" checked style="width:auto;">
+                  <span>Als Blindprobe verwenden</span>
+                </label>
+                <input type="text" name="label" placeholder="Kennung, z. B. A" maxlength="24" required>
+                <button class="knopf zweit" type="submit" style="margin-top:0.5rem;">🕶️ Blind-Etikett erzeugen</button>
+              </form>
+              <?php if ($blindDieses !== []): ?>
+                <p class="anzahl" style="margin:0.4rem 0 0.3rem;">Vorhandene Blind-Etiketten dieses Getränks:</p>
+                <?php foreach ($blindDieses as $bd): ?>
+                  <div class="ergebnis-kategorie" style="align-items:center;">
+                    <span>🕶️ <b><?= e($bd['label']) ?></b></span>
+                    <form method="post" style="margin:0;" onsubmit="return confirm('Blind-Etikett „<?= e($bd['label']) ?>“ löschen?');">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="blind_loeschen">
+                      <input type="hidden" name="token" value="<?= e($bd['token']) ?>">
+                      <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                      <button class="loeschen" type="submit">✕</button>
+                    </form>
+                  </div>
+                <?php endforeach; ?>
+              <?php endif; ?>
+              <a class="knopf" href="?blindetiketten=1" style="margin-top:0.7rem; display:inline-block;">🖨️ Alle Blind-Etiketten drucken / als PDF</a>
+            </div>
+          <?php endif; ?>
         <?php endif; ?>
       <?php endif; ?>
 
