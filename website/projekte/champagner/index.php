@@ -1047,13 +1047,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($treffer === null) {
             zurueck('?fehler=' . rawurlencode('Dieser Einladungslink ist nicht (mehr) gültig.'));
         }
+        $bestEmail = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
+        if ($bestEmail === '' || !filter_var($bestEmail, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?einladung=' . rawurlencode($token) . '&fehler=' . rawurlencode('Bitte eine gültige E-Mail-Adresse eintragen – ohne E-Mail kein Beitritt.'));
+        }
         if (($_POST['agb'] ?? '') !== 'ja') {
             zurueck('?einladung=' . rawurlencode($token) . '&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
         }
         [$bestTasting, $bestTeilnehmer] = $treffer;
         $bestTid = $bestTasting['id'];
         $bestToken = (string)$bestTeilnehmer['token'];
-        datenAendern(function (array $d) use ($bestTid, $bestToken): array {
+        datenAendern(function (array $d) use ($bestTid, $bestToken, $bestEmail): array {
             foreach ($d['tastings'] as &$t) {
                 if ($t['id'] !== $bestTid) {
                     continue;
@@ -1061,6 +1065,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 foreach ($t['teilnehmer'] as &$p) {
                     if (hash_equals((string)$p['token'], $bestToken)) {
                         $p['agb_zeit'] = time(); // wann die Nutzungsbedingungen bestätigt wurden
+                        $p['email'] = $bestEmail; // E-Mail ist beim Beitritt Pflicht
                     }
                 }
             }
@@ -1077,13 +1082,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'beitreten') {
-        // Beitritt per QR-Code/Gruppenlink – braucht keine Anmeldung
+        // Beitritt per QR-Code/Gruppenlink – jeder Teilnehmer meldet sich zwingend
+        // mit Name, E-Mail und Bestätigung (18+/Nutzungsbedingungen) an.
         $beitritt = (string)($_POST['beitritt'] ?? '');
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
         $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
-        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $email = '';
-        }
         $ziel = null;
         foreach (datenLaden()['tastings'] as $t) {
             if (($t['beitritt'] ?? '') !== '' && hash_equals((string)$t['beitritt'], $beitritt)) {
@@ -1096,6 +1099,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if ($name === '') {
             zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Bitte deinen Namen eintragen.'));
+        }
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Bitte eine gültige E-Mail-Adresse eintragen – ohne E-Mail kein Beitritt.'));
         }
         if (($_POST['agb'] ?? '') !== 'ja') {
             zurueck('?beitritt=' . rawurlencode($beitritt) . '&fehler=' . rawurlencode('Bitte bestätige, dass du mindestens 18 Jahre alt bist und die Nutzungsbedingungen akzeptierst.'));
@@ -1262,6 +1268,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $preis = trim((string)($_POST['preis'] ?? ''));
         $preis = mb_substr($preis, 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
+        $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 4);
+        if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) { $jahrgang = ''; }
         $kat = (string)($_POST['kat'] ?? 'champagner');
         if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = 'champagner';
@@ -1272,7 +1280,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $neueId = bin2hex(random_bytes(4));
         $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $kat, $weingutId, $neueId, $meinTid): array {
+        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $jahrgang, $kat, $weingutId, $neueId, $meinTid): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
@@ -1281,7 +1289,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'jahrgang' => $jahrgang, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
@@ -1404,6 +1412,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 60);
         $preis = mb_substr(trim((string)($_POST['preis'] ?? '')), 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
+        $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 4);
+        if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) { $jahrgang = ''; }
         $kat = (string)($_POST['kat'] ?? 'champagner');
         if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = 'champagner';
@@ -1423,7 +1433,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $neueId = bin2hex(random_bytes(4));
         $neueWeingutId = bin2hex(random_bytes(4));
         $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
+        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $jahrgang, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?neu=2&fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
@@ -1444,7 +1454,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'jahrgang' => $jahrgang, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
             return $d;
         });
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
@@ -1514,6 +1524,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $preis = trim((string)($_POST['preis'] ?? ''));
         $preis = mb_substr($preis, 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
+        // Jahrgang: nur eine sinnvolle Jahreszahl (oder leer / „o. J.“)
+        $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 10);
+        if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) {
+            $jahrgang = preg_replace('/[^0-9]/', '', $jahrgang) ?? '';
+            $jahrgang = mb_substr($jahrgang, 0, 4);
+        }
+        $beschreibung = mb_substr(trim((string)($_POST['beschreibung'] ?? '')), 0, 1000);
         $kat = (string)($_POST['kat'] ?? '');
         if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = '';
@@ -1537,7 +1554,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($name === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Der Name darf nicht leer sein.'));
         }
-        datenAendern(function (array $d) use ($cid, $name, $preis, $rebsorte, $kat, $neuesTasting): array {
+        datenAendern(function (array $d) use ($cid, $name, $preis, $rebsorte, $jahrgang, $beschreibung, $kat, $neuesTasting): array {
             $eigenesTasting = (string)(champagnerHolen($d, $cid)['tasting_id'] ?? '');
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] !== $cid && mb_strtolower($c['name']) === mb_strtolower($name)
@@ -1547,9 +1564,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             foreach ($d['champagner'] as &$c) {
                 if ($c['id'] === $cid) {
-                    $c['name']     = $name;
-                    $c['preis']    = $preis;
-                    $c['rebsorte'] = $rebsorte;
+                    $c['name']         = $name;
+                    $c['preis']        = $preis;
+                    $c['rebsorte']     = $rebsorte;
+                    $c['jahrgang']     = $jahrgang;
+                    $c['beschreibung'] = $beschreibung;
                     if ($kat !== '') {
                         $c['typ'] = $kat;
                     }
@@ -2906,6 +2925,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($zielTasting === null || $getraenk === null) {
             zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Getränk oder Tasting nicht gefunden.'));
         }
+        // Getränke ins Tasting holen darf nur der Tasting-Administrator
+        if (!darfTastingVerwalten($d0, $zielTasting)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Administrator darf Getränke ins Tasting holen.'));
+        }
         datenAendern(function (array $d) use ($tid, $cid): array {
             foreach ($d['champagner'] as &$c) {
                 if ($c['id'] === $cid) {
@@ -4231,8 +4254,10 @@ if (isset($_GET['bewerten'])) {
         exit;
     }
     $ansicht = 'mitbewerten';
-} elseif (isset($_GET['liste'])) {
-    $ansicht = 'liste';
+} elseif (isset($_GET['liste']) || isset($_GET['anregungen'])) {
+    // „Anregungen“ = anonymer Katalog ALLER Getränke der Datenbank.
+    // (früher „Logbuch/Liste“ – das persönliche Logbuch liegt jetzt unter ?meine)
+    $ansicht = 'anregungen';
 } elseif (isset($_GET['tasting'])) {
     $ansicht = 'tastingplatz';
     $aktivesTasting = null;
@@ -4305,6 +4330,7 @@ if ($einladungFrage !== null) {
 $bereich = match ($ansicht) {
     'verkosten', 'werkstatt', 'neu', 'wneu', 'bewerten' => 'verkosten',
     'tastingplatz', 'beitreten', 'verwaltung', 'tverwaltung' => 'tasting',
+    'anregungen' => 'anregungen',
     default => 'entdecken',
 };
 
@@ -4319,7 +4345,8 @@ $KATEGORIEN_GETRAENKE = [
     'bier'       => ['🍺', 'Bier', true],
     'sonstiges'  => ['🥃', 'Sonstiges', true],
 ];
-$kategorie = (string)($_GET['kat'] ?? 'champagner');
+// Anregungen (anonymer Katalog) startet mit ALLEN Kategorien; sonst Champagner.
+$kategorie = (string)($_GET['kat'] ?? ($ansicht === 'anregungen' ? 'alle' : 'champagner'));
 if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     $kategorie = 'champagner';
 }
@@ -4608,6 +4635,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     .dash-kachel { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 0.6rem 0.4rem; text-align: center; }
     .dash-kachel .dash-zahl { display: block; font-size: 1.5rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
     .dash-kachel .dash-label { display: block; font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
+    details.filter-karte { padding: 0.7rem 0.9rem; }
+    details.filter-karte > summary { font-size: 1rem; font-weight: 600; }
+    details.filter-karte > summary::-webkit-details-marker { display: none; }
+    details.filter-karte .sortier-leiste { margin-bottom: 0.2rem; }
+    details.unterkarte { border: 1px solid var(--border); border-radius: 12px; padding: 0.7rem 0.9rem; background: var(--bg); }
+    details.unterkarte > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
+    details.unterkarte > summary::-webkit-details-marker { display: none; }
     .avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--accent); vertical-align: middle; }
     details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
     details.card summary::-webkit-details-marker { display: none; }
@@ -4824,7 +4858,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     footer { text-align: center; padding: 2rem 1.5rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--border); }
   </style>
 </head>
-<body data-bereich="<?= e($bereich) ?>"<?= in_array($ansicht, ['liste', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
+<body data-bereich="<?= e($bereich) ?>"<?= in_array($ansicht, ['anregungen', 'weingueter'], true) ? ' class="listenansicht"' : '' ?>>
   <header class="site-header">
     <?php if ($eingeloggt): ?>
       <?php
@@ -4846,7 +4880,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php if ($kopfTasting !== null && $bereich === 'tasting'): ?>
           <a href="?tasting=<?= e(rawurlencode($kopfTasting['id'])) ?>">👥&nbsp;<?= e($kopfTasting['titel']) ?></a>
         <?php elseif ($bereich === 'entdecken'): ?>
-          <a href="?liste=1">📖&nbsp;Logbuch</a>
+          <a href="?meine=1">📖&nbsp;Logbuch</a>
         <?php else: ?>
           <a href="./">🥂&nbsp;Verkosten</a>
         <?php endif; ?>
@@ -4869,8 +4903,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     </label>
     <nav class="site-nav">
       <a href="./">🥂 Verkosten</a>
-      <a href="?meine=1">📖 Meine Liste</a>
-      <a href="?liste=1">📖 Logbuch</a>
+      <a href="?meine=1">📖 Logbuch</a>
+      <a href="?anregungen=1">💡 Anregungen</a>
       <a href="?tasting=1">👥 Tastings</a>
       <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
@@ -4952,7 +4986,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1>Verwaltung 🛠️</h1>
       <p class="untertitel">Benutzer, Getränke und Weingüter – nur für Administratoren.</p>
     <?php elseif ($ansicht === 'meine'): ?>
-      <h1>Meine Verkostungen 📖</h1>
+      <h1>Logbuch 📖</h1>
       <p class="untertitel">Dein persönliches Verkostungsbuch – alles, was du probiert und bewertet hast.</p>
     <?php elseif ($ansicht === 'konto'): ?>
       <h1>Benutzerkonto 👤</h1>
@@ -4972,9 +5006,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'mitbewerten'): ?>
       <h1>Mitbewerten 🥂</h1>
       <p class="untertitel">Sag uns kurz, wer du bist – dann geht’s direkt zur Bewertung.</p>
-    <?php elseif ($ansicht === 'liste'): ?>
-      <h1>Logbuch 📖</h1>
-      <p class="untertitel">Deine Verkostungen im Überblick.</p>
+    <?php elseif ($ansicht === 'anregungen'): ?>
+      <h1>Anregungen 💡</h1>
+      <p class="untertitel">Alle bisher verkosteten Getränke – anonym zum Stöbern und Entdecken.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
@@ -4982,7 +5016,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1>Fotoalbum 📸</h1>
       <p class="untertitel">Alle Fotos eurer Verkostungen.</p>
     <?php elseif ($ansicht === 'neu'): ?>
-      <p class="zurueck"><a href="<?= isset($_GET['vk']) ? '?vk=' . e(rawurlencode((string)$_GET['vk'])) : '?liste=1' ?>">&larr; Zur&uuml;ck</a></p>
+      <p class="zurueck"><a href="<?= isset($_GET['vk']) ? '?vk=' . e(rawurlencode((string)$_GET['vk'])) : '?meine=1' ?>">&larr; Zur&uuml;ck</a></p>
       <h1>Neue Flasche 📷</h1>
       <p class="untertitel">Fotografieren – erkennen – bewerten.</p>
     <?php elseif ($ansicht === 'wneu'): ?>
@@ -4998,7 +5032,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1><?= e($aktiverChampagner['name']) ?></h1>
       <p class="untertitel">Deine persönliche Bewertung<?= preisZeile($aktiverChampagner) ?></p>
     <?php else: ?>
-      <p class="zurueck"><a href="?liste=1">&larr; Zur&uuml;ck</a></p>
+      <p class="zurueck"><a href="?meine=1">&larr; Zur&uuml;ck</a></p>
       <?php $kopfCFotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? '')); ?>
       <h1 style="display:flex; align-items:center; gap:0.65rem;">
         <?php if ($kopfCFotos !== []): ?>
@@ -5015,7 +5049,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             }
         }
       ?>
-      <p class="untertitel">Ergebnis der Verkostung<?= preisZeile($aktiverChampagner) ?><?= $cTastingTitel !== '' ? ' &middot; 👥 ' . e($cTastingTitel) : '' ?></p>
+      <p class="untertitel">Ergebnis der Verkostung<?= trim((string)($aktiverChampagner['jahrgang'] ?? '')) !== '' ? ' &middot; 📅 ' . e((string)$aktiverChampagner['jahrgang']) : '' ?><?= preisZeile($aktiverChampagner) ?><?= $cTastingTitel !== '' ? ' &middot; 👥 ' . e($cTastingTitel) : '' ?></p>
     <?php endif; ?>
 
     <?php if ($meldung !== ''): ?>
@@ -5109,7 +5143,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php elseif ($vkMeinT !== null): ?>
         <div class="card"><p class="anzahl">🥂 Du bist bei „<?= e($vkMeinT['titel']) ?>“ dabei. Neue Getränke legt der Tasting-Admin an – du kannst die vorhandenen bewerten.</p></div>
       <?php endif; ?>
-      <p class="anzahl" style="margin-top:1rem;">Deine bisherigen Verkostungen findest du unter <a href="?liste=1">📖 Logbuch</a>.</p>
+      <p class="anzahl" style="margin-top:1rem;">Deine bisherigen Verkostungen findest du unter <a href="?meine=1">📖 Logbuch</a>.</p>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
       <?php endif; ?>
@@ -5534,9 +5568,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </details>
 
         <?php
-          // Getränke hierher holen: nur aus den EIGENEN Tastings des Nutzers
-          // (Teilnehmer/Besitzer) sowie direkt (ohne Tasting) verkostete.
-          $meineTsHolen = meineTastings($daten);
+          // Getränke hierher holen: NUR für Tasting-Administratoren, und nur aus den
+          // EIGENEN Tastings des Nutzers (Teilnehmer/Besitzer) sowie direkt verkostete.
+          $meineTsHolen = darfTastingVerwalten($daten, $aktivesTasting) ? meineTastings($daten) : [];
           unset($meineTsHolen[$aktivesTasting['id']]); // aktuelles ist schon hier
           $holbarProQuelle = []; // quellId (tid oder 'direkt') => [drinks]
           $quellTitel = [];
@@ -5557,7 +5591,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           }
           unset($grp);
         ?>
-        <?php if ($holbarProQuelle !== []): ?>
+        <?php if ($holbarProQuelle !== [] && darfTastingVerwalten($daten, $aktivesTasting)): ?>
           <details class="card">
             <summary>➕ Getränk aus anderem Tasting hierher holen</summary>
             <form method="post" style="margin-top:0.6rem;">
@@ -5749,7 +5783,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php
         $vt = $verwaltungTasting;
         $vBeitritt = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($vt['beitritt'] ?? '');
-        $vAnsehen = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($vt['id']);
         $vQrPng = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' . rawurlencode($vBeitritt);
         $vRollen = ['admin' => '🛠️ Admin', 'tester' => '🥂 Tester', 'viewer' => '👁️ Betrachter'];
         // ---- Dashboard-Zahlen (nur der Tasting-Admin sieht diese Seite) ----
@@ -5813,10 +5846,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($vBeitritt) ?>">Beitritts-Link kopieren</button>
           <a class="knopf klein zweit" href="<?= e($vQrPng) ?>" target="_blank" rel="noopener">🖨️ Zum Drucken öffnen</a>
         </div>
-        <p class="anzahl" style="margin:0.8rem 0 0.3rem;"><b>Nur zuschauen</b> (sehen, nicht bewerten):</p>
-        <div class="knopfreihe">
-          <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($vAnsehen) ?>">Mitschau-Link kopieren</button>
-        </div>
+        <p class="anzahl" style="margin:0.8rem 0 0;"><b>Nur zuschauen?</b> Füge die Person unten als Teilnehmer mit der Rolle <b>👁️ Betrachter</b> hinzu – sie meldet sich mit Name, E-Mail und Bestätigung an und darf dann sehen, aber nicht bewerten.</p>
       </div>
 
       <div class="card">
@@ -5862,19 +5892,23 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </div>
           </div>
         <?php endforeach; ?>
-        <form method="post" style="margin-top:1rem;">
-          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-          <input type="hidden" name="aktion" value="teilnehmer_anlegen">
-          <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
-          <input type="text" name="name" placeholder="Name" maxlength="40" required>
-          <input type="text" name="email" placeholder="E-Mail (optional – für die Einladung)" maxlength="80" inputmode="email">
-          <select name="rolle">
-            <option value="tester">🥂 Tester (darf bewerten)</option>
-            <option value="admin">🛠️ Admin (darf alles verwalten)</option>
-            <option value="viewer">👁️ Betrachter (nur zusehen)</option>
-          </select>
-          <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
-        </form>
+        <details class="unterkarte" style="margin-top:1rem;">
+          <summary>➕ Teilnehmer von Hand hinzufügen</summary>
+          <form method="post" style="margin-top:0.7rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="teilnehmer_anlegen">
+            <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+            <input type="text" name="name" placeholder="Name" maxlength="40" required>
+            <input type="text" name="email" placeholder="E-Mail (für die Einladung)" maxlength="80" inputmode="email">
+            <select name="rolle">
+              <option value="tester">🥂 Tester (darf bewerten)</option>
+              <option value="admin">🛠️ Admin (darf alles verwalten)</option>
+              <option value="viewer">👁️ Betrachter (nur zusehen)</option>
+            </select>
+            <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
+            <p class="anzahl" style="margin-top:0.5rem;">Der Teilnehmer bekommt seinen persönlichen Einladungs-Link – beim ersten Öffnen meldet er sich mit Name, E-Mail und Bestätigung an.</p>
+          </form>
+        </details>
       </div>
 
       <div class="card">
@@ -5923,13 +5957,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php else: ?>
         <div class="card">
           <h2><?= e($beitrittTasting['titel']) ?></h2>
-          <p style="margin-bottom:0.8rem;">Trag deinen Namen ein und du bist dabei – ohne Passwort, dauerhaft auf diesem Gerät.</p>
+          <p style="margin-bottom:0.8rem;">Melde dich mit Name und E-Mail an und bestätige kurz – dann bist du dabei, dauerhaft auf diesem Gerät.</p>
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
             <input type="hidden" name="aktion" value="beitreten">
             <input type="hidden" name="beitritt" value="<?= e($beitrittToken) ?>">
-            <input type="text" name="name" placeholder="Dein Name" maxlength="40" required>
-            <input type="text" name="email" placeholder="E-Mail (optional, kannst du weglassen)" maxlength="80" inputmode="email">
+            <input type="text" name="name" placeholder="Dein Name (Pflicht)" maxlength="40" required>
+            <input type="email" name="email" placeholder="E-Mail (Pflicht)" maxlength="80" inputmode="email" autocomplete="email" required>
             <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
               <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
               <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
@@ -5968,15 +6002,22 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           if ($einladungsTreffer !== null) {
               $meineTastingIds[$einladungsTreffer[0]['id']] = true;
           }
+          // Auch selbst angelegte (besitzer) Tastings gehören zu „meine“
+          $kontoTs = aktuellerBenutzer($daten);
+          if ($kontoTs !== null) {
+              foreach ($daten['tastings'] as $t) {
+                  if ((string)($t['besitzer'] ?? '') === (string)$kontoTs['id']) { $meineTastingIds[$t['id']] = true; }
+              }
+          }
           $aktuellesTid = (string)(meinTasting($daten)['id'] ?? '');
+          // Datenschutz: man sieht AUSSCHLIESSLICH die eigenen Tastings – niemals fremde.
           $meine = array_values(array_filter($tastingsSortiert, fn($t) => isset($meineTastingIds[$t['id']])));
-          $weitere = array_values(array_filter($tastingsSortiert, fn($t) => !isset($meineTastingIds[$t['id']])));
         ?>
-        <?php foreach ([['🥂 Meine Tastings', $meine], ['Weitere Tastings', $weitere]] as [$gruppenTitel, $gruppe]): ?>
+        <?php if ($meine === []): ?>
+          <div class="card"><p style="color:var(--muted); font-style:italic;">Du bist noch bei keinem Tasting dabei. Leg unten eins an oder tritt per Einladungs-Link/QR-Code bei.</p></div>
+        <?php endif; ?>
+        <?php foreach ([['🥂 Meine Tastings', $meine]] as [$gruppenTitel, $gruppe]): ?>
           <?php if ($gruppe === []) { continue; } ?>
-          <?php if ($meine !== [] && $weitere !== []): ?>
-            <p class="untertitel" style="margin:0.8rem 0 0.5rem;"><?= $gruppenTitel ?></p>
-          <?php endif; ?>
           <?php foreach ($gruppe as $t): ?>
             <?php $tFotos = mitTitelbild(tastingFotos($t['id']), (string)($t['titelbild'] ?? '')); ?>
             <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>"<?= $t['id'] === $aktuellesTid ? ' style="border-left:5px solid var(--accent);"' : '' ?>>
@@ -6011,7 +6052,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php if ($benutzerAktiv === null || empty($benutzerAktiv['admin'])): ?>
         <div class="card">
           <p style="margin-bottom:0.8rem;">Die Verwaltung ist nur für Administratoren. Melde dich im Menü unter „👤 Benutzerkonto“ an.</p>
-          <a class="knopf" href="?meine=1">Zu Meine Liste</a>
+          <a class="knopf" href="?meine=1">Zum Logbuch</a>
         </div>
       <?php else: ?>
 
@@ -6472,6 +6513,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="einladung_bestaetigen">
           <input type="hidden" name="token" value="<?= e($einladungFrage['token']) ?>">
+          <input type="email" name="email" placeholder="Deine E-Mail (Pflicht)" maxlength="80" inputmode="email" autocomplete="email" value="<?= e((string)($einladungFrage['teilnehmer']['email'] ?? '')) ?>" required>
           <label style="display:flex; align-items:flex-start; gap:0.55rem; margin:0.6rem 0 0.8rem; font-size:0.92rem; cursor:pointer;">
             <input type="checkbox" name="agb" value="ja" required style="width:auto; margin-top:0.2rem; flex-shrink:0;">
             <span>Ich bin mindestens 18 Jahre alt und akzeptiere die <a href="?nutzung=1" target="_blank">Nutzungsbedingungen</a> von TasteLog. <b>(Pflicht)</b></span>
@@ -6589,6 +6631,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 ];
             }
             $eintraege = array_values($eintraege);
+            // Eigene Listen als Filter (📂 Favoriten, Nachkaufen …)
+            $logListen = meineListen($daten);
+            $logListeWahl = (string)($_GET['meineliste'] ?? '');
+            $logListeAktiv = null;
+            foreach ($logListen as $l) { if ((string)$l['id'] === $logListeWahl) { $logListeAktiv = $l; break; } }
+            if ($logListeAktiv === null) { $logListeWahl = ''; }
+            if ($logListeWahl !== '') {
+                $logCids = array_map('strval', $logListeAktiv['cids'] ?? []);
+                $eintraege = array_values(array_filter($eintraege, fn($ein) => in_array((string)$ein['c']['id'], $logCids, true)));
+            }
             $msort = (string)($_GET['msort'] ?? 'datum');
             match ($msort) {
                 'name'    => usort($eintraege, fn($x, $y) => strcmp(mb_strtolower($x['c']['name']), mb_strtolower($y['c']['name']))),
@@ -6692,14 +6744,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
               </div>
             </div>
-          <?php if ($eintraege !== []): ?>
-            <div class="sortier-leiste">Sortieren:
-              <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=datum">Datum</a>
-              <a class="<?= $msort === 'name' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=name">Name</a>
-              <a class="<?= $msort === 'tasting' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=tasting">Tasting</a>
-              <a class="<?= $msort === 'weingut' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=weingut">Weingut</a>
-              <a class="<?= $msort === 'sterne' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=sterne">Meine Sterne</a>
-            </div>
+          <?php if ($eintraege !== [] || $logListeWahl !== ''): ?>
+            <?php $logSuffix = $logListeWahl !== '' ? '&amp;meineliste=' . e(rawurlencode($logListeWahl)) : ''; ?>
+            <details class="card filter-karte">
+              <summary>🔎 Filter &amp; Sortierung<?= $logListeAktiv !== null ? ' · 📂 ' . e($logListeAktiv['name']) : '' ?></summary>
+              <div class="sortier-leiste" style="margin-top:0.6rem;">Sortieren:
+                <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=datum<?= $logSuffix ?>">Datum</a>
+                <a class="<?= $msort === 'name' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=name<?= $logSuffix ?>">Name</a>
+                <a class="<?= $msort === 'tasting' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=tasting<?= $logSuffix ?>">Tasting</a>
+                <a class="<?= $msort === 'weingut' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=weingut<?= $logSuffix ?>">Weingut</a>
+                <a class="<?= $msort === 'sterne' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=sterne<?= $logSuffix ?>">Meine Sterne</a>
+              </div>
+              <?php if ($logListen !== []): ?>
+                <div class="sortier-leiste" style="margin-bottom:0.3rem;">Liste:
+                  <a class="<?= $logListeWahl === '' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=<?= e($msort) ?>">⭐ Alle</a>
+                  <?php foreach ($logListen as $l): ?>
+                    <a class="<?= $logListeWahl === (string)$l['id'] ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=<?= e($msort) ?>&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>">📂 <?= e($l['name']) ?> (<?= count($l['cids'] ?? []) ?>)</a>
+                  <?php endforeach; ?>
+                </div>
+              <?php endif; ?>
+            </details>
             <input type="search" class="filter-feld" placeholder="🔍 Name, Traube, Weingut, Tasting suchen …" data-ziel="#meine-liste">
             <div id="meine-liste">
               <?php foreach ($eintraege as $ein): ?>
@@ -6708,6 +6772,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   $fotos = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
                   $meta = [];
                   $meta[] = date('d.m.Y', $ein['zeit']);
+                  if (trim((string)($c['jahrgang'] ?? '')) !== '') { $meta[] = '📅 ' . (string)$c['jahrgang']; }
                   if (trim((string)($c['rebsorte'] ?? '')) !== '') { $meta[] = (string)$c['rebsorte']; }
                   if ($ein['weingut'] !== '') { $meta[] = '🍇 ' . $ein['weingut']; }
                   if ($ein['tasting'] !== '') { $meta[] = '👥 ' . $ein['tasting']; }
@@ -6833,7 +6898,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <p class="anzahl" style="margin-bottom:0.7rem;">Leg eigene Listen an (z. B. „Favoriten“, „Nachkaufen“, „Weihnachten“). Getränke ordnest du ihnen bei der Ergebnis-Seite zu; im Logbuch kannst du danach filtern.</p>
             <?php foreach ($konListen as $l): ?>
               <div class="ergebnis-kategorie" style="align-items:center;">
-                <a href="?liste=1&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>"><b>📂 <?= e($l['name']) ?></b> <span class="anzahl">(<?= count($l['cids'] ?? []) ?>)</span></a>
+                <a href="?meine=1&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>"><b>📂 <?= e($l['name']) ?></b> <span class="anzahl">(<?= count($l['cids'] ?? []) ?>)</span></a>
                 <form method="post" style="margin:0;" onsubmit="return confirm('Liste „<?= e($l['name']) ?>“ löschen? Die Getränke bleiben erhalten.');">
                   <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                   <input type="hidden" name="aktion" value="liste_loeschen">
@@ -6961,6 +7026,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $schnitte    = kategorieSchnitte($bewertungen, $KATS_TYP);
       ?>
       <?php $flaschenGesamt = array_sum(array_map(fn($b) => (int)($b['flaschen'] ?? 0), $bewertungen)); ?>
+      <?php $cBeschreibung = trim((string)($aktiverChampagner['beschreibung'] ?? '')); ?>
+      <?php if ($cBeschreibung !== ''): ?>
+        <div class="card">
+          <h2>📝 Beschreibung</h2>
+          <p style="margin-top:0.3rem;"><?= nl2br(e($cBeschreibung)) ?></p>
+        </div>
+      <?php endif; ?>
       <div class="card">
         <div class="gesamt">
           <?= sterneAnzeige($gesamt) ?>
@@ -7307,7 +7379,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </select>
             <input type="text" name="rebsorte" id="rebsorte-edit" value="<?= e($erkanntVorschlag !== null && ($erkanntVorschlag['rebsorte'] ?? '') !== '' ? $erkanntVorschlag['rebsorte'] : (string)($aktiverChampagner['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($typAktiv)) ?>" maxlength="80">
             <?= sortenChips('rebsorte-edit', $typAktiv) ?>
+            <input type="text" name="jahrgang" value="<?= e((string)($aktiverChampagner['jahrgang'] ?? '')) ?>" placeholder="Jahrgang, z. B. 2019 (optional)" maxlength="4" inputmode="numeric" pattern="\d{4}">
             <input type="text" name="preis" value="<?= e((string)($aktiverChampagner['preis'] ?? '')) ?>" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
+            <textarea name="beschreibung" rows="3" placeholder="Eigene Beschreibung des Getränks (optional)" maxlength="1000" style="width:100%; font-family:inherit; padding:0.6rem 0.7rem; border:1px solid var(--border); border-radius:10px; resize:vertical;"><?= e((string)($aktiverChampagner['beschreibung'] ?? '')) ?></textarea>
             <?php if ($daten['tastings'] !== []): ?>
               <select name="tasting_id">
                 <option value="">👥 ohne Tasting</option>
@@ -7418,7 +7492,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <div class="knopfreihe">
         <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Jetzt selbst bewerten</a>
-        <a class="knopf zweit" href="?liste=1">Zur Liste</a>
+        <a class="knopf zweit" href="?meine=1">Zum Logbuch</a>
       </div>
       <?php if ($eingeloggt): ?>
         <form method="post" onsubmit="return confirm('„<?= e($aktiverChampagner['name']) ?>“ samt aller Bewertungen und Fotos löschen?');" style="margin-top:0.8rem;">
@@ -7513,6 +7587,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="text" name="name" value="<?= e($neu['name']) ?>" placeholder="Name des Getränks" maxlength="60" required>
           <input type="text" name="rebsorte" id="rebsorte-neu" value="<?= e((string)($neu['rebsorte'] ?? '')) ?>" placeholder="<?= e(sortenLabel($neuKat)) ?>" maxlength="80">
           <?= sortenChips('rebsorte-neu', $neuKat) ?>
+          <input type="text" name="jahrgang" placeholder="Jahrgang, z. B. 2019 (optional)" maxlength="4" inputmode="numeric" pattern="\d{4}">
           <input type="text" name="preis" placeholder="Preis, z. B. 39,90 € (optional)" maxlength="20">
           <h2 id="neu-erzeuger-titel"><?= e($erzLabel) ?></h2>
           <?php if ($daten['weingueter'] !== []): ?>
@@ -7666,7 +7741,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'fotos'): ?>
       <!-- ==================== FOTOALBUM ==================== -->
       <div class="sortier-leiste" style="margin-bottom:1rem;">Zeigen:
-        <a href="?liste=1">🥂 Getränke</a>
+        <a href="?anregungen=1">🥂 Getränke</a>
         <a href="?weingueter=1">🍇 Weingüter</a>
         <a class="aktiv" href="?fotos=1">📸 Fotos</a>
       </div>
@@ -7806,7 +7881,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'weingueter'): ?>
       <!-- ==================== WEINGUT-LISTE ==================== -->
       <div class="sortier-leiste" style="margin-bottom:1rem;">Zeigen:
-        <a href="?liste=1">🥂 Getränke</a>
+        <a href="?anregungen=1">🥂 Getränke</a>
         <a class="aktiv" href="?weingueter=1">🍇 Weingüter</a>
         <a href="?fotos=1">📸 Fotos</a>
       </div>
@@ -8062,7 +8137,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <div class="knopfreihe">
         <a class="knopf zweit" href="?weingueter=1">Zur Weingut-Liste</a>
-        <a class="knopf zweit" href="?liste=1">Zur Champagner-Liste</a>
+        <a class="knopf zweit" href="?anregungen=1">Zu den Getränken</a>
       </div>
       <?php if ($eingeloggt): ?>
         <form method="post" onsubmit="return confirm('„<?= e($aktivesWeingut['name']) ?>“ löschen? Die Champagner bleiben erhalten, verlieren aber die Zuordnung.');" style="margin-top:0.8rem;">
@@ -8074,104 +8149,50 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php endif; ?>
 
     <?php else: ?>
-      <!-- ==================== ÜBERSICHT ==================== -->
+      <!-- ==================== ANREGUNGEN: anonymer Katalog ALLER Getränke ==================== -->
+      <?php if ($istAdmin): ?>
       <div class="sortier-leiste">Zeigen:
-        <a class="aktiv" href="?liste=1">🥂 Getränke</a>
+        <a class="aktiv" href="?anregungen=1">🥂 Getränke</a>
         <a href="?weingueter=1">🍇 Weingüter</a>
         <a href="?fotos=1">📸 Fotos</a>
       </div>
+      <?php endif; ?>
 
-      <div class="sortier-leiste" style="margin-bottom:0.9rem;">
-        <a class="<?= $kategorie === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=alle">⭐ Alle</a>
-        <?php foreach ($KATEGORIEN_GETRAENKE as $kSchluessel => [$kIcon, $kName, $kAktiviert]): ?>
-          <a class="<?= $kategorie === $kSchluessel ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kSchluessel) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
-        <?php endforeach; ?>
-      </div>
+      <details class="card filter-karte">
+        <summary>🔎 Filter &amp; Sortierung</summary>
+        <div class="sortier-leiste" style="margin-top:0.6rem;">Art:
+          <a class="<?= $kategorie === 'alle' ? 'aktiv' : '' ?>" href="?anregungen=1&amp;kat=alle&amp;sort=<?= e($sortierung) ?>">⭐ Alle</a>
+          <?php foreach ($KATEGORIEN_GETRAENKE as $kSchluessel => [$kIcon, $kName, $kAktiviert]): ?>
+            <a class="<?= $kategorie === $kSchluessel ? 'aktiv' : '' ?>" href="?anregungen=1&amp;kat=<?= e($kSchluessel) ?>&amp;sort=<?= e($sortierung) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
+          <?php endforeach; ?>
+        </div>
+        <div class="sortier-leiste" style="margin-bottom:0.3rem;">Sortieren:
+          <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?anregungen=1&amp;kat=<?= e($kategorie) ?>&amp;sort=datum">Neueste</a>
+          <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?anregungen=1&amp;kat=<?= e($kategorie) ?>&amp;sort=name">Name</a>
+          <a class="<?= $sortierung === 'sterne' ? 'aktiv' : '' ?>" href="?anregungen=1&amp;kat=<?= e($kategorie) ?>&amp;sort=sterne">Beste Bewertung</a>
+        </div>
+      </details>
 
       <?php if ($kategorie !== 'alle' && !$KATEGORIEN_GETRAENKE[$kategorie][2]): ?>
         <div class="card">
           <h2><?= $KATEGORIEN_GETRAENKE[$kategorie][0] ?> <?= e($KATEGORIEN_GETRAENKE[$kategorie][1]) ?> – bald verfügbar</h2>
-          <p>Die Kategorie ist schon vorbereitet – die Verkostung startet hier, sobald ihr sie braucht. Bis dahin: <a href="?liste=1">zurück zum Champagner</a>. 🥂</p>
+          <p>Die Kategorie ist schon vorbereitet – die Verkostung startet hier, sobald ihr sie braucht. Bis dahin: <a href="?anregungen=1">alle Getränke ansehen</a>. 🥂</p>
         </div>
       <?php else: ?>
-      <?php
-        // Sichtbarkeit: jeder sieht nur die eigenen Tastings (Teilnehmer/Besitzer).
-        // Eingeladene Betrachter (Mitschau-Link mit tid) sehen genau dieses eine
-        // Tasting. Nur Administratoren sehen alles.
-        $meineTs = meineTastings($daten);
-        $tidWahl = (string)($_GET['tid'] ?? '');
-        $tidBekannt = false;
-        foreach ($daten['tastings'] as $t) {
-            if ($t['id'] === $tidWahl) { $tidBekannt = true; break; }
-        }
-        if ($tidWahl === 'alle') {
-            if (!$istAdmin) { $tidWahl = ''; }
-        } elseif (!$tidBekannt) {
-            $tidWahl = '';
-        }
-        if ($tidWahl === '') {
-            if ($blickTastingId !== '') {
-                $tidWahl = $blickTastingId;
-            } elseif ($istAdmin) {
-                $tidWahl = 'alle';
-            } else {
-                $tidWahl = (string)(array_key_first($meineTs) ?? '');
-            }
-        }
-        $tastingsSortiert = $istAdmin ? $daten['tastings'] : array_values($meineTs);
-        if (!$istAdmin && $tidWahl !== '' && $tidWahl !== 'alle' && !isset($meineTs[$tidWahl])) {
-            // Eingeladener Betrachter: nur dieses eine Tasting anzeigen
-            $tastingsSortiert = array_values(array_filter($daten['tastings'], fn($t) => $t['id'] === $tidWahl));
-        }
-        usort($tastingsSortiert, fn(array $x, array $y): int => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
-      ?>
-      <?php if (count($tastingsSortiert) > 1 || $istAdmin): ?>
-        <div class="sortier-leiste">Tasting:
-          <?php foreach ($tastingsSortiert as $t): ?>
-            <a class="<?= $tidWahl === $t['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=<?= e(rawurlencode($t['id'])) ?>"><?= e($t['titel']) ?></a>
-          <?php endforeach; ?>
-          <?php if ($istAdmin): ?>
-            <a class="<?= $tidWahl === 'alle' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>&amp;tid=alle">Alle</a>
-          <?php endif; ?>
-        </div>
-      <?php endif; ?>
-      <?php
-        // Eigene Listen als Filter
-        $histListen = meineListen($daten);
-        $listeWahl = (string)($_GET['meineliste'] ?? '');
-        $listeAktiv = null;
-        foreach ($histListen as $l) { if ((string)$l['id'] === $listeWahl) { $listeAktiv = $l; break; } }
-        if ($listeAktiv === null) { $listeWahl = ''; }
-        $listeCids = $listeAktiv !== null ? array_map('strval', $listeAktiv['cids'] ?? []) : [];
-      ?>
-      <?php if ($histListen !== []): ?>
-        <div class="sortier-leiste">Liste:
-          <a class="<?= $listeWahl === '' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>">⭐ Alle</a>
-          <?php foreach ($histListen as $l): ?>
-            <a class="<?= $listeWahl === (string)$l['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>">📂 <?= e($l['name']) ?> (<?= count($l['cids'] ?? []) ?>)</a>
-          <?php endforeach; ?>
-        </div>
-      <?php endif; ?>
-      <div class="sortier-leiste">Sortieren:
-        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=datum&amp;tid=<?= e(rawurlencode($tidWahl)) ?><?= $listeWahl !== '' ? '&amp;meineliste=' . e(rawurlencode($listeWahl)) : '' ?>">Anlagedatum</a>
-        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=name&amp;tid=<?= e(rawurlencode($tidWahl)) ?><?= $listeWahl !== '' ? '&amp;meineliste=' . e(rawurlencode($listeWahl)) : '' ?>">Name</a>
-      </div>
-      <input type="search" class="filter-feld" placeholder="🔍 Getränk oder Weingut suchen …" data-ziel=".liste-scroll">
+      <input type="search" class="filter-feld" placeholder="🔍 Getränk, Weingut oder Traube suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php
-        // Bei aktiver Listen-Auswahl NUR die Getränke dieser Liste (ohne Tasting-Grenze)
-        $champagnerListe = $listeWahl !== ''
-          ? array_values(array_filter($daten['champagner'], fn($c) => in_array((string)$c['id'], $listeCids, true)
-                && ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)))
-          : ($tidWahl === '' ? [] : array_values(array_filter(
+        // Anregungen: ALLE Getränke der Datenbank – anonym, nur die aggregierte
+        // Wertung (Sterne + Anzahl), niemals einzelne Bewerter-Namen.
+        $champagnerListe = array_values(array_filter(
             $daten['champagner'],
             fn($c) => ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)
-                && ($tidWahl === 'alle' || champagnerInTasting($c, $tidWahl))
-        )));
+        ));
         if ($sortierung === 'name') {
             usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
+        } elseif ($sortierung === 'sterne') {
+            usort($champagnerListe, fn(array $x, array $y): int => (gesamtSchnitt(bewertungenFuer($daten, $y['id'])) ?? -1.0) <=> (gesamtSchnitt(bewertungenFuer($daten, $x['id'])) ?? -1.0));
         } else {
-            // Anlagedatum, neueste zuerst
             usort($champagnerListe, fn(array $x, array $y): int => ((int)$y['zeit']) <=> ((int)$x['zeit']));
         }
       ?>
@@ -8187,6 +8208,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           $wg          = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
           $meta        = [];
           if ($wg !== null) { $meta[] = $wg['name']; }
+          if (trim((string)($c['jahrgang'] ?? '')) !== '') { $meta[] = '📅 ' . (string)$c['jahrgang']; }
           if (trim((string)($c['rebsorte'] ?? '')) !== '') { $meta[] = (string)$c['rebsorte']; }
           if (trim((string)($c['preis'] ?? '')) !== '') { $meta[] = (string)$c['preis']; }
         ?>
@@ -8225,7 +8247,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
   <nav class="tab-leiste">
     <a href="./" class="<?= $bereich === 'verkosten' ? 'aktiv' : '' ?>"><span class="tab-icon">🥂</span>Verkosten</a>
-    <a href="?liste=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">📖</span>Logbuch</a>
+    <a href="?meine=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">📖</span>Logbuch</a>
+    <a href="?anregungen=1" class="<?= $bereich === 'anregungen' ? 'aktiv' : '' ?>"><span class="tab-icon">💡</span>Anregungen</a>
     <a href="?tasting=1" class="<?= $bereich === 'tasting' ? 'aktiv' : '' ?>"><span class="tab-icon">👥</span>Tasting</a>
   </nav>
 
@@ -8719,7 +8742,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       });
     })();
 
-    <?php if (in_array($ansicht, ['verkosten', 'werkstatt', 'tastingplatz', 'ergebnis', 'liste'], true)): ?>
+    <?php if (in_array($ansicht, ['verkosten', 'werkstatt', 'tastingplatz', 'ergebnis', 'anregungen'], true)): ?>
     // Live-Aktualisierung: alle 20 Sekunden im Hintergrund nachsehen, ob es
     // Neuigkeiten gibt (Beitritte, Bewertungen, „im Glas“) – dann neu laden.
     (function () {
