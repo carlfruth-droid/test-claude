@@ -7406,9 +7406,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <div class="wz-nav">
             <button type="button" class="knopf zweit" id="wz-zurueck" hidden>Zurück</button>
             <button type="button" class="knopf" id="wz-weiter">Weiter</button>
-            <button type="submit" class="knopf" id="wz-fertig" hidden>💾 Speichern</button>
           </div>
           <p class="abmelden" style="text-align:center;"><a href="#" id="wz-ueberspringen">Diesen Schritt überspringen</a></p>
+          <button type="submit" id="wz-fertig" hidden aria-hidden="true" style="display:none;"></button>
         </form>
 
         <script id="wz-vorbelegt" type="application/json"><?= json_encode([
@@ -9056,13 +9056,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         schritte.forEach(function (s) { s.hidden = parseInt(s.dataset.schritt, 10) !== n; });
         document.getElementById('wz-balken').style.width = Math.round(n / maxSchritt * 100) + '%';
         document.getElementById('wz-zurueck').hidden = n === 1;
-        document.getElementById('wz-weiter').hidden = n === maxSchritt;
-        document.getElementById('wz-fertig').hidden = n !== maxSchritt;
+        // Ein einziger Knopf: „Weiter“ wird im letzten Schritt zu „💾 Speichern“
+        document.getElementById('wz-weiter').textContent = n === maxSchritt ? '💾 Speichern' : 'Weiter';
         document.getElementById('wz-ueberspringen').parentNode.style.display = n === maxSchritt ? 'none' : '';
         if (n === maxSchritt) { vorschauZeichnen(); }
         window.scrollTo(0, 0);
       }
-      document.getElementById('wz-weiter').addEventListener('click', function () { if (aktiv < maxSchritt) { aktiv++; zeige(aktiv); } });
+      document.getElementById('wz-weiter').addEventListener('click', function () {
+        if (aktiv < maxSchritt) { aktiv++; zeige(aktiv); }
+        else { document.getElementById('wz-fertig').click(); } // löst das Absenden (mit allen Feldern) aus
+      });
       document.getElementById('wz-zurueck').addEventListener('click', function () { if (aktiv > 1) { aktiv--; zeige(aktiv); } });
       document.getElementById('wz-ueberspringen').addEventListener('click', function (e) { e.preventDefault(); if (aktiv < maxSchritt) { aktiv++; zeige(aktiv); } });
 
