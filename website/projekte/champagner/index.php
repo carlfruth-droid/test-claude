@@ -66,10 +66,14 @@ function kategorienFuer(string $typ, array $kategorien): array
         $kategorien['duft'] = ['Geruch', 'Wie angenehm und interessant riecht das Bier?'];
         $kategorien['perlage'] = ['Schaum & Rezenz', 'Wie sind Schaum und Kohlensäure?'];
         $kategorien['trinkfreude'] = ['Trinkfreude', 'Wie gerne würdest du noch eins bestellen?'];
+    } elseif ($typ === 'spirituose') {
+        $kategorien['duft'] = ['Nase', 'Wie ausdrucksstark und angenehm riecht sie? (ohne dass der Alkohol sticht)'];
+        $kategorien['perlage'] = ['Weichheit', 'Wie weich und rund (statt brennend) fühlt sie sich am Gaumen an?'];
+        $kategorien['trinkfreude'] = ['Trinkfreude', 'Wie gerne würdest du sie wieder trinken?'];
     } elseif ($typ === 'sonstiges') {
         $kategorien['duft'] = ['Geruch', 'Wie angenehm und interessant riecht es?'];
         $kategorien['perlage'] = ['Mundgefühl', 'Wie ist die Textur / das Mundgefühl?'];
-        $kategorien['trinkfreude'] = ['Trinkfreude', 'Wie gerne würdest du es wieder trinken?'];
+        $kategorien['trinkfreude'] = ['Genuss', 'Wie gerne würdest du es wieder genießen?'];
     }
     return $kategorien;
 }
@@ -202,6 +206,49 @@ function wizardSchritte(string $typ): array
         ];
     }
 
+    if ($typ === 'spirituose') {
+        return [
+            ['titel' => '👁 Das Auge', 'fragen' => [
+                ['frage' => 'Welche Farbe hat sie? (klar = ungelagert, dunkel = lange im Fass)', 'feld' => 'farbe', 'optionen' => [
+                    ['klar', '💧', 'Wasserhell/klar'], ['stroh', '🌾', 'Strohgelb'], ['gold', '✨', 'Goldgelb'], ['bernstein', '🟠', 'Bernstein'], ['mahagoni', '🟤', 'Mahagoni'],
+                ]],
+                ['frage' => 'Wie zäh läuft sie am Glas? (Schlieren = mehr Körper/Alkohol)', 'feld' => 'koerper', 'optionen' => [
+                    ['leicht', '🎈', 'Dünn/leicht'], ['mittel', '🌗', 'Mittel'], ['voll', '🫗', 'Ölig/schwer'],
+                ]],
+            ]],
+            ['titel' => '👃 Die Nase', 'fragen' => [
+                ['frage' => 'Riecht sie sauber? (der Alkohol soll nicht stechen)', 'feld' => 'sauber', 'optionen' => [
+                    ['ja', '✅', 'Sauber & offen'], ['kork', '🚫', 'Stechend/fehlerhaft'],
+                ]],
+                ['frage' => 'Welche Aromen erkennst du? <small>(mehrere)</small>', 'feld' => 'aromen', 'mehrfach' => true, 'block' => true, 'optionen' => [
+                    ['vanille', '🍦', 'Vanille'], ['karamell', '🍬', 'Karamell/Toffee'], ['honig', '🍯', 'Honig'],
+                    ['eiche', '🪵', 'Eiche/Holz'], ['rauch', '🔥', 'Rauch/Torf'], ['doerrobst', '🍑', 'Dörrobst/Rosine'],
+                    ['zitrus', '🍋', 'Zitrus'], ['gewuerz', '🌶️', 'Gewürze/Pfeffer'], ['nuss', '🥜', 'Nuss/Mandel'],
+                    ['schoko', '🍫', 'Schokolade/Kaffee'], ['kraeuter', '🌿', 'Kräuter/Botanicals'], ['frucht', '🍏', 'Frucht'],
+                    ['malz', '🌾', 'Malz/Getreide'], ['sherry', '🍷', 'Sherry/Fass'],
+                ]],
+                ['frage' => 'Wie gefällt dir die Nase?', 'feld' => 'duft', 'block' => true, 'optionen' => $smiley],
+            ]],
+            ['titel' => '👅 Der Mund', 'fragen' => [
+                ['frage' => 'Wie weich ist sie? (samtig = edel, brennend = jung/heftig)', 'feld' => 'perlage', 'optionen' => [
+                    ['fein', '🪶', 'Samtig & weich'], ['mittel', '🧤', 'Spürbar, passt'], ['grob', '🔥', 'Brennt/scharf'],
+                ]],
+                ['frage' => 'Wie ist der Körper?', 'feld' => 'koerper', 'optionen' => [
+                    ['leicht', '🎈', 'Leicht'], ['mittel', '🌗', 'Mittel'], ['voll', '💪', 'Voll & ölig'],
+                ]],
+                ['frage' => 'Wirkt alles ausgewogen? (Süße, Würze, Alkohol, Holz)', 'feld' => 'balance', 'optionen' => $balance],
+                ['frage' => 'Wie schmeckt sie dir insgesamt?', 'feld' => 'geschmack', 'optionen' => $smiley],
+            ]],
+            ['titel' => '⏱ Der Abgang', 'fragen' => [
+                ['frage' => 'Wie lange bleibt der Geschmack? Wärmt er angenehm nach?', 'feld' => 'abgang', 'optionen' => $abgang],
+                ['frage' => 'Hat sie Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
+                ['frage' => 'Noch ein Glas?', 'feld' => 'nochmal', 'optionen' => [
+                    ['sofort', '🥃', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
+                ]],
+            ]],
+        ];
+    }
+
     // Champagner (Standard) – exakt die bewährten Fragen und Antwort-Werte
     return [
         ['titel' => '👁 Das Auge', 'fragen' => [
@@ -248,16 +295,22 @@ function wizardSchritte(string $typ): array
 function sortenLabel(string $typ): string
 {
     return match ($typ) {
-        'bier'      => 'Sorte/Stil, z. B. Pils, IPA (optional)',
-        'sonstiges' => 'Sorte/Art, z. B. Whisky, Gin, Kaffee (optional)',
-        default     => 'Rebsorte, z. B. Chardonnay (optional)',
+        'bier'       => 'Sorte/Stil, z. B. Pils, IPA (optional)',
+        'spirituose' => 'Sorte, z. B. Whisky, Gin, Rum (optional)',
+        'sonstiges'  => 'Art, z. B. Käse, Schokolade, Kaffee (optional)',
+        default      => 'Rebsorte, z. B. Chardonnay (optional)',
     };
 }
 
-/** Beim Bier ist der Erzeuger eine Brauerei, sonst ein Weingut/Haus. */
+/** Erzeuger je Art: Brauerei (Bier), Brennerei (Spirituose), Hersteller (Delikatesse), sonst Weingut. */
 function erzeugerLabel(string $typ): string
 {
-    return $typ === 'bier' ? 'Brauerei' : 'Weingut';
+    return match ($typ) {
+        'bier'       => 'Brauerei',
+        'spirituose' => 'Brennerei',
+        'sonstiges'  => 'Hersteller',
+        default      => 'Weingut',
+    };
 }
 
 /**
@@ -325,6 +378,34 @@ function sortenVorschlaege(string $typ): array
             'Altbier'    => 'kupferfarben, obergärig – Düsseldorfs malzig-herbe Antwort',
             'Sauerbier'  => 'gezielt säuerlich (Gose, Berliner Weisse) – erfrischend, oft fruchtig',
         ],
+        'spirituose' => [
+            'Whisky'      => 'aus Getreide, im Fass gereift – Malz, Vanille, Holz, oft rauchig',
+            'Single Malt' => 'Whisky aus einer Brennerei, nur Gerstenmalz – vielschichtig',
+            'Bourbon'     => 'US-Whiskey aus Mais – süßlich, Vanille, Karamell',
+            'Gin'         => 'Neutralalkohol mit Botanicals – Wacholder, Zitrus, Kräuter',
+            'Rum'         => 'aus Zuckerrohr – von leicht-frisch bis dunkel und süß',
+            'Cognac'      => 'französischer Weinbrand – edel, Dörrobst, Blüten, Fass',
+            'Brandy'      => 'Weinbrand allgemein – wärmend, Frucht, Holz',
+            'Wodka'       => 'möglichst neutral – auf Reinheit und Weichheit achten',
+            'Tequila'     => 'aus blauer Agave – erdig-pfeffrig (Blanco) bis fassig (Añejo)',
+            'Mezcal'      => 'Agavenbrand, meist rauchig – erdig, würzig',
+            'Grappa'      => 'italienischer Tresterbrand – kräftig, fruchtig bis holzig',
+            'Obstbrand'   => 'Williams, Kirsch, Marille – klar, intensiv nach Frucht',
+            'Likör'       => 'süß, aromatisiert – Kräuter, Frucht, Sahne',
+            'Absinthe'    => 'hochprozentig, Anis und Wermut – kräuterbetont',
+        ],
+        'sonstiges' => [
+            'Käse'        => 'Aroma, Textur, Reife – von mild-cremig bis kräftig-würzig',
+            'Schokolade'  => 'Kakaoanteil, Schmelz, Bitterkeit und Frucht',
+            'Kaffee'      => 'Röstung, Säure, Körper – Frucht, Nuss, Schokolade',
+            'Tee'         => 'Sorte und Aufguss – blumig, grasig, malzig, rauchig',
+            'Olivenöl'    => 'fruchtig, bitter, scharf – frisch gepresst am besten',
+            'Honig'       => 'Blütenherkunft – von zart-blumig bis dunkel-malzig',
+            'Essig'       => 'Balsamico &amp; Co. – Süße, Säure, Komplexität',
+            'Wurst/Schinken' => 'Reife, Würze, Fett – Salz und Aroma im Gleichgewicht',
+            'Marmelade'   => 'Fruchtanteil, Süße, Frische',
+            'Sonstiges'   => 'alles andere Genussvolle',
+        ],
         default => [
             'Chardonnay'       => 'bringt Frische, Zitrus und Eleganz in den Champagner',
             'Pinot Noir'       => 'gibt Kraft, Struktur und rote Frucht',
@@ -342,7 +423,7 @@ function sortenVorschlaege(string $typ): array
 function sortenChips(string $zielId, string $aktiveKat): string
 {
     $html = '<div class="sorten-chips" data-ziel="' . e($zielId) . '">';
-    foreach (['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'] as $k) {
+    foreach (['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'] as $k) {
         $html .= '<div class="sorten-set" data-kat="' . $k . '"' . ($k === $aktiveKat ? '' : ' hidden') . '>';
         foreach (sortenVorschlaege($k) as $s => $info) {
             $html .= '<button type="button" class="sorte" data-info="' . e($info) . '">' . e($s) . '</button>';
@@ -1378,7 +1459,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 4);
         if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) { $jahrgang = ''; }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
@@ -1434,11 +1515,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vk = '';
         }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         // Was für ein Getränk das ist, erkennt die KI selbst vom Etikett
-        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
+        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = (string)$erkannt['typ'];
         }
 
@@ -1522,7 +1603,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 4);
         if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) { $jahrgang = ''; }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
@@ -1639,7 +1720,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $beschreibung = mb_substr(trim((string)($_POST['beschreibung'] ?? '')), 0, 1000);
         $kat = (string)($_POST['kat'] ?? '');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = '';
         }
         $neuesTasting = null; // null = Feld nicht mitgeschickt, '' = „ohne Tasting“
@@ -2090,7 +2171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $neueWgId = bin2hex(random_bytes(4));
                     $nName = $erkannt['name'];
                     $nReb = (string)($erkannt['rebsorte'] ?? '');
-                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)
+                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)
                         ? (string)$erkannt['typ'] : 'champagner';
                     datenAendern(function (array $d) use ($nName, $nReb, $nTyp, $weingutId, $weingutNeu, $neueId, $neueWgId, $tid, $mtime): array {
                         if ($weingutNeu !== '') {
@@ -3874,7 +3955,7 @@ function etikettErkennen(string $fotoName): array
             'role'    => 'user',
             'content' => [
                 ['type' => 'image', 'source' => ['type' => 'base64', 'media_type' => 'image/jpeg', 'data' => $bild]],
-                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche/-dose mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies GENAU den tatsächlich abgebildeten Text – erfinde nichts. Der Erzeuger/die Marke ist meist der größte, auffälligste Schriftzug (z. B. bei Bier die Brauerei wie „Augustiner“, „Paulaner“). Wenn du dir bei einem Feld nicht sicher bist, lass es leer statt zu raten. Antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut oder Brauerei), name die Bezeichnung des Getränks (mit Cuvée/Sorte und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil (nur wenn lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein oder bier.'],
+                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche/-dose mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies GENAU den tatsächlich abgebildeten Text – erfinde nichts. Der Erzeuger/die Marke ist meist der größte, auffälligste Schriftzug (z. B. bei Bier die Brauerei wie „Augustiner“, „Paulaner“). Wenn du dir bei einem Feld nicht sicher bist, lass es leer statt zu raten. Antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut, Brauerei oder Brennerei), name die Bezeichnung des Getränks (mit Cuvée/Sorte und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil bzw. bei Spirituosen die Art (nur wenn lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein, bier, spirituose (Whisky, Gin, Rum, Cognac, Likör …) oder sonstiges (andere Delikatessen).'],
             ],
         ]],
     ]);
@@ -4559,7 +4640,8 @@ $KATEGORIEN_GETRAENKE = [
     'rotwein'    => ['🍷', 'Rotwein', true],
     'weisswein'  => ['🥂', 'Weißwein', true],
     'bier'       => ['🍺', 'Bier', true],
-    'sonstiges'  => ['🥃', 'Sonstiges', true],
+    'spirituose' => ['🥃', 'Spirituose', true],
+    'sonstiges'  => ['🍽️', 'Delikatesse', true],
 ];
 // Anregungen (anonymer Katalog) startet mit ALLEN Kategorien; sonst Champagner.
 $kategorie = (string)($_GET['kat'] ?? ($ansicht === 'anregungen' ? 'alle' : 'champagner'));
@@ -8076,7 +8158,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             var kat = document.getElementById('neu-kat');
             if (!kat) { return; }
             kat.addEventListener('change', function () {
-              var label = kat.value === 'bier' ? 'Brauerei' : 'Weingut';
+              var label = kat.value === 'bier' ? 'Brauerei' : (kat.value === 'spirituose' ? 'Brennerei' : (kat.value === 'sonstiges' ? 'Hersteller' : 'Weingut'));
               var titel = document.getElementById('neu-erzeuger-titel');
               if (titel) { titel.textContent = label; }
               var feld = document.getElementById('neu-erzeuger-feld');
@@ -8731,6 +8813,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <button type="button" data-art="rotwein">🍷 Rotwein</button>
         <button type="button" data-art="weisswein">🥂 Weißwein</button>
         <button type="button" data-art="bier">🍺 Bier</button>
+        <button type="button" data-art="spirituose">🥃 Spirituose</button>
+        <button type="button" data-art="sonstiges">🍽️ Delikatesse</button>
       </div>
 
       <div class="anleitung anleitung-teil" data-art="champagner">
@@ -8780,6 +8864,32 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <h3>⏱ Der Abgang</h3>
         <p>Bleibt die Bitterkeit angenehm oder wird sie kratzig? Trocknet der Mund oder will er den nächsten Schluck? <b>Noch eins bestellen?</b></p>
         <p style="color:var(--muted);">Die geführte Bewertung für Bier folgt bald – verkosten und Notizen machen geht schon jetzt. 🍺</p>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="spirituose" hidden>
+        <p>Spirituosen genießt man in kleinen Schlucken – am besten aus einem tulpenförmigen Glas, pur oder mit ein paar Tropfen Wasser (das öffnet die Aromen).</p>
+        <h3>👁 Das Auge</h3>
+        <p><b>Farbe:</b> wasserhell = ungelagert (Gin, Wodka, junger Rum), Gold bis Mahagoni = Zeit im Fass. <b>Schlieren</b> („Kirchenfenster“), die langsam am Glas herunterlaufen, deuten auf Körper und Alkohol.</p>
+        <h3>👃 Die Nase</h3>
+        <p>Vorsichtig und mit leicht geöffnetem Mund schnuppern – so sticht der Alkohol nicht. <b>Aromen:</b> Vanille, Karamell und Eiche kommen vom Fass, Rauch/Torf vom Malz, dazu Dörrobst, Gewürze, Zitrus oder Kräuter (Gin). Ein paar Tropfen Wasser lohnen sich.</p>
+        <h3>👅 Der Mund</h3>
+        <p>Kleinen Schluck kurz im Mund halten. <b>Weichheit:</b> samtig und rund ist edel, scharfes Brennen wirkt jung/heftig. <b>Körper:</b> leicht oder ölig-schwer? <b>Balance:</b> Süße, Würze, Holz und Alkohol im Einklang?</p>
+        <h3>⏱ Der Abgang</h3>
+        <p>Wie lange klingt der Geschmack nach, wärmt er angenehm? Hat die Spirituose <b>Charakter</b>? Und ehrlich: <b>Noch ein Glas?</b></p>
+        <p style="color:var(--muted);">Am Ende rechnet die App aus deinen Antworten eine Sterne-Wertung – anpassen kannst du sie jederzeit. 🥃</p>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="sonstiges" hidden>
+        <p>Ob Käse, Schokolade, Kaffee, Öl oder Honig – auch Delikatessen lassen sich mit allen Sinnen verkosten. Geh der Reihe nach vor.</p>
+        <h3>👁 Das Auge</h3>
+        <p>Schau dir Farbe, Glanz und Oberfläche an – wirkt es frisch und appetitlich? Bei Schokolade zählt der Bruch, bei Käse der Teig, bei Öl die Farbe.</p>
+        <h3>👃 Der Geruch</h3>
+        <p>Riech in Ruhe: frisch und einladend oder streng? <b>Aromen:</b> je nach Produkt fruchtig, nussig, röstig, würzig, blumig oder erdig. Ein Fehlton (ranzig, muffig) zieht die Wertung nach unten.</p>
+        <h3>👅 Der Mund</h3>
+        <p>Kleine Menge, langsam auf der Zunge zergehen lassen. <b>Textur/Mundgefühl:</b> cremig, knackig, schmelzend, körnig? <b>Balance:</b> Süße, Salz, Säure, Bitterkeit im Gleichgewicht?</p>
+        <h3>⏱ Der Nachklang</h3>
+        <p>Wie lange bleibt der Geschmack angenehm? Hat es <b>Charakter</b> und Wiedererkennungswert? Und: <b>Würdest du es wieder genießen?</b></p>
+        <p style="color:var(--muted);">Am Ende rechnet die App aus deinen Antworten eine Sterne-Wertung – anpassen kannst du sie jederzeit. 🍽️</p>
       </div>
     </div>
   </div>
@@ -9005,8 +9115,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $anleitungArt = in_array($ansicht, ['bewerten', 'ergebnis'], true) && $aktiverChampagner !== null
             ? (string)($aktiverChampagner['typ'] ?? 'champagner')
             : $kategorie;
-        // Für „Sonstiges“ (und Unbekanntes) die allgemeine Champagner-Anleitung
-        if (!in_array($anleitungArt, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+        // Unbekannte Arten bekommen die allgemeine Champagner-Anleitung
+        if (!in_array($anleitungArt, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
             $anleitungArt = 'champagner';
         }
       ?>
@@ -9106,7 +9216,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       if (katWahl) {
         katWahl.addEventListener('change', function () {
           box.querySelectorAll('.sorten-set').forEach(function (s) { s.hidden = s.dataset.kat !== katWahl.value; });
-          ziel.placeholder = katWahl.value === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
+          var phMap = { bier: 'Sorte/Stil, z. B. Pils, IPA (optional)', spirituose: 'Sorte, z. B. Whisky, Gin, Rum (optional)', sonstiges: 'Art, z. B. Käse, Schokolade, Kaffee (optional)' };
+          ziel.placeholder = phMap[katWahl.value] || 'Rebsorte, z. B. Chardonnay (optional)';
         });
       }
       markiere();
