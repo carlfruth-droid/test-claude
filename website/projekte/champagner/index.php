@@ -702,6 +702,37 @@ function blindEintraege(array $daten): array
     ));
 }
 
+/**
+ * 🏆 Punktestand aus Blind-Bewertungen (Fragen mit richtiger Antwort):
+ * person => ['punkte' => richtig beantwortete, 'gesamt' => gewertete Fragen],
+ * absteigend nach Punkten sortiert. $cids = Getränke, die zählen sollen.
+ */
+function blindPunkte(array $daten, array $cids): array
+{
+    $stand = [];
+    foreach ($daten['bewertungen'] as $b) {
+        if (empty($b['blind']) || !in_array((string)$b['champagner_id'], $cids, true)) {
+            continue;
+        }
+        foreach ((is_array($b['blind_antworten'] ?? null) ? $b['blind_antworten'] : []) as $ba) {
+            if (!array_key_exists('korrekt', $ba)) {
+                continue; // Frage ohne definierte richtige Antwort → keine Punkte
+            }
+            $p = trim((string)$b['person']);
+            if ($p === '') {
+                $p = 'Unbekannt';
+            }
+            $stand[$p] ??= ['punkte' => 0, 'gesamt' => 0];
+            $stand[$p]['gesamt']++;
+            if (!empty($ba['korrekt'])) {
+                $stand[$p]['punkte']++;
+            }
+        }
+    }
+    uasort($stand, fn($x, $y) => ($y['punkte'] <=> $x['punkte']) ?: ($x['gesamt'] <=> $y['gesamt']));
+    return $stand;
+}
+
 /** Ein Blind-Etikett per Token finden (unabhängig vom Konto – für die anonyme Seite). */
 function blindEintragZuToken(array $daten, string $token): ?array
 {
@@ -1831,19 +1862,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!in_array($fTyp, ['janein', 'freitext', 'auswahl'], true)) {
                 $fTyp = 'janein';
             }
-            $frage = ['text' => $fText, 'typ' => $fTyp];
+            $frage = ['text' => $fText, 'typ' => $fTyp, 'richtig' => ''];
             if ($fTyp === 'auswahl') {
-                // Antwort-Optionen: mit Komma getrennt, mind. 2, sonst wird es Freitext
-                $roh = array_filter(array_map(
-                    fn($o) => mb_substr(trim($o), 0, 60),
-                    explode(',', (string)($_POST['frage_optionen_' . $i] ?? ''))
-                ), fn($o) => $o !== '');
+                // Antwort-Optionen: mit Komma getrennt, mind. 2, sonst wird es Freitext.
+                // Ein * vor einer Option markiert sie als RICHTIGE Antwort (gibt Punkte).
+                $richtig = '';
+                $roh = [];
+                foreach (explode(',', (string)($_POST['frage_optionen_' . $i] ?? '')) as $o) {
+                    $o = trim($o);
+                    $istRichtig = str_starts_with($o, '*');
+                    $o = mb_substr(trim(ltrim($o, '*')), 0, 60);
+                    if ($o === '') {
+                        continue;
+                    }
+                    $roh[] = $o;
+                    if ($istRichtig && $richtig === '') {
+                        $richtig = $o;
+                    }
+                }
                 $optionen = array_slice(array_values(array_unique($roh)), 0, 10);
                 if (count($optionen) >= 2) {
                     $frage['optionen'] = $optionen;
+                    $frage['richtig'] = in_array($richtig, $optionen, true) ? $richtig : '';
                 } else {
                     $frage['typ'] = 'freitext';
                 }
+            } elseif ($fTyp === 'janein') {
+                $ri = (string)($_POST['frage_richtig_' . $i] ?? '');
+                $frage['richtig'] = in_array($ri, ['Ja', 'Nein'], true) ? $ri : '';
             }
             $fragen[] = $frage;
         }
@@ -3314,7 +3360,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($bfTyp === 'janein' && !in_array($aw, ['Ja', 'Nein'], true)) {
                     continue;
                 }
-                $blindAntworten[] = ['frage' => (string)($bf['text'] ?? ''), 'typ' => $bfTyp, 'antwort' => $aw];
+                $antwortEintrag = ['frage' => (string)($bf['text'] ?? ''), 'typ' => $bfTyp, 'antwort' => $aw];
+                // Punktewertung: hat die Frage eine RICHTIGE Antwort, wird verglichen
+                $richtig = (string)($bf['richtig'] ?? '');
+                if ($richtig !== '') {
+                    $antwortEintrag['korrekt'] = ($aw === $richtig);
+                }
+                $blindAntworten[] = $antwortEintrag;
             }
         }
         // Betrachter (Viewer) dürfen im Tasting nicht bewerten – Gäste per QR schon.
@@ -6312,6 +6364,20 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php else: ?>
           <p class="anzahl" style="font-style:italic;">Noch keine Bestellungen abgegeben.</p>
         <?php endif; ?>
+        <?php
+          // 🏆 Blind-Ergebnisliste übers ganze Tasting: Punkte aus allen
+          // Blindproben der hier enthaltenen Getränke
+          $blindStandTasting = blindPunkte($daten, array_map(fn($c) => (string)$c['id'], $vtWeine));
+        ?>
+        <?php if ($blindStandTasting !== []): ?>
+          <h3 style="margin:1rem 0 0.3rem; font-size:1rem;">🏆 Blind-Ergebnisliste (alle Blindproben dieses Tastings)</h3>
+          <?php $platz = 0; foreach ($blindStandTasting as $bsName => $bs): $platz++; ?>
+            <div class="ergebnis-kategorie">
+              <span><?= ['🥇', '🥈', '🥉'][$platz - 1] ?? $platz . '.' ?> <b><?= e($bsName) ?></b></span>
+              <span><b><?= (int)$bs['punkte'] ?></b> / <?= (int)$bs['gesamt'] ?> richtig</span>
+            </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
       </div>
 
       <div class="card">
@@ -8033,10 +8099,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     if (is_array($b['detail'] ?? null)) {
                         $detailZeilen = detailLesbar($typAktiv, $b['detail']);
                     }
-                    // Antworten auf die Gastgeber-Fragen der Blindprobe
+                    // Antworten auf die Gastgeber-Fragen der Blindprobe (mit ✅/❌ bei Punktefragen)
                     foreach ((is_array($b['blind_antworten'] ?? null) ? $b['blind_antworten'] : []) as $ba) {
                         $awTxt = (string)($ba['antwort'] ?? '');
-                        $detailZeilen[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt))];
+                        $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
+                        $detailZeilen[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
                     }
                 }
               ?>
@@ -8087,7 +8154,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     $mvDetail = is_array($mv['detail'] ?? null) ? detailLesbar($typAktiv, $mv['detail']) : [];
                     foreach ((is_array($mv['blind_antworten'] ?? null) ? $mv['blind_antworten'] : []) as $ba) {
                         $awTxt = (string)($ba['antwort'] ?? '');
-                        $mvDetail[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt))];
+                        $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
+                        $mvDetail[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
                     }
                   ?>
                   <?php if ($mvDetail !== []): ?>
@@ -8316,7 +8384,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <input type="text" name="label" placeholder="Kennung, z. B. A" maxlength="24" required>
                 <details class="unterkarte" style="margin:0.5rem 0;">
                   <summary>❓ Bis zu 5 eigene Fragen an die Verkoster (optional)</summary>
-                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein, Freitext oder Auswahl (eigenes Dropdown).</p>
+                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein, Freitext oder Auswahl (eigenes Dropdown). Markierst du eine <b>richtige Antwort</b>, sammeln die Verkoster Punkte und du bekommst eine 🏆 Ergebnisliste.</p>
                   <?php for ($fi = 1; $fi <= 5; $fi++): ?>
                     <div style="margin-bottom:0.55rem;">
                       <div style="display:flex; gap:0.4rem;">
@@ -8327,14 +8395,21 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                           <option value="auswahl">Auswahl</option>
                         </select>
                       </div>
-                      <input type="text" name="frage_optionen_<?= $fi ?>" id="frage-optionen-<?= $fi ?>" placeholder="Antwort-Optionen, mit Komma getrennt – z. B. zu jung, genau richtig, zu reif" maxlength="400" style="margin:0.3rem 0 0;" hidden>
+                      <input type="text" name="frage_optionen_<?= $fi ?>" id="frage-optionen-<?= $fi ?>" placeholder="Optionen mit Komma trennen – * markiert die richtige, z. B. zu jung, *genau richtig, zu reif" maxlength="400" style="margin:0.3rem 0 0;" hidden>
+                      <select name="frage_richtig_<?= $fi ?>" id="frage-richtig-<?= $fi ?>" style="width:auto; margin:0.3rem 0 0;">
+                        <option value="">Richtige Antwort: keine (keine Punkte)</option>
+                        <option value="Ja">Richtige Antwort: 👍 Ja</option>
+                        <option value="Nein">Richtige Antwort: 👎 Nein</option>
+                      </select>
                     </div>
                   <?php endfor; ?>
                   <script>
                     document.querySelectorAll('.frage-typ').forEach(function (s) {
                       s.addEventListener('change', function () {
-                        var f = document.getElementById('frage-optionen-' + s.dataset.nr);
-                        if (f) { f.hidden = s.value !== 'auswahl'; }
+                        var opt = document.getElementById('frage-optionen-' + s.dataset.nr);
+                        var ri = document.getElementById('frage-richtig-' + s.dataset.nr);
+                        if (opt) { opt.hidden = s.value !== 'auswahl'; }
+                        if (ri) { ri.hidden = s.value !== 'janein'; }
                       });
                     });
                   </script>
@@ -8361,6 +8436,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
               <?php if ($blindDieses !== []): ?>
                 <a class="knopf" href="?blindetiketten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>" style="margin-top:0.7rem; display:inline-block;">🖨️ Etiketten dieses Getränks drucken / als PDF</a>
+              <?php endif; ?>
+              <?php $blindStand = blindPunkte($daten, [(string)$aktiverChampagner['id']]); ?>
+              <?php if ($blindStand !== []): ?>
+                <h3 style="margin:1rem 0 0.3rem; font-size:1rem;">🏆 Ergebnisliste dieses Getränks</h3>
+                <?php $platz = 0; foreach ($blindStand as $bsName => $bs): $platz++; ?>
+                  <div class="ergebnis-kategorie">
+                    <span><?= ['🥇', '🥈', '🥉'][$platz - 1] ?? $platz . '.' ?> <b><?= e($bsName) ?></b></span>
+                    <span><b><?= (int)$bs['punkte'] ?></b> / <?= (int)$bs['gesamt'] ?> richtig</span>
+                  </div>
+                <?php endforeach; ?>
               <?php endif; ?>
             </div>
         <?php endif; ?>
