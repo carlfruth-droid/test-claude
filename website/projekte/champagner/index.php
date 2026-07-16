@@ -2941,14 +2941,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?verwaltung=1&ok=' . rawurlencode('Benutzer „' . $vorname . '“ angelegt' . ($darfTasting ? ' – darf Tastings anlegen.' : '.')));
         }
 
+        // Von der Benutzer-Detailseite aus soll man dorthin zurückkehren
+        $bZiel = preg_match('/^[a-z0-9_-]{4,32}$/i', (string)($_POST['id'] ?? '')) && ($_POST['von_detail'] ?? '') === '1'
+            ? '?vbenutzer=' . rawurlencode((string)$_POST['id'])
+            : '?verwaltung=1';
+
         if ($aktion === 'benutzer_rechte') {
             $bid = (string)($_POST['id'] ?? '');
             $feld = (string)($_POST['feld'] ?? '');
             if (!in_array($feld, ['darf_tasting', 'admin'], true)) {
-                zurueck('?verwaltung=1');
+                zurueck($bZiel);
             }
             if ($feld === 'admin' && $bid === (string)$admin['id']) {
-                zurueck('?verwaltung=1&fehler=' . rawurlencode('Du kannst dir nicht selbst die Admin-Rechte entziehen.'));
+                zurueck($bZiel . '&fehler=' . rawurlencode('Du kannst dir nicht selbst die Admin-Rechte entziehen.'));
             }
             datenAendern(function (array $d) use ($bid, $feld): array {
                 foreach ($d['benutzer'] as &$b) {
@@ -2959,14 +2964,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 unset($b);
                 return $d;
             });
-            zurueck('?verwaltung=1&ok=' . rawurlencode('Rechte aktualisiert.'));
+            zurueck($bZiel . '&ok=' . rawurlencode('Rechte aktualisiert.'));
         }
 
         if ($aktion === 'benutzer_passwort') {
             $bid = (string)($_POST['id'] ?? '');
             $pw = (string)($_POST['passwort'] ?? '');
             if (mb_strlen($pw) < 6) {
-                zurueck('?verwaltung=1&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
+                zurueck($bZiel . '&fehler=' . rawurlencode('Das neue Passwort braucht mindestens 6 Zeichen.'));
             }
             $hash = password_hash($pw, PASSWORD_DEFAULT);
             datenAendern(function (array $d) use ($bid, $hash): array {
@@ -2978,7 +2983,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 unset($b);
                 return $d;
             });
-            zurueck('?verwaltung=1&ok=' . rawurlencode('Passwort neu gesetzt.'));
+            zurueck($bZiel . '&ok=' . rawurlencode('Passwort neu gesetzt.'));
         }
 
         if ($aktion === 'benutzer_loeschen') {
@@ -4467,6 +4472,52 @@ function champagnerHolen(array $daten, string $id): ?array
  * Leitet aus den geführten Detail-Antworten die 8 Kategorie-Sterne (1–5) ab.
  * Muss deckungsgleich mit der JS-Vorschau (sterneAusDetailJS) sein.
  */
+/**
+ * Detail-Antworten einer Bewertung lesbar machen: die im Wizard gespeicherten
+ * Kürzel (z. B. farbe=purpur) werden über die Wizard-Optionen in die
+ * angezeigten Antworten übersetzt. Liefert [ [Titel, Antwort-HTML], … ].
+ */
+function detailLesbar(string $typ, array $detail): array
+{
+    global $KATEGORIEN;
+    static $cache = [];
+    if (!isset($cache[$typ])) {
+        $felder = [];
+        foreach (wizardSchritte($typ) as $schritt) {
+            foreach ($schritt['fragen'] as $f) {
+                $optionen = [];
+                foreach ($f['optionen'] as [$wert, $emoji, $label]) {
+                    $optionen[$wert] = $emoji . ' ' . $label;
+                }
+                $felder[(string)$f['feld']] = $optionen;
+            }
+        }
+        $cache[$typ] = $felder;
+    }
+    $titel = [
+        'farbe' => 'Farbe', 'tiefe' => 'Farbtiefe', 'sauber' => 'Sauber?', 'aromen' => 'Aromen',
+        'duft' => (kategorienFuer($typ, $KATEGORIEN)['duft'][0] ?? 'Duft'),
+        'perlage' => (kategorienFuer($typ, $KATEGORIEN)['perlage'][0] ?? 'Perlage'),
+        'saeure' => 'Säure', 'mousse' => 'Mousse', 'koerper' => 'Körper', 'suesse' => 'Süße',
+        'antrunk' => 'Antrunk', 'balance' => 'Balance', 'geschmack' => 'Geschmack',
+        'abgang' => 'Abgang', 'charakter' => 'Charakter', 'nochmal' => 'Noch ein Glas?',
+    ];
+    $zeilen = [];
+    foreach ($cache[$typ] as $feld => $optionen) {
+        $wert = $detail[$feld] ?? null;
+        if ($wert === null || $wert === '' || $wert === []) {
+            continue;
+        }
+        if (is_array($wert)) {
+            $labels = array_map(fn($w) => $optionen[(string)$w] ?? e((string)$w), $wert);
+            $zeilen[] = [$titel[$feld] ?? ucfirst($feld), implode(', ', $labels)];
+        } else {
+            $zeilen[] = [$titel[$feld] ?? ucfirst($feld), $optionen[(string)$wert] ?? e((string)$wert)];
+        }
+    }
+    return $zeilen;
+}
+
 function sterneAusDetail(array $d): array
 {
     $smiley = ['top' => 5, 'gut' => 4, 'ok' => 3, 'geht' => 2];
@@ -4614,6 +4665,15 @@ if (isset($_GET['blind'])) {
     $ansicht = 'beitreten';
 } elseif (isset($_GET['verwaltung'])) {
     $ansicht = 'verwaltung';
+} elseif (isset($_GET['vbenutzer'])) {
+    // Benutzer-Detailseite (nur App-Admin): Rechte, Eigentum, Bewertungen
+    $ansicht = 'vbenutzer';
+    $verwBenutzer = null;
+    if ($istAdmin) {
+        foreach ($daten['benutzer'] as $b) {
+            if ((string)$b['id'] === (string)$_GET['vbenutzer']) { $verwBenutzer = $b; break; }
+        }
+    }
 } elseif (isset($_GET['tverwaltung'])) {
     // Verwaltung EINES Tastings (Einladungen, Teilnehmer/Rollen, Titel, löschen)
     $ansicht = 'tverwaltung';
@@ -4960,6 +5020,14 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     details.unterkarte > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
     details.unterkarte > summary::-webkit-details-marker { display: none; }
     .log-aktionen { display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; padding: 0 0.7rem 0.6rem; }
+    details.detail-antworten { margin: 0.15rem 0 0.7rem; }
+    details.detail-antworten > summary { cursor: pointer; color: var(--accent); font-size: 0.88rem; list-style: none; }
+    details.detail-antworten > summary::-webkit-details-marker { display: none; }
+    .detail-tabelle { margin-top: 0.35rem; border: 1px solid var(--border); border-radius: 10px; padding: 0.35rem 0.6rem; background: var(--bg); }
+    .detail-zeile { display: flex; gap: 0.7rem; padding: 0.28rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+    .detail-zeile:last-child { border-bottom: none; }
+    .detail-zeile .dt { flex: 0 0 7.5rem; color: var(--muted); }
+    .detail-zeile .dw { flex: 1; min-width: 0; }
     /* Blind-Etiketten zum Ausdrucken */
     .druck-kopf { text-align: center; margin-bottom: 1rem; }
     .etikett-blatt { display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center; margin-bottom: 1.4rem; padding-bottom: 1.2rem; border-bottom: 1px dashed var(--border); }
@@ -5359,6 +5427,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'blindetiketten'): ?>
       <h1>Blind-Etiketten 🕶️</h1>
       <p class="untertitel">QR-Etiketten für Blindverkostungen – ausdrucken und aufkleben.</p>
+    <?php elseif ($ansicht === 'vbenutzer'): ?>
+      <p class="zurueck"><a href="?verwaltung=1">&larr; Zur Verwaltung</a></p>
+      <h1>Benutzer 🛡️</h1>
+      <p class="untertitel">Rechte, Eigentum und Bewertungen dieses Benutzers.</p>
     <?php elseif ($ansicht === 'blinddanke'): ?>
       <h1>Blindprobe 🕶️</h1>
       <p class="untertitel">Danke fürs Mitmachen!</p>
@@ -6415,6 +6487,134 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <?php endif; ?>
 
+    <?php elseif ($ansicht === 'vbenutzer'): ?>
+      <!-- ==================== BENUTZER-DETAIL (nur App-Admin): Rechte, Eigentum, Bewertungen ==================== -->
+      <?php if (($verwBenutzer ?? null) === null): ?>
+        <div class="card"><p>Benutzer nicht gefunden – oder diese Seite ist nur für den App-Administrator.</p></div>
+      <?php else: ?>
+        <?php
+          $vb = $verwBenutzer;
+          $vbId = (string)$vb['id'];
+          $vbAnzeige = trim((string)($vb['alias'] ?? '')) !== '' ? (string)$vb['alias'] : trim((string)($vb['vorname'] ?? '') . ' ' . (string)($vb['name'] ?? ''));
+          // Alle Namen des Benutzers – darüber werden seine Bewertungen gefunden
+          $vbNamen = [];
+          foreach (['alias', 'vorname', 'name'] as $f) {
+              $w = mb_strtolower(trim((string)($vb[$f] ?? '')));
+              if ($w !== '') { $vbNamen[$w] = true; }
+          }
+          $tastingTitelListe = [];
+          foreach ($daten['tastings'] as $t) { $tastingTitelListe[$t['id']] = $t['titel']; }
+          // Eigentum: Tastings (als Besitzer oder mit Owner-Rolle) und Getränke (als Anleger)
+          $vbTastings = [];
+          foreach ($daten['tastings'] as $t) {
+              if ((string)($t['besitzer'] ?? '') === $vbId) { $vbTastings[$t['id']] = $t; continue; }
+              foreach (($t['teilnehmer'] ?? []) as $p) {
+                  if ((string)($p['rolle'] ?? 'tester') === 'admin' && isset($vbNamen[mb_strtolower(trim((string)$p['name']))])) {
+                      $vbTastings[$t['id']] = $t;
+                      break;
+                  }
+              }
+          }
+          $vbGetraenke = array_values(array_filter($daten['champagner'], fn($c) => (string)($c['besitzer'] ?? '') === $vbId));
+          $vbBewertungen = [];
+          foreach ($daten['bewertungen'] as $bw) {
+              if (isset($vbNamen[mb_strtolower(trim((string)$bw['person']))])) { $vbBewertungen[] = $bw; }
+          }
+          usort($vbBewertungen, fn($x, $y) => ((int)($y['zeit'] ?? 0)) <=> ((int)($x['zeit'] ?? 0)));
+        ?>
+        <div class="card">
+          <h2>👤 <?= e($vbAnzeige) ?></h2>
+          <p class="anzahl" style="margin-bottom:0.7rem;">
+            <?= e(trim((string)($vb['vorname'] ?? '') . ' ' . (string)($vb['name'] ?? ''))) ?> · <?= e((string)($vb['email'] ?? '')) ?><br>
+            Konto-ID <?= e($vbId) ?> · angelegt am <?= date('d.m.Y', (int)($vb['zeit'] ?? 0)) ?>
+          </p>
+          <p style="margin-bottom:0.7rem;">
+            <?php if (!empty($vb['admin'])): ?><span class="bewerter-chip">🛡️ App-Administrator</span><?php endif; ?>
+            <?php if (!empty($vb['darf_tasting'])): ?><span class="bewerter-chip">✅ große Tastings (unbegrenzt Personen)</span><?php else: ?><span class="bewerter-chip offen">⏳ Tastings bis 2 Personen</span><?php endif; ?>
+          </p>
+          <div class="knopfreihe" style="align-items:center;">
+            <form method="post" style="display:inline;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="benutzer_rechte">
+              <input type="hidden" name="id" value="<?= e($vbId) ?>">
+              <input type="hidden" name="von_detail" value="1">
+              <input type="hidden" name="feld" value="darf_tasting">
+              <button class="knopf klein zweit" type="submit"><?= !empty($vb['darf_tasting']) ? 'Auf 2 Personen begrenzen' : 'Große Tastings erlauben' ?></button>
+            </form>
+            <?php if ($vbId !== (string)$benutzerAktiv['id']): ?>
+              <form method="post" style="display:inline;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="benutzer_rechte">
+                <input type="hidden" name="id" value="<?= e($vbId) ?>">
+                <input type="hidden" name="von_detail" value="1">
+                <input type="hidden" name="feld" value="admin">
+                <button class="knopf klein zweit" type="submit"><?= !empty($vb['admin']) ? 'App-Admin entziehen' : 'Zum App-Admin machen' ?></button>
+              </form>
+              <form method="post" style="display:inline;" onsubmit="return confirm('Benutzer <?= e($vbAnzeige) ?> wirklich löschen?');">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="benutzer_loeschen">
+                <input type="hidden" name="id" value="<?= e($vbId) ?>">
+                <button class="loeschen" type="submit">Benutzer löschen</button>
+              </form>
+            <?php endif; ?>
+          </div>
+          <form method="post" style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="benutzer_passwort">
+            <input type="hidden" name="id" value="<?= e($vbId) ?>">
+            <input type="hidden" name="von_detail" value="1">
+            <input type="password" name="passwort" placeholder="Neues Passwort setzen" minlength="6" style="margin-bottom:0; flex:1;" required>
+            <button class="knopf klein zweit" type="submit">Setzen</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>👥 Owner von Tastings (<?= count($vbTastings) ?>)</h2>
+          <?php if ($vbTastings === []): ?>
+            <p style="color:var(--muted); font-style:italic;">Keine Tastings.</p>
+          <?php endif; ?>
+          <?php foreach ($vbTastings as $t): ?>
+            <div class="ergebnis-kategorie">
+              <span><a href="?tasting=<?= e(rawurlencode($t['id'])) ?>">👥 <?= e($t['titel']) ?></a></span>
+              <span class="anzahl"><?= count($t['teilnehmer'] ?? []) ?> Teilnehmer · <?= date('d.m.Y', (int)($t['zeit'] ?? 0)) ?></span>
+            </div>
+          <?php endforeach; ?>
+        </div>
+
+        <div class="card">
+          <h2>🍾 Owner von Getränken (<?= count($vbGetraenke) ?>)</h2>
+          <?php if ($vbGetraenke === []): ?>
+            <p style="color:var(--muted); font-style:italic;">Keine selbst angelegten Getränke. <span class="anzahl">(Getränke, die vor der Owner-Umstellung angelegt wurden, tragen noch keinen Anleger.)</span></p>
+          <?php endif; ?>
+          <?php foreach ($vbGetraenke as $c): ?>
+            <div class="ergebnis-kategorie">
+              <span><a href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?> <?= e($c['name']) ?></a></span>
+              <span class="anzahl"><?= e($tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? 'ohne Tasting') ?></span>
+            </div>
+          <?php endforeach; ?>
+        </div>
+
+        <div class="card">
+          <h2>⭐ Bewertungen (<?= count($vbBewertungen) ?>)</h2>
+          <?php if ($vbBewertungen === []): ?>
+            <p style="color:var(--muted); font-style:italic;">Noch keine Bewertungen.</p>
+          <?php endif; ?>
+          <?php foreach ($vbBewertungen as $bw): ?>
+            <?php
+              $bwC = champagnerHolen($daten, (string)$bw['champagner_id']);
+              if ($bwC === null) { continue; }
+              $bwSumme = 0; $bwAnz = 0;
+              foreach (($bw['werte'] ?? []) as $w) { $bwSumme += (int)$w; $bwAnz++; }
+            ?>
+            <div class="ergebnis-kategorie">
+              <span><a href="?ergebnis=<?= e(rawurlencode($bwC['id'])) ?>"><?= e($bwC['name']) ?></a>
+                <span class="anzahl"><?= date('d.m.Y', (int)($bw['zeit'] ?? 0)) ?><?= !empty($bw['blind']) ? ' · 🕶️ blind' : '' ?></span></span>
+              <?= sterneAnzeige($bwAnz > 0 ? $bwSumme / $bwAnz : null) ?>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+
     <?php elseif ($ansicht === 'verwaltung'): ?>
       <!-- ==================== VERWALTUNG (nur Admin) ==================== -->
       <?php if ($benutzerAktiv === null || empty($benutzerAktiv['admin'])): ?>
@@ -6454,46 +6654,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
         <details class="card" open>
           <summary>🛡️ Benutzer (<?= count($daten['benutzer']) ?>)</summary>
+          <p class="anzahl" style="margin:0.5rem 0 0.3rem;">Antippen zum Bearbeiten: Rechte, Passwort, Eigentum und Bewertungen.</p>
           <?php foreach ($daten['benutzer'] as $b): ?>
-            <div style="border-bottom:1px solid var(--border); padding:0.6rem 0;">
-              <p><b><?= e(trim((string)($b['vorname'] ?? '') . ' ' . (string)($b['name'] ?? ''))) ?></b>
-                <span class="anzahl"><?= e((string)($b['email'] ?? '')) ?></span></p>
-              <p style="margin:0.3rem 0;">
-                <?php if (!empty($b['admin'])): ?><span class="bewerter-chip">🛡️ Admin</span><?php endif; ?>
-                <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅ große Tastings (unbegrenzt Personen)</span><?php else: ?><span class="bewerter-chip offen">⏳ Tastings bis 2 Personen</span><?php endif; ?>
-              </p>
-              <div class="knopfreihe" style="align-items:center;">
-                <form method="post" style="display:inline;">
-                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                  <input type="hidden" name="aktion" value="benutzer_rechte">
-                  <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                  <input type="hidden" name="feld" value="darf_tasting">
-                  <button class="knopf klein zweit" type="submit"><?= !empty($b['darf_tasting']) ? 'Auf 2 Personen begrenzen' : 'Große Tastings erlauben' ?></button>
-                </form>
-                <?php if ($b['id'] !== $benutzerAktiv['id']): ?>
-                  <form method="post" style="display:inline;">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="benutzer_rechte">
-                    <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                    <input type="hidden" name="feld" value="admin">
-                    <button class="knopf klein zweit" type="submit"><?= !empty($b['admin']) ? 'Admin entziehen' : 'Zum Admin machen' ?></button>
-                  </form>
-                  <form method="post" style="display:inline;" onsubmit="return confirm('Benutzer <?= e($b['vorname'] ?? '') ?> wirklich löschen?');">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="benutzer_loeschen">
-                    <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                    <button class="loeschen" type="submit">löschen</button>
-                  </form>
-                <?php endif; ?>
-              </div>
-              <form method="post" style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center;">
-                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                <input type="hidden" name="aktion" value="benutzer_passwort">
-                <input type="hidden" name="id" value="<?= e($b['id']) ?>">
-                <input type="password" name="passwort" placeholder="Neues Passwort setzen" minlength="6" style="margin-bottom:0; flex:1;" required>
-                <button class="knopf klein zweit" type="submit">Setzen</button>
-              </form>
-            </div>
+            <a href="?vbenutzer=<?= e(rawurlencode((string)$b['id'])) ?>" style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.55rem 0; text-decoration:none; color:var(--text);">
+              <span style="flex:1; min-width:0;">
+                <b><?= e(trim((string)($b['alias'] ?? '') !== '' ? (string)$b['alias'] : trim((string)($b['vorname'] ?? '') . ' ' . (string)($b['name'] ?? '')))) ?></b>
+                <span class="anzahl"><?= e((string)($b['email'] ?? '')) ?></span>
+              </span>
+              <?php if (!empty($b['admin'])): ?><span class="bewerter-chip">🛡️ App-Admin</span><?php endif; ?>
+              <?php if (!empty($b['darf_tasting'])): ?><span class="bewerter-chip">✅</span><?php endif; ?>
+              <span style="color:var(--muted);">›</span>
+            </a>
           <?php endforeach; ?>
           <h2 style="margin-top:1rem;">Neuen Benutzer anlegen</h2>
           <form method="post">
@@ -7636,6 +7807,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           // Getränk ohne Tasting → jeder darf seine eigene Bewertung löschen.
           $ergImTasting = $getraenkTasting !== null;
           $ergTastingAdmin = $ergImTasting && tastingRolle($daten, $getraenkTasting) === 'admin';
+          // Owner des Getränks sehen die Detail-Antworten aller Bewerter
+          $ergOwner = darfGetraenkAdministrieren($daten, $aktiverChampagner);
           // Wie viele Teilnehmer fehlen noch (anonym gezählt)?
           $offenAnzahl = 0;
           if ($getraenkTasting !== null) {
@@ -7753,13 +7926,30 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 }
                 $warLive = bewertungWarLive($b, $aktiverChampagner);
               ?>
-              <p class="notiz" style="margin-bottom:0.7rem;">
+              <p class="notiz" style="margin-bottom:0.3rem;">
                 <b><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $notizNr)) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
                 <?php if (!$warLive): ?>
                   <span class="bewerter-chip offen" title="Nicht im Verkostungs-Moment bewertet – Ort und Wetter beschreiben den Bewertungs-Zeitpunkt">⏳ nachträglich bewertet</span>
                 <?php endif; ?>
                 <?php if (trim((string)($b['notiz'] ?? '')) !== ''): ?><br><?= nl2br(e((string)$b['notiz'])) ?><?php endif; ?>
               </p>
+              <?php
+                // 🔍 Detail-Antworten aus dem Bewertungs-Wizard: sichtbar für den
+                // Bewerter selbst, Tasting-Mitglieder (sehen Namen) und Getränk-Owner
+                $detailZeilen = ($eigene || $darfNamen || $ergOwner) && is_array($b['detail'] ?? null)
+                    ? detailLesbar($typAktiv, $b['detail'])
+                    : [];
+              ?>
+              <?php if ($detailZeilen !== []): ?>
+                <details class="detail-antworten">
+                  <summary>🔍 Detail-Antworten ansehen (<?= count($detailZeilen) ?>)</summary>
+                  <div class="detail-tabelle">
+                    <?php foreach ($detailZeilen as [$dt, $dw]): ?>
+                      <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
+                    <?php endforeach; ?>
+                  </div>
+                </details>
+              <?php endif; ?>
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
@@ -7793,6 +7983,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   <?php if ((int)($mv['bestellung'] ?? 0) > 0): ?><span class="anzahl">· 🛒 <?= (int)$mv['bestellung'] ?></span><?php endif; ?>
                   <?php if (trim((string)($mv['preis'] ?? '')) !== ''): ?><span class="anzahl">· <?= e((string)$mv['preis']) ?></span><?php endif; ?>
                   <?php if (trim((string)($mv['notiz'] ?? '')) !== ''): ?><br><span style="font-style:italic;">„<?= e((string)$mv['notiz']) ?>“</span><?php endif; ?>
+                  <?php $mvDetail = is_array($mv['detail'] ?? null) ? detailLesbar($typAktiv, $mv['detail']) : []; ?>
+                  <?php if ($mvDetail !== []): ?>
+                    <details class="detail-antworten">
+                      <summary>🔍 Detail-Antworten (<?= count($mvDetail) ?>)</summary>
+                      <div class="detail-tabelle">
+                        <?php foreach ($mvDetail as [$dt, $dw]): ?>
+                          <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
+                        <?php endforeach; ?>
+                      </div>
+                    </details>
+                  <?php endif; ?>
                 </span>
                 <span style="display:flex; gap:0.4rem; flex-shrink:0; align-items:center;">
                   <?php if ($mvNr === 0): ?>
