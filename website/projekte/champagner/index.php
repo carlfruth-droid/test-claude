@@ -60,7 +60,7 @@ function kategorienFuer(string $typ, array $kategorien): array
 {
     if ($typ === 'rotwein') {
         $kategorien['perlage'] = ['Tannin', 'Wie fein und angenehm ist das Tannin (Gerbstoff)?'];
-    } elseif ($typ === 'weisswein') {
+    } elseif ($typ === 'weisswein' || $typ === 'rose') {
         $kategorien['perlage'] = ['Frische', 'Wie lebendig und frisch wirkt der Wein?'];
     } elseif ($typ === 'bier') {
         $kategorien['duft'] = ['Geruch', 'Wie angenehm und interessant riecht das Bier?'];
@@ -162,6 +162,45 @@ function wizardSchritte(string $typ): array
                 ['frage' => 'Hat er Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
                 ['frage' => 'Noch ein Glas?', 'feld' => 'nochmal', 'optionen' => [
                     ['sofort', '🥂', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
+                ]],
+            ]],
+        ];
+    }
+
+    if ($typ === 'rose') {
+        return [
+            ['titel' => '👁 Das Auge', 'fragen' => [
+                ['frage' => 'Welche Farbe hat er? (blass = Provence-Stil, kräftig = saftiger)', 'feld' => 'farbe', 'optionen' => [
+                    ['zartrosa', '🌸', 'Zartrosa'], ['lachs', '🍑', 'Lachsrosa'], ['koralle', '🪸', 'Koralle'], ['himbeer', '🍓', 'Himbeerrot'], ['kupfer', '🟠', 'Kupfer/Zwiebelschale'],
+                ]],
+            ]],
+            ['titel' => '👃 Die Nase', 'fragen' => [
+                ['frage' => 'Riecht er sauber?', 'feld' => 'sauber', 'optionen' => [
+                    ['ja', '✅', 'Sauber'], ['kork', '🚫', 'Kork / muffig'],
+                ]],
+                ['frage' => 'Welche Aromen erkennst du? <small>(mehrere)</small>', 'feld' => 'aromen', 'mehrfach' => true, 'block' => true, 'optionen' => [
+                    ['erdbeere', '🍓', 'Erdbeere'], ['himbeere', '🫐', 'Himbeere/rote Beeren'], ['kirsche', '🍒', 'Kirsche'],
+                    ['zitrus', '🍋', 'Zitrus/Grapefruit'], ['pfirsich', '🍑', 'Pfirsich/Melone'], ['johannisbeere', '🥝', 'Johannisbeere'],
+                    ['blueten', '🌸', 'Blüten/Rose'], ['kraeuter', '🌿', 'Kräuter/Garrigue'], ['mineralisch', '⚗️', 'Mineralisch/salzig'],
+                    ['bonbon', '🍬', 'Erdbeerbonbon'], ['exotisch', '🍍', 'Exotisch'],
+                ]],
+                ['frage' => 'Wie gefällt dir der Duft?', 'feld' => 'duft', 'block' => true, 'optionen' => $smiley],
+            ]],
+            ['titel' => '👅 Der Mund', 'fragen' => [
+                ['frage' => 'Wie frisch und lebendig wirkt er? (Säure = Speichelfluss)', 'feld' => 'perlage', 'optionen' => [
+                    ['fein', '⚡', 'Lebendig & frisch'], ['mittel', '🙂', 'Angenehm'], ['grob', '😴', 'Müde/flach'],
+                ]],
+                ['frage' => 'Wie ist die Süße?', 'feld' => 'suesse', 'optionen' => [
+                    ['trocken', '🏜️', 'Trocken'], ['feinherb', '🌗', 'Feinherb'], ['suess', '🍯', 'Süß'],
+                ]],
+                ['frage' => 'Wirkt alles ausgewogen? (Frucht, Säure, Süße, Körper)', 'feld' => 'balance', 'optionen' => $balance],
+                ['frage' => 'Wie schmeckt er dir insgesamt?', 'feld' => 'geschmack', 'optionen' => $smiley],
+            ]],
+            ['titel' => '⏱ Der Abgang', 'fragen' => [
+                ['frage' => 'Wie lange bleibt der Geschmack nach dem Schlucken?', 'feld' => 'abgang', 'optionen' => $abgang],
+                ['frage' => 'Hat er Charakter / Wiedererkennungswert?', 'feld' => 'charakter', 'optionen' => $charakter],
+                ['frage' => 'Noch ein Glas?', 'feld' => 'nochmal', 'optionen' => [
+                    ['sofort', '🌸', 'Sofort!'], ['gerne', '🙂', 'Gerne'], ['muss_nicht', '🤷', 'Muss nicht'], ['nein', '🙅', 'Nein'],
                 ]],
             ]],
         ];
@@ -362,6 +401,19 @@ function sortenVorschlaege(string $typ): array
             'Muskateller'      => 'duftet nach Traube pur – Blüten, Muskat, meist leicht',
             'Cuvée'            => 'Verschnitt mehrerer Rebsorten',
         ],
+        'rose' => [
+            'Provence-Rosé'      => 'blassrosa, trocken, elegant – Zitrus, Pfirsich, Kräuter',
+            'Grenache'           => 'die klassische Rosé-Traube – Erdbeere, Himbeere, weich',
+            'Cinsault'           => 'hell und zart – frische rote Beeren, leicht',
+            'Syrah-Rosé'         => 'kräftiger – dunkle Beeren, Würze',
+            'Spätburgunder Rosé' => 'deutscher Klassiker – Erdbeere, feine Säure',
+            'Weißherbst'         => 'deutscher Rosé aus einer einzigen roten Sorte',
+            'Tempranillo Rosado' => 'Spanien – saftig, Kirsche, oft kräftiger in der Farbe',
+            'Rosato'             => 'Italien – von zart (Bardolino Chiaretto) bis kräftig (Cerasuolo)',
+            'Sangiovese-Rosé'    => 'frisch-fruchtig mit feiner Kräuternote',
+            'Zweigelt Rosé'      => 'Österreich – Kirsche, unkompliziert, frisch',
+            'Cuvée'              => 'Verschnitt mehrerer Rebsorten',
+        ],
         'bier' => [
             'Pils'       => 'hopfenbetont, schlank, feinherb – der deutsche Klassiker',
             'Helles'     => 'malzig-mild, süffig, wenig Bittere – Bayerns Antwort aufs Pils',
@@ -423,7 +475,7 @@ function sortenVorschlaege(string $typ): array
 function sortenChips(string $zielId, string $aktiveKat): string
 {
     $html = '<div class="sorten-chips" data-ziel="' . e($zielId) . '">';
-    foreach (['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'] as $k) {
+    foreach (['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'] as $k) {
         $html .= '<div class="sorten-set" data-kat="' . $k . '"' . ($k === $aktiveKat ? '' : ' hidden') . '>';
         foreach (sortenVorschlaege($k) as $s => $info) {
             $html .= '<button type="button" class="sorte" data-info="' . e($info) . '">' . e($s) . '</button>';
@@ -1497,7 +1549,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 4);
         if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) { $jahrgang = ''; }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
@@ -1556,11 +1608,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vk = '';
         }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         // Was für ein Getränk das ist, erkennt die KI selbst vom Etikett
-        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
+        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = (string)$erkannt['typ'];
         }
 
@@ -1659,7 +1711,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $jahrgang = mb_substr(trim((string)($_POST['jahrgang'] ?? '')), 0, 4);
         if ($jahrgang !== '' && !preg_match('/^\d{4}$/', $jahrgang)) { $jahrgang = ''; }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
@@ -1787,7 +1839,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $beschreibung = mb_substr(trim((string)($_POST['beschreibung'] ?? '')), 0, 1000);
         $kat = (string)($_POST['kat'] ?? '');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)) {
             $kat = '';
         }
         $neuesTasting = null; // null = Feld nicht mitgeschickt, '' = „ohne Tasting“
@@ -2288,7 +2340,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $neueWgId = bin2hex(random_bytes(4));
                     $nName = $erkannt['name'];
                     $nReb = (string)($erkannt['rebsorte'] ?? '');
-                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)
+                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)
                         ? (string)$erkannt['typ'] : 'champagner';
                     $besitzerNeu = (string)(aktuellerBenutzer(datenLaden())['id'] ?? ''); // wer anlegt, ist Owner
                     datenAendern(function (array $d) use ($nName, $nReb, $nTyp, $weingutId, $weingutNeu, $neueId, $neueWgId, $tid, $mtime, $besitzerNeu): array {
@@ -4088,7 +4140,7 @@ function etikettErkennen(string $fotoName): array
             'role'    => 'user',
             'content' => [
                 ['type' => 'image', 'source' => ['type' => 'base64', 'media_type' => 'image/jpeg', 'data' => $bild]],
-                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche/-dose mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies GENAU den tatsächlich abgebildeten Text – erfinde nichts. Der Erzeuger/die Marke ist meist der größte, auffälligste Schriftzug (z. B. bei Bier die Brauerei wie „Augustiner“, „Paulaner“). Wenn du dir bei einem Feld nicht sicher bist, lass es leer statt zu raten. Antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut, Brauerei oder Brennerei), name die Bezeichnung des Getränks (mit Cuvée/Sorte und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil bzw. bei Spirituosen die Art (nur wenn lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein, bier, spirituose (Whisky, Gin, Rum, Cognac, Likör …) oder sonstiges (andere Delikatessen).'],
+                ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche/-dose mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies GENAU den tatsächlich abgebildeten Text – erfinde nichts. Der Erzeuger/die Marke ist meist der größte, auffälligste Schriftzug (z. B. bei Bier die Brauerei wie „Augustiner“, „Paulaner“). Wenn du dir bei einem Feld nicht sicher bist, lass es leer statt zu raten. Antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut, Brauerei oder Brennerei), name die Bezeichnung des Getränks (mit Cuvée/Sorte und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil bzw. bei Spirituosen die Art (nur wenn lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein, rose (Roséwein), bier, spirituose (Whisky, Gin, Rum, Cognac, Likör …) oder sonstiges (andere Delikatessen).'],
             ],
         ]],
     ]);
@@ -4491,7 +4543,7 @@ function getraenkRecherchieren(string $cid): array
     $typ = (string)($c['typ'] ?? 'champagner');
     $arten = [
         'champagner' => 'Champagner', 'rotwein' => 'Rotwein', 'weisswein' => 'Weißwein',
-        'bier' => 'Bier', 'spirituose' => 'Spirituose', 'sonstiges' => 'Delikatesse/Feinkost-Produkt',
+        'rose' => 'Roséwein', 'bier' => 'Bier', 'spirituose' => 'Spirituose', 'sonstiges' => 'Delikatesse/Feinkost-Produkt',
     ];
     $art = $arten[$typ] ?? 'Getränk';
     $wg = weingutHolen(datenLaden(), (string)($c['weingut_id'] ?? ''));
@@ -4920,6 +4972,7 @@ $KATEGORIEN_GETRAENKE = [
     'champagner' => ['🍾', 'Champagner', true],
     'rotwein'    => ['🍷', 'Rotwein', true],
     'weisswein'  => ['🥂', 'Weißwein', true],
+    'rose'       => ['🌸', 'Rosé', true],
     'bier'       => ['🍺', 'Bier', true],
     'spirituose' => ['🥃', 'Spirituose', true],
     'sonstiges'  => ['🍽️', 'Delikatesse', true],
@@ -5564,6 +5617,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="hidden" name="rolle" value="off">
           <button class="knopf klein" type="submit">🛠️ Zurück zu Admin</button>
         </form>
+      </div>
+    <?php endif; ?>
+    <?php // Gast ohne Konto: bewerten ja, eigene Getränke anlegen nein – immer wieder freundlich erinnern ?>
+    <?php if ($eingeloggt && $benutzerAktiv === null && !in_array($ansicht, ['konto', 'nutzung', 'impressum', 'bewerten', 'blinddanke'], true)): ?>
+      <div class="hinweis" style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; justify-content:space-between;">
+        <span>👋 Du bist als <b>Gast</b> dabei: bewerten ja – eigene Getränke anlegen (noch) nicht.</span>
+        <a class="knopf klein" href="?konto=1">Anmeldung komplett machen</a>
       </div>
     <?php endif; ?>
     <?php if ($ansicht === 'verkosten'): ?>
@@ -7700,7 +7760,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <form method="post">
               <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
               <input type="hidden" name="aktion" value="benutzer_registrieren">
-              <input type="text" name="alias" placeholder="Alias / Anzeigename (Pflicht)" maxlength="40" required>
+              <input type="text" name="alias" value="<?= e($personVorschlag) ?>" placeholder="Alias / Anzeigename (Pflicht)" maxlength="40" required>
               <input type="text" name="vorname" placeholder="Vorname (optional)" maxlength="40">
               <input type="text" name="name" placeholder="Nachname (optional)" maxlength="40">
               <input type="text" name="email" placeholder="E-Mail (Pflicht)" maxlength="80" inputmode="email" autocomplete="email" required>
@@ -9557,6 +9617,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <button type="button" data-art="champagner">🍾 Champagner</button>
         <button type="button" data-art="rotwein">🍷 Rotwein</button>
         <button type="button" data-art="weisswein">🥂 Weißwein</button>
+        <button type="button" data-art="rose">🌸 Rosé</button>
         <button type="button" data-art="bier">🍺 Bier</button>
         <button type="button" data-art="spirituose">🥃 Spirituose</button>
         <button type="button" data-art="sonstiges">🍽️ Delikatesse</button>
@@ -9597,6 +9658,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <h3>⏱ Der Abgang</h3>
         <p>Klingt Frucht oder Mineralik nach? Je länger und angenehmer, desto besser. Und wie immer: <b>Würdest du nachschenken?</b></p>
         <p style="color:var(--muted);">Die geführte Bewertung für Weißwein folgt bald – verkosten und Notizen machen geht schon jetzt. 🥂</p>
+      </div>
+
+      <div class="anleitung anleitung-teil" data-art="rose" hidden>
+        <h3>👁 Das Auge</h3>
+        <p>Farbe gegen hellen Hintergrund: von zartem Blassrosa (Provence-Stil) über Lachs bis Himbeerrot – die Farbe verrät den Stil, nicht die Qualität. Kupfer-/Zwiebelschalentöne sind klassisch, Brauntöne ein Alterszeichen.</p>
+        <h3>👃 Die Nase</h3>
+        <p>Erst ruhig riechen, dann schwenken. <b>Typisch:</b> Erdbeere, Himbeere, Kirsche, dazu Zitrus, Pfirsich, Blüten und Kräuter (Garrigue). Ein Ton von Erdbeerbonbon deutet auf sehr junge, technische Machart.</p>
+        <h3>👅 Der Mund</h3>
+        <p>Rosé lebt von der <b>Frische</b> – die Säure zeigt sich am Speichelfluss. <b>Süße:</b> meist trocken, gelegentlich feinherb; wichtig ist die Balance mit Frucht und Säure. Gut gekühlt (8–10 °C) zeigt er sich am besten.</p>
+        <h3>⏱ Der Abgang</h3>
+        <p>Klingen rote Frucht und Frische angenehm nach? Und wie immer: <b>Würdest du nachschenken?</b></p>
+        <p style="color:var(--muted);">Am Ende rechnet die App aus deinen Antworten eine Sterne-Wertung – anpassen kannst du sie jederzeit. 🌸</p>
       </div>
 
       <div class="anleitung anleitung-teil" data-art="bier" hidden>
@@ -9864,7 +9937,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             ? (string)($aktiverChampagner['typ'] ?? 'champagner')
             : $kategorie;
         // Unbekannte Arten bekommen die allgemeine Champagner-Anleitung
-        if (!in_array($anleitungArt, ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)) {
+        if (!in_array($anleitungArt, ['champagner', 'rotwein', 'weisswein', 'rose', 'bier', 'spirituose', 'sonstiges'], true)) {
             $anleitungArt = 'champagner';
         }
       ?>
