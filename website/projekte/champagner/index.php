@@ -8162,24 +8162,39 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <?php if (trim((string)($b['notiz'] ?? '')) !== ''): ?><br><?= nl2br(e((string)$b['notiz'])) ?><?php endif; ?>
               </p>
               <?php
-                // 🔍 Detail-Antworten aus dem Bewertungs-Wizard: sichtbar für den
-                // Bewerter selbst, Tasting-Mitglieder (sehen Namen) und Getränk-Owner
+                // 🔍 Die GENAUE Bewertung dieser Person: Sterne je Kategorie,
+                // Wizard-Antworten, Blind-Antworten, Menge/Preis. Sichtbar für den
+                // Bewerter selbst, Tasting-Mitglieder (sehen Namen) und Getränk-Owner.
                 $detailZeilen = [];
                 if ($eigene || $darfNamen || $ergOwner) {
-                    if (is_array($b['detail'] ?? null)) {
-                        $detailZeilen = detailLesbar($typAktiv, $b['detail']);
+                    // 1) Sterne je Kategorie – exakt wie abgegeben
+                    foreach ($KATS_TYP as $dkS => [$dkTitel, $dkFrage]) {
+                        $dw = (int)($b['werte'][$dkS] ?? 0);
+                        if ($dw >= 1 && $dw <= 5) {
+                            $detailZeilen[] = ['⭐ ' . $dkTitel, str_repeat('★', $dw) . str_repeat('☆', 5 - $dw) . ' <span class="anzahl">(' . $dw . '/5)</span>'];
+                        }
                     }
-                    // Antworten auf die Gastgeber-Fragen der Blindprobe (mit ✅/❌ bei Punktefragen)
+                    // 2) Antworten aus dem Bewertungs-Wizard
+                    if (is_array($b['detail'] ?? null)) {
+                        foreach (detailLesbar($typAktiv, $b['detail']) as $dz) {
+                            $detailZeilen[] = $dz;
+                        }
+                    }
+                    // 3) Antworten auf die Gastgeber-Fragen der Blindprobe (mit ✅/❌ bei Punktefragen)
                     foreach ((is_array($b['blind_antworten'] ?? null) ? $b['blind_antworten'] : []) as $ba) {
                         $awTxt = (string)($ba['antwort'] ?? '');
                         $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
                         $detailZeilen[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
                     }
+                    // 4) Menge, Bestellung, Preis
+                    if ((int)($b['flaschen'] ?? 0) > 0) { $detailZeilen[] = ['🍾 Flaschen', (string)(int)$b['flaschen']]; }
+                    if ((int)($b['bestellung'] ?? 0) > 0) { $detailZeilen[] = ['🛒 Bestellung', (string)(int)$b['bestellung']]; }
+                    if (trim((string)($b['preis'] ?? '')) !== '') { $detailZeilen[] = ['💶 Preis', e((string)$b['preis'])]; }
                 }
               ?>
               <?php if ($detailZeilen !== []): ?>
                 <details class="detail-antworten">
-                  <summary>🔍 Detail-Antworten ansehen (<?= count($detailZeilen) ?>)</summary>
+                  <summary>🔍 Genaue Bewertung ansehen (<?= count($detailZeilen) ?>)</summary>
                   <div class="detail-tabelle">
                     <?php foreach ($detailZeilen as [$dt, $dw]): ?>
                       <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
@@ -8221,7 +8236,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   <?php if (trim((string)($mv['preis'] ?? '')) !== ''): ?><span class="anzahl">· <?= e((string)$mv['preis']) ?></span><?php endif; ?>
                   <?php if (trim((string)($mv['notiz'] ?? '')) !== ''): ?><br><span style="font-style:italic;">„<?= e((string)$mv['notiz']) ?>“</span><?php endif; ?>
                   <?php
-                    $mvDetail = is_array($mv['detail'] ?? null) ? detailLesbar($typAktiv, $mv['detail']) : [];
+                    $mvDetail = [];
+                    foreach ($KATS_TYP as $dkS => [$dkTitel, $dkFrage]) {
+                        $dw = (int)($mv['werte'][$dkS] ?? 0);
+                        if ($dw >= 1 && $dw <= 5) {
+                            $mvDetail[] = ['⭐ ' . $dkTitel, str_repeat('★', $dw) . str_repeat('☆', 5 - $dw) . ' <span class="anzahl">(' . $dw . '/5)</span>'];
+                        }
+                    }
+                    if (is_array($mv['detail'] ?? null)) {
+                        foreach (detailLesbar($typAktiv, $mv['detail']) as $dz) { $mvDetail[] = $dz; }
+                    }
                     foreach ((is_array($mv['blind_antworten'] ?? null) ? $mv['blind_antworten'] : []) as $ba) {
                         $awTxt = (string)($ba['antwort'] ?? '');
                         $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
@@ -8230,7 +8254,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   ?>
                   <?php if ($mvDetail !== []): ?>
                     <details class="detail-antworten">
-                      <summary>🔍 Detail-Antworten (<?= count($mvDetail) ?>)</summary>
+                      <summary>🔍 Genaue Bewertung (<?= count($mvDetail) ?>)</summary>
                       <div class="detail-tabelle">
                         <?php foreach ($mvDetail as [$dt, $dw]): ?>
                           <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
