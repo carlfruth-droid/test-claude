@@ -6350,14 +6350,21 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               }
           }
           $aktuellesTid = (string)(meinTasting($daten)['id'] ?? '');
-          // Datenschutz: man sieht AUSSCHLIESSLICH die eigenen Tastings – niemals fremde.
+          // Datenschutz: normale Nutzer sehen AUSSCHLIESSLICH die eigenen Tastings.
+          // Der App-Administrator sieht zusätzlich alle übrigen (zur Verwaltung).
           $meine = array_values(array_filter($tastingsSortiert, fn($t) => isset($meineTastingIds[$t['id']])));
+          $weitereAdmin = $istAdmin
+              ? array_values(array_filter($tastingsSortiert, fn($t) => !isset($meineTastingIds[$t['id']])))
+              : [];
         ?>
-        <?php if ($meine === []): ?>
+        <?php if ($meine === [] && $weitereAdmin === []): ?>
           <div class="card"><p style="color:var(--muted); font-style:italic;">Du bist noch bei keinem Tasting dabei. Leg unten eins an oder tritt per Einladungs-Link/QR-Code bei.</p></div>
         <?php endif; ?>
-        <?php foreach ([['🥂 Meine Tastings', $meine]] as [$gruppenTitel, $gruppe]): ?>
+        <?php foreach ([['🥂 Meine Tastings', $meine], ['🛠️ Alle weiteren Tastings (nur für dich als App-Admin sichtbar)', $weitereAdmin]] as [$gruppenTitel, $gruppe]): ?>
           <?php if ($gruppe === []) { continue; } ?>
+          <?php if ($meine !== [] && $weitereAdmin !== []): ?>
+            <p class="untertitel" style="margin:0.8rem 0 0.5rem;"><?= $gruppenTitel ?></p>
+          <?php endif; ?>
           <?php foreach ($gruppe as $t): ?>
             <?php $tFotos = mitTitelbild(tastingFotos($t['id']), (string)($t['titelbild'] ?? '')); ?>
             <a class="kachel" href="?tasting=<?= e(rawurlencode($t['id'])) ?>"<?= $t['id'] === $aktuellesTid ? ' style="border-left:5px solid var(--accent);"' : '' ?>>
@@ -7001,7 +7008,30 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 $jg = trim((string)($cJg['jahrgang'] ?? ''));
                 if ($jg !== '') { $jahrgaengeProName[$nm][$jg] = true; }
             }
-            // Eigene Listen als Filter (📂 Favoriten, Nachkaufen …)
+            // Vor dem Filtern: welche Tastings und Arten kommen in MEINEN Einträgen vor?
+            // (für die Filter-Chips – nach dem Filtern wären sie unvollständig)
+            $logTastings = [];  // tid => Titel
+            $logKatsDa = [];    // typ => true
+            foreach ($eintraege as $einT) {
+                $tidE = (string)($einT['c']['tasting_id'] ?? '');
+                if ($tidE !== '' && isset($tastingTitelListe[$tidE])) { $logTastings[$tidE] = $tastingTitelListe[$tidE]; }
+                $logKatsDa[(string)($einT['c']['typ'] ?? 'champagner')] = true;
+            }
+            // 🏷️ Art-Filter (Champagner, Rotwein, … Delikatesse)
+            $logKat = (string)($_GET['mkat'] ?? 'alle');
+            if ($logKat !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$logKat])) { $logKat = 'alle'; }
+            if ($logKat !== 'alle') {
+                $eintraege = array_values(array_filter($eintraege, fn($ein) => (string)($ein['c']['typ'] ?? 'champagner') === $logKat));
+            }
+            // 👥 Tasting-Filter
+            $logTid = (string)($_GET['mtid'] ?? '');
+            if ($logTid !== '' && $logTid !== 'direkt' && !isset($logTastings[$logTid])) { $logTid = ''; }
+            if ($logTid === 'direkt') {
+                $eintraege = array_values(array_filter($eintraege, fn($ein) => (string)($ein['c']['tasting_id'] ?? '') === ''));
+            } elseif ($logTid !== '') {
+                $eintraege = array_values(array_filter($eintraege, fn($ein) => (string)($ein['c']['tasting_id'] ?? '') === $logTid));
+            }
+            // 📂 Eigene Listen als Filter (Favoriten, Nachkaufen …)
             $logListen = meineListen($daten);
             $logListeWahl = (string)($_GET['meineliste'] ?? '');
             $logListeAktiv = null;
@@ -7114,28 +7144,64 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
               </div>
             </div>
-          <?php if ($eintraege !== [] || $logListeWahl !== ''): ?>
-            <?php $logSuffix = $logListeWahl !== '' ? '&amp;meineliste=' . e(rawurlencode($logListeWahl)) : ''; ?>
-            <details class="card filter-karte">
-              <summary>🔎 Filter &amp; Sortierung<?= $logListeAktiv !== null ? ' · 📂 ' . e($logListeAktiv['name']) : '' ?></summary>
-              <div class="sortier-leiste" style="margin-top:0.6rem;">Sortieren:
-                <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=datum<?= $logSuffix ?>">Datum</a>
-                <a class="<?= $msort === 'name' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=name<?= $logSuffix ?>">Name</a>
-                <a class="<?= $msort === 'tasting' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=tasting<?= $logSuffix ?>">Tasting</a>
-                <a class="<?= $msort === 'weingut' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=weingut<?= $logSuffix ?>">Weingut</a>
-                <a class="<?= $msort === 'sterne' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=sterne<?= $logSuffix ?>">Meine Sterne</a>
+          <?php if ($eintraege !== [] || $logListeWahl !== '' || $logKat !== 'alle' || $logTid !== ''): ?>
+            <?php
+              // Link-Bauer: hält alle aktiven Filter zusammen, tauscht nur einen aus
+              $logUrl = function (array $neu) use ($msort, $logKat, $logTid, $logListeWahl): string {
+                  $p = ['msort' => $msort, 'mkat' => $logKat, 'mtid' => $logTid, 'meineliste' => $logListeWahl];
+                  foreach ($neu as $k => $v) { $p[$k] = $v; }
+                  $url = '?meine=1';
+                  if ($p['msort'] !== 'datum') { $url .= '&amp;msort=' . e(rawurlencode($p['msort'])); }
+                  if ($p['mkat'] !== 'alle') { $url .= '&amp;mkat=' . e(rawurlencode($p['mkat'])); }
+                  if ($p['mtid'] !== '') { $url .= '&amp;mtid=' . e(rawurlencode($p['mtid'])); }
+                  if ($p['meineliste'] !== '') { $url .= '&amp;meineliste=' . e(rawurlencode($p['meineliste'])); }
+                  return $url;
+              };
+              $aktiveFilter = [];
+              if ($logKat !== 'alle') { $aktiveFilter[] = ($KATEGORIEN_GETRAENKE[$logKat][0] ?? '') . ' ' . ($KATEGORIEN_GETRAENKE[$logKat][1] ?? $logKat); }
+              if ($logTid === 'direkt') { $aktiveFilter[] = '🏠 direkt verkostet'; }
+              elseif ($logTid !== '') { $aktiveFilter[] = '👥 ' . ($logTastings[$logTid] ?? ''); }
+              if ($logListeAktiv !== null) { $aktiveFilter[] = '📂 ' . $logListeAktiv['name']; }
+            ?>
+            <details class="card filter-karte"<?= $aktiveFilter !== [] ? ' open' : '' ?>>
+              <summary>🔎 Filter &amp; Sortierung<?= $aktiveFilter !== [] ? ' · ' . e(implode(' · ', $aktiveFilter)) : '' ?></summary>
+              <div class="sortier-leiste" style="margin-top:0.6rem;">Art:
+                <a class="<?= $logKat === 'alle' ? 'aktiv' : '' ?>" href="<?= $logUrl(['mkat' => 'alle']) ?>">⭐ Alle</a>
+                <?php foreach ($KATEGORIEN_GETRAENKE as $kS => [$kIcon, $kName, $kAktiviert]): ?>
+                  <?php if (!isset($logKatsDa[$kS])) { continue; } // nur Arten zeigen, die vorkommen ?>
+                  <a class="<?= $logKat === $kS ? 'aktiv' : '' ?>" href="<?= $logUrl(['mkat' => $kS]) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
+                <?php endforeach; ?>
               </div>
+              <?php if ($logTastings !== []): ?>
+                <div class="sortier-leiste">Tasting:
+                  <a class="<?= $logTid === '' ? 'aktiv' : '' ?>" href="<?= $logUrl(['mtid' => '']) ?>">⭐ Alle</a>
+                  <?php foreach ($logTastings as $tidF => $titelF): ?>
+                    <a class="<?= $logTid === (string)$tidF ? 'aktiv' : '' ?>" href="<?= $logUrl(['mtid' => (string)$tidF]) ?>">👥 <?= e($titelF) ?></a>
+                  <?php endforeach; ?>
+                  <a class="<?= $logTid === 'direkt' ? 'aktiv' : '' ?>" href="<?= $logUrl(['mtid' => 'direkt']) ?>">🏠 Direkt verkostet</a>
+                </div>
+              <?php endif; ?>
               <?php if ($logListen !== []): ?>
-                <div class="sortier-leiste" style="margin-bottom:0.3rem;">Liste:
-                  <a class="<?= $logListeWahl === '' ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=<?= e($msort) ?>">⭐ Alle</a>
+                <div class="sortier-leiste">Liste:
+                  <a class="<?= $logListeWahl === '' ? 'aktiv' : '' ?>" href="<?= $logUrl(['meineliste' => '']) ?>">⭐ Alle</a>
                   <?php foreach ($logListen as $l): ?>
-                    <a class="<?= $logListeWahl === (string)$l['id'] ? 'aktiv' : '' ?>" href="?meine=1&amp;msort=<?= e($msort) ?>&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>">📂 <?= e($l['name']) ?> (<?= count($l['cids'] ?? []) ?>)</a>
+                    <a class="<?= $logListeWahl === (string)$l['id'] ? 'aktiv' : '' ?>" href="<?= $logUrl(['meineliste' => (string)$l['id']]) ?>">📂 <?= e($l['name']) ?> (<?= count($l['cids'] ?? []) ?>)</a>
                   <?php endforeach; ?>
                 </div>
               <?php endif; ?>
+              <div class="sortier-leiste" style="margin-bottom:0.3rem;">Sortieren:
+                <a class="<?= $msort === 'datum' ? 'aktiv' : '' ?>" href="<?= $logUrl(['msort' => 'datum']) ?>">Datum</a>
+                <a class="<?= $msort === 'name' ? 'aktiv' : '' ?>" href="<?= $logUrl(['msort' => 'name']) ?>">Name</a>
+                <a class="<?= $msort === 'tasting' ? 'aktiv' : '' ?>" href="<?= $logUrl(['msort' => 'tasting']) ?>">Tasting</a>
+                <a class="<?= $msort === 'weingut' ? 'aktiv' : '' ?>" href="<?= $logUrl(['msort' => 'weingut']) ?>">Weingut</a>
+                <a class="<?= $msort === 'sterne' ? 'aktiv' : '' ?>" href="<?= $logUrl(['msort' => 'sterne']) ?>">Meine Sterne</a>
+              </div>
             </details>
             <input type="search" class="filter-feld" placeholder="🔍 Name, Traube, Weingut, Tasting suchen …" data-ziel="#meine-liste">
             <div id="meine-liste">
+              <?php if ($eintraege === []): ?>
+                <div class="card"><p style="color:var(--muted); font-style:italic;">Kein Eintrag passt zu diesem Filter – oben ⭐ Alle wählen.</p></div>
+              <?php endif; ?>
               <?php foreach ($eintraege as $ein): ?>
                 <?php
                   $c = $ein['c'];
