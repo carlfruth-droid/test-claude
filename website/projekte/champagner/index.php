@@ -933,8 +933,8 @@ if (isset($_GET['blindpng'])) {
         $schwarz = imagecolorallocate($bild, 17, 17, 17);
         imagefilledellipse($bild, $cx, $cy, $r * 2, $r * 2, $weiss);
         for ($i = 0; $i < 5; $i++) { imageellipse($bild, $cx, $cy, $r * 2 - $i, $r * 2 - $i, $schwarz); }
-        // Kennung font-frei zeichnen und in die Mitte skalieren
-        $txt = mb_strtoupper(mb_substr($bLabel, 0, 3));
+        // Kennung font-frei zeichnen und passend in den Logo-Kreis skalieren
+        $txt = mb_strtoupper(mb_substr($bLabel, 0, 6));
         $tmpW = max(1, imagefontwidth(5) * strlen($txt)); $tmpH = max(1, imagefontheight(5));
         $tmp = imagecreatetruecolor($tmpW, $tmpH);
         imagefill($tmp, 0, 0, imagecolorallocate($tmp, 255, 255, 255));
@@ -5040,7 +5040,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       background: #fff; border: 2px solid #111; border-radius: 50%;
       width: 62px; height: 62px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
     .qr-badge small { font-size: 0.7rem; line-height: 1; }
-    .qr-badge b { font-size: 1.5rem; line-height: 1; }
+    .qr-badge b { line-height: 1; max-width: 92%; overflow: hidden; white-space: nowrap; text-align: center; }
+    .qr-badge.qr-badge-klein { width: 40px; height: 40px; border-width: 1.5px; }
     .etikett-kombi { width: 100%; max-width: 380px; }
     .kombi-reihe { display: flex; justify-content: space-around; gap: 0.5rem; }
     .kombi-teil { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; }
@@ -5318,9 +5319,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?meine=1">📖 Logbuch</a>
       <a href="?anregungen=1">💡 Anregungen</a>
       <a href="?tasting=1">👥 Tastings</a>
-      <?php if ($benutzerAktiv !== null): ?>
-        <a href="?blindetiketten=1">🕶️ Blind-Etiketten</a>
-      <?php endif; ?>
       <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
         <summary>ℹ️ Hilfe &amp; Info</summary>
@@ -7697,12 +7695,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php else: ?>
         <?php
           $meineBlind = blindEintraege($daten);
+          // ?blindetiketten=<Getränk-ID>: nur die Etiketten DIESES Getränks (Druck direkt aus den Stammdaten)
+          $blNurCid = preg_match('/^[a-f0-9]{8}$/', (string)$_GET['blindetiketten']) ? (string)$_GET['blindetiketten'] : '';
+          if ($blNurCid !== '') {
+              $meineBlind = array_values(array_filter($meineBlind, fn($b) => (string)$b['cid'] === $blNurCid));
+          }
           usort($meineBlind, fn($x, $y) => strcmp((string)$x['label'], (string)$y['label']));
           $qrBasis = 'https://fruthzeug.de/projekte/champagner/';
           $qr = fn(string $url, int $px = 300): string => 'https://api.qrserver.com/v1/create-qr-code/?size=' . $px . 'x' . $px . '&ecc=H&margin=6&data=' . rawurlencode($url);
+          // Schriftgröße der Kennung so wählen, dass sie in den Logo-Kreis passt
+          $badgeFont = function (string $l, int $kreisPx): string {
+              $len = max(1, mb_strlen($l));
+              $faktor = $len <= 1 ? 0.52 : ($len <= 2 ? 0.40 : ($len <= 3 ? 0.30 : ($len <= 5 ? 0.22 : 0.16)));
+              return (int)round($kreisPx * $faktor) . 'px';
+          };
         ?>
         <div class="druck-kopf">
-          <button type="button" class="knopf" onclick="window.print()">🖨️ Alle drucken / als PDF speichern</button>
+          <button type="button" class="knopf" onclick="window.print()">🖨️ Drucken / als PDF speichern</button>
+          <?php if ($blNurCid !== ''): ?>
+            <p class="anzahl" style="margin-top:0.4rem;"><a href="?blindetiketten=1">Alle meine Blind-Etiketten anzeigen</a></p>
+          <?php endif; ?>
           <p class="anzahl" style="margin-top:0.6rem;">Ausdrucken und auf Flasche/Glas kleben. Je Getränk gibt es drei Etiketten: <b>anonyme Bewertung</b>, <b>Auflösung</b> und ein <b>Kombi-Etikett</b> mit allen drei Bildern.</p>
         </div>
         <?php if ($meineBlind === []): ?>
@@ -7716,13 +7728,15 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             $blFoto = $blFotos[0] ?? '';
             $urlAnon = $qrBasis . '?blind=' . rawurlencode((string)$bl['token']);
             $urlAufl = $qrBasis . '?ergebnis=' . rawurlencode((string)$blc['id']);
+            $fontGross = $badgeFont((string)$bl['label'], 62);
+            $fontKlein = $badgeFont((string)$bl['label'], 40);
           ?>
           <div class="etikett-blatt">
             <div class="etikett">
               <div class="etikett-titel">🕶️ Blind bewerten</div>
               <div class="qr-wrap">
                 <img src="<?= e($qr($urlAnon)) ?>" alt="QR anonyme Bewertung" width="200" height="200">
-                <span class="qr-badge"><small>🍷</small><b><?= e($bl['label']) ?></b></span>
+                <span class="qr-badge"><small>🍷</small><b style="font-size:<?= e($fontGross) ?>;"><?= e($bl['label']) ?></b></span>
               </div>
               <div class="etikett-fuss">QR scannen &amp; anonym bewerten</div>
               <a class="knopf klein zweit etikett-download" href="?blindpng=<?= e(rawurlencode((string)$bl['token'])) ?>">⬇️ QR als PNG</a>
@@ -7731,18 +7745,25 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <div class="etikett-titel">🔓 Auflösung</div>
               <div class="qr-wrap">
                 <img src="<?= e($qr($urlAufl)) ?>" alt="QR Auflösung" width="200" height="200">
+                <span class="qr-badge"><small>🔓</small><b style="font-size:<?= e($fontGross) ?>;"><?= e($bl['label']) ?></b></span>
               </div>
-              <div class="etikett-fuss">Probe <?= e($bl['label']) ?> = <?= e($blc['name']) ?></div>
+              <div class="etikett-fuss"><?= e($bl["label"]) ?> = <?= e($blc["name"]) ?></div>
             </div>
             <div class="etikett etikett-kombi">
-              <div class="etikett-titel">Probe <?= e($bl['label']) ?> – alles auf einen Blick</div>
+              <div class="etikett-titel"><?= e($bl["label"]) ?> – alles auf einen Blick</div>
               <div class="kombi-reihe">
                 <div class="kombi-teil">
-                  <img src="<?= e($qr($urlAnon, 150)) ?>" alt="" width="108" height="108">
+                  <span class="qr-wrap">
+                    <img src="<?= e($qr($urlAnon, 150)) ?>" alt="" width="108" height="108">
+                    <span class="qr-badge qr-badge-klein"><b style="font-size:<?= e($fontKlein) ?>;"><?= e($bl['label']) ?></b></span>
+                  </span>
                   <small>🕶️ anonym bewerten</small>
                 </div>
                 <div class="kombi-teil">
-                  <img src="<?= e($qr($urlAufl, 150)) ?>" alt="" width="108" height="108">
+                  <span class="qr-wrap">
+                    <img src="<?= e($qr($urlAufl, 150)) ?>" alt="" width="108" height="108">
+                    <span class="qr-badge qr-badge-klein"><b style="font-size:<?= e($fontKlein) ?>;"><?= e($bl['label']) ?></b></span>
+                  </span>
                   <small>🔓 Auflösung</small>
                 </div>
                 <div class="kombi-teil">
@@ -8228,7 +8249,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   </div>
                 <?php endforeach; ?>
               <?php endif; ?>
-              <a class="knopf" href="?blindetiketten=1" style="margin-top:0.7rem; display:inline-block;">🖨️ Alle Blind-Etiketten drucken / als PDF</a>
+              <?php if ($blindDieses !== []): ?>
+                <a class="knopf" href="?blindetiketten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>" style="margin-top:0.7rem; display:inline-block;">🖨️ Etiketten dieses Getränks drucken / als PDF</a>
+              <?php endif; ?>
             </div>
         <?php endif; ?>
       <?php endif; ?>
