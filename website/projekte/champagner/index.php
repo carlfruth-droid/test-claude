@@ -631,6 +631,23 @@ function meineBewertung(array $daten, string $cid): ?array
     return null;
 }
 
+/** ALLE eigenen Bewertungen eines Getränks (alle Namen des Kontos), neueste zuerst. */
+function meineBewertungenFuer(array $daten, string $cid): array
+{
+    // meineNamen liefert die Namen als (bereits kleingeschriebene) Schlüssel
+    $meine = meineNamen($daten);
+    if ($meine === []) {
+        return [];
+    }
+    $treffer = [];
+    foreach (bewertungenAlle($daten, $cid) as $b) {
+        if (isset($meine[mb_strtolower(trim((string)$b['person']))])) {
+            $treffer[] = $b;
+        }
+    }
+    return $treffer; // bereits neueste zuerst (bewertungenAlle sortiert)
+}
+
 /** Grobe Distanz in Metern zwischen zwei Koordinaten (für kleine Abstände ausreichend). */
 function distanzMeter(float $lat1, float $lon1, float $lat2, float $lon2): int
 {
@@ -1716,27 +1733,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($aktion === 'bewertung_loeschen') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $person = trim((string)($_POST['person'] ?? ''));
-        // Löschen darf nur die eigene Bewertung – oder der Gastgeber/Administrator
+        // Optional: eine BESTIMMTE Verkostung (Zeitstempel). Fehlt er, werden alle
+        // Verkostungen dieser Person für dieses Getränk entfernt.
+        $zeit = isset($_POST['zeit']) && $_POST['zeit'] !== '' ? (int)$_POST['zeit'] : null;
+        $zielUrl = trim((string)($_POST['zurueck'] ?? '')) !== '' ? (string)$_POST['zurueck'] : '?ergebnis=' . rawurlencode($cid);
         $d0 = datenLaden();
         $cGet = champagnerHolen($d0, $cid);
         $cTasting = null;
-        if ($cGet !== null) {
+        if ($cGet !== null && (string)($cGet['tasting_id'] ?? '') !== '') {
             foreach ($d0['tastings'] as $t) {
-                if ($t['id'] === (string)($cGet['tasting_id'] ?? '')) { $cTasting = $t; break; }
+                if ($t['id'] === (string)$cGet['tasting_id']) { $cTasting = $t; break; }
             }
         }
         $eigene = isset(meineNamen($d0)[mb_strtolower($person)]);
-        if (!$eigene && !darfBewerterNamen($d0, $cTasting)) {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Du kannst nur deine eigene Bewertung löschen.'));
+        // Getränk in einem Tasting: löschen darf NUR der Tasting-Administrator.
+        // Getränk ohne Tasting (persönlich): jeder darf seine EIGENE Bewertung löschen.
+        if ($cTasting !== null) {
+            if (tastingRolle($d0, $cTasting) !== 'admin') {
+                zurueck($zielUrl . '&fehler=' . rawurlencode('Bewertungen im Tasting kann nur der Tasting-Administrator löschen.'));
+            }
+        } elseif (!$eigene) {
+            zurueck($zielUrl . '&fehler=' . rawurlencode('Du kannst nur deine eigene Bewertung löschen.'));
         }
-        datenAendern(function (array $d) use ($cid, $person): array {
+        datenAendern(function (array $d) use ($cid, $person, $zeit): array {
             $d['bewertungen'] = array_values(array_filter(
                 $d['bewertungen'],
-                fn($b) => !($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person))
+                fn($b) => !($b['champagner_id'] === $cid
+                    && mb_strtolower($b['person']) === mb_strtolower($person)
+                    && ($zeit === null || (int)($b['zeit'] ?? 0) === $zeit))
             ));
             return $d;
         });
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Bewertung gelöscht.'));
+        zurueck($zielUrl . '&ok=' . rawurlencode('Bewertung gelöscht.'));
     }
 
     if ($aktion === 'profil_foto_upload') {
@@ -4573,6 +4601,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     .trip-icon { width: 52px; text-align: center; font-size: 1.5rem; flex-shrink: 0; }
     .trip-eintrag .k-text { min-width: 0; flex: 1; }
     .trip-eintrag .k-text small { display: block; color: var(--muted); font-size: 0.82rem; }
+    .mein-status { display: inline-block; margin-top: 0.2rem; font-size: 0.78rem; font-weight: 600; padding: 0.08rem 0.45rem; border-radius: 999px; }
+    .mein-status.offen { background: rgba(148, 163, 184, 0.2); color: var(--muted); }
+    .mein-status.fertig { background: rgba(34, 197, 94, 0.16); color: #15803d; }
+    .dash-kacheln { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 0.5rem; }
+    .dash-kachel { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 0.6rem 0.4rem; text-align: center; }
+    .dash-kachel .dash-zahl { display: block; font-size: 1.5rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
+    .dash-kachel .dash-label { display: block; font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
     .avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--accent); vertical-align: middle; }
     details.card summary { cursor: pointer; color: var(--accent); font-size: 1.15rem; }
     details.card summary::-webkit-details-marker { display: none; }
@@ -4808,8 +4843,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php else: ?>
             👤
           <?php endif; ?><?= e($kopfPerson !== '' ? $kopfPerson : 'Gast') ?></a>
-        <?php if ($kopfTasting !== null): ?>
+        <?php if ($kopfTasting !== null && $bereich === 'tasting'): ?>
           <a href="?tasting=<?= e(rawurlencode($kopfTasting['id'])) ?>">👥&nbsp;<?= e($kopfTasting['titel']) ?></a>
+        <?php elseif ($bereich === 'entdecken'): ?>
+          <a href="?liste=1">📖&nbsp;Logbuch</a>
+        <?php else: ?>
+          <a href="./">🥂&nbsp;Verkosten</a>
         <?php endif; ?>
         <?php if ($kopfWeingut !== null): ?>
           <a href="?vk=<?= e(rawurlencode($kopfWeingut['id'])) ?>">🍇&nbsp;<?= e($kopfWeingut['name']) ?></a>
@@ -4831,7 +4870,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <nav class="site-nav">
       <a href="./">🥂 Verkosten</a>
       <a href="?meine=1">📖 Meine Liste</a>
-      <a href="?liste=1">🕘 Historie</a>
+      <a href="?liste=1">📖 Logbuch</a>
       <a href="?tasting=1">👥 Tastings</a>
       <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
@@ -4934,7 +4973,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1>Mitbewerten 🥂</h1>
       <p class="untertitel">Sag uns kurz, wer du bist – dann geht’s direkt zur Bewertung.</p>
     <?php elseif ($ansicht === 'liste'): ?>
-      <h1>Historie 🕘</h1>
+      <h1>Logbuch 📖</h1>
       <p class="untertitel">Deine Verkostungen im Überblick.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
@@ -5070,7 +5109,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php elseif ($vkMeinT !== null): ?>
         <div class="card"><p class="anzahl">🥂 Du bist bei „<?= e($vkMeinT['titel']) ?>“ dabei. Neue Getränke legt der Tasting-Admin an – du kannst die vorhandenen bewerten.</p></div>
       <?php endif; ?>
-      <p class="anzahl" style="margin-top:1rem;">Deine bisherigen Verkostungen findest du unter <a href="?liste=1">🕘 Historie</a>.</p>
+      <p class="anzahl" style="margin-top:1rem;">Deine bisherigen Verkostungen findest du unter <a href="?liste=1">📖 Logbuch</a>.</p>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
       <?php endif; ?>
@@ -5397,11 +5436,23 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                       <span class="k-text"><b>🍇 <?= e($st['w']['name']) ?></b><small>Weingut besucht</small></span>
                     </a>
                   <?php elseif ($st['typ'] === 'getraenk'): ?>
-                    <?php $g = gesamtSchnitt($st['bew']); ?>
+                    <?php
+                      $g = gesamtSchnitt($st['bew']);
+                      $meineB = meineBewertungenFuer($daten, (string)$st['c']['id']);
+                      $meinStatus = '';
+                      if ($meineB === []) {
+                          $meinStatus = '<span class="mein-status offen">🔲 noch nicht bewertet</span>';
+                      } else {
+                          $letzte = (int)($meineB[0]['zeit'] ?? 0);
+                          $wieOft = count($meineB) === 1 ? '1×' : count($meineB) . '×';
+                          $meinStatus = '<span class="mein-status fertig">✅ von dir ' . e($wieOft) . ' bewertet · zuletzt ' . e(date('d.m.Y', $letzte)) . '</span>';
+                      }
+                    ?>
                     <a class="trip-eintrag" href="?ergebnis=<?= e(rawurlencode($st['c']['id'])) ?>">
                       <?php if ($st['foto'] !== ''): ?><img src="<?= e(thumbUrl($st['foto'])) ?>" alt="" loading="lazy"><?php else: ?><span class="trip-icon"><?= $KATEGORIEN_GETRAENKE[(string)($st['c']['typ'] ?? 'champagner')][0] ?? '🍾' ?></span><?php endif; ?>
                       <span class="k-text"><b><?= e($st['c']['name']) ?></b>
                         <small><?= date('H:i', $st['zeit']) ?> Uhr<?= $st['wg'] !== null ? ' · ' . e($st['wg']['name']) : '' ?> · <?= sterneAnzeige($g) ?><?= $st['bew'] !== [] ? ' (' . count($st['bew']) . ')' : '' ?></small>
+                        <?= $meinStatus ?>
                       </span>
                     </a>
                   <?php else: ?>
@@ -5701,7 +5752,57 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $vAnsehen = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($vt['id']);
         $vQrPng = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' . rawurlencode($vBeitritt);
         $vRollen = ['admin' => '🛠️ Admin', 'tester' => '🥂 Tester', 'viewer' => '👁️ Betrachter'];
+        // ---- Dashboard-Zahlen (nur der Tasting-Admin sieht diese Seite) ----
+        $vtWeine = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$vt['id'])));
+        $rollenZaehler = ['admin' => 0, 'tester' => 0, 'viewer' => 0];
+        foreach (($vt['teilnehmer'] ?? []) as $p) {
+            $r = in_array((string)($p['rolle'] ?? 'tester'), ['admin', 'tester', 'viewer'], true) ? (string)$p['rolle'] : 'tester';
+            $rollenZaehler[$r]++;
+        }
+        // Bestellungen je Getränk: aktuelle Bestellmenge je Person summieren
+        $bestellGesamt = 0;
+        $bestellProWein = [];
+        foreach ($vtWeine as $c) {
+            $summe = 0;
+            $bewerterAnz = 0;
+            foreach (bewertungenFuer($daten, (string)$c['id']) as $b) {
+                $summe += max(0, (int)($b['bestellung'] ?? 0));
+                $bewerterAnz++;
+            }
+            $bestellProWein[] = ['name' => (string)$c['name'], 'menge' => $summe, 'bewerter' => $bewerterAnz];
+            $bestellGesamt += $summe;
+        }
+        // Getränke mit den meisten Bestellungen zuerst
+        usort($bestellProWein, fn($x, $y) => $y['menge'] <=> $x['menge']);
       ?>
+      <div class="card">
+        <h2>📊 Dashboard</h2>
+        <p class="anzahl" style="margin-bottom:0.7rem;">Übersicht nur für dich als Tasting-Administrator – Teilnehmer sehen sie nicht.</p>
+        <div class="dash-kacheln">
+          <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['tester'] ?></span><span class="dash-label">🥂 Tester</span></div>
+          <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['viewer'] ?></span><span class="dash-label">👁️ Betrachter</span></div>
+          <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['admin'] ?></span><span class="dash-label">🛠️ Admins</span></div>
+          <div class="dash-kachel"><span class="dash-zahl"><?= $bestellGesamt ?></span><span class="dash-label">🛒 Bestellungen</span></div>
+          <div class="dash-kachel"><span class="dash-zahl"><?= count($vtWeine) ?></span><span class="dash-label">🍾 Getränke</span></div>
+        </div>
+        <?php if ($bestellGesamt > 0): ?>
+          <h3 style="margin:1rem 0 0.3rem; font-size:1rem;">🛒 Bestellungen je Getränk</h3>
+          <div class="tabelle-scroll">
+            <table>
+              <thead><tr><th>Getränk</th><th>Bewerter</th><th>Bestellt</th></tr></thead>
+              <tbody>
+                <?php foreach ($bestellProWein as $bw): ?>
+                  <?php if ($bw['menge'] <= 0) { continue; } ?>
+                  <tr><td><?= e($bw['name']) ?></td><td><?= (int)$bw['bewerter'] ?></td><td><b><?= (int)$bw['menge'] ?></b></td></tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+        <?php else: ?>
+          <p class="anzahl" style="font-style:italic;">Noch keine Bestellungen abgegeben.</p>
+        <?php endif; ?>
+      </div>
+
       <div class="card">
         <h2>📱 Einladen</h2>
         <p class="anzahl" style="margin-bottom:0.7rem;">Zeig oder druck diesen QR-Code: einmal scannen, Name eintragen, dabei. Neue Teilnehmer starten als <b>Tester</b> (dürfen bewerten).</p>
@@ -6729,7 +6830,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php $konListen = meineListen($daten); ?>
           <div class="card">
             <h2>📂 Meine Listen</h2>
-            <p class="anzahl" style="margin-bottom:0.7rem;">Leg eigene Listen an (z. B. „Favoriten“, „Nachkaufen“, „Weihnachten“). Getränke ordnest du ihnen bei der Ergebnis-Seite zu; in der Historie kannst du danach filtern.</p>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Leg eigene Listen an (z. B. „Favoriten“, „Nachkaufen“, „Weihnachten“). Getränke ordnest du ihnen bei der Ergebnis-Seite zu; im Logbuch kannst du danach filtern.</p>
             <?php foreach ($konListen as $l): ?>
               <div class="ergebnis-kategorie" style="align-items:center;">
                 <a href="?liste=1&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>"><b>📂 <?= e($l['name']) ?></b> <span class="anzahl">(<?= count($l['cids'] ?? []) ?>)</span></a>
@@ -6879,6 +6980,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php
           $darfNamen = darfBewerterNamen($daten, $getraenkTasting);
           $meineNamenErg = meineNamen($daten);
+          // Löschregeln: Getränk im Tasting → nur der Tasting-Administrator darf löschen;
+          // Getränk ohne Tasting → jeder darf seine eigene Bewertung löschen.
+          $ergImTasting = $getraenkTasting !== null;
+          $ergTastingAdmin = $ergImTasting && tastingRolle($daten, $getraenkTasting) === 'admin';
           // Wie viele Teilnehmer fehlen noch (anonym gezählt)?
           $offenAnzahl = 0;
           if ($getraenkTasting !== null) {
@@ -7007,6 +7112,57 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         <?php endif; ?>
 
+        <?php
+          // 📖 Meine Verkostungen dieses Getränks – jede einzeln (auch mehrfach)
+          // mit Datum, Sternen, Notiz. Ändern/Löschen nach den Regeln:
+          //  - Getränk im Tasting → löschen nur der Tasting-Admin
+          //  - Getränk ohne Tasting → eigene Bewertung löschen
+          $meineVerkostungen = $eingeloggt ? meineBewertungenFuer($daten, (string)$aktiverChampagner['id']) : [];
+        ?>
+        <?php if ($meineVerkostungen !== []): ?>
+          <div class="card">
+            <h2>📖 Meine Verkostungen (<?= count($meineVerkostungen) ?>)</h2>
+            <?php if ($ergImTasting && !$ergTastingAdmin): ?>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Im Tasting bleiben deine Bewertungen erhalten – löschen kann sie nur der Tasting-Administrator. Ändern kannst du sie jederzeit.</p>
+            <?php else: ?>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Hier kannst du jede einzelne Verkostung ändern oder löschen.</p>
+            <?php endif; ?>
+            <?php foreach ($meineVerkostungen as $mvNr => $mv): ?>
+              <?php
+                $mvSumme = 0; $mvAnz = 0;
+                foreach ($mv['werte'] as $w) { $mvSumme += (int)$w; $mvAnz++; }
+                $mvSchnitt = $mvAnz > 0 ? $mvSumme / $mvAnz : null;
+              ?>
+              <div style="display:flex; align-items:flex-start; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.5rem 0;">
+                <span style="flex:1; min-width:0;">
+                  <b><?= sterneAnzeige($mvSchnitt) ?></b>
+                  <span class="anzahl"><?= e(date('d.m.Y H:i', (int)($mv['zeit'] ?? 0))) ?> Uhr</span>
+                  <?php if ((int)($mv['flaschen'] ?? 0) > 0): ?><span class="anzahl">· <?= (int)$mv['flaschen'] ?> Fl.</span><?php endif; ?>
+                  <?php if ((int)($mv['bestellung'] ?? 0) > 0): ?><span class="anzahl">· 🛒 <?= (int)$mv['bestellung'] ?></span><?php endif; ?>
+                  <?php if (trim((string)($mv['preis'] ?? '')) !== ''): ?><span class="anzahl">· <?= e((string)$mv['preis']) ?></span><?php endif; ?>
+                  <?php if (trim((string)($mv['notiz'] ?? '')) !== ''): ?><br><span style="font-style:italic;">„<?= e((string)$mv['notiz']) ?>“</span><?php endif; ?>
+                </span>
+                <span style="display:flex; gap:0.4rem; flex-shrink:0; align-items:center;">
+                  <?php if ($mvNr === 0): ?>
+                    <a class="knopf klein zweit" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($mv['person'])) ?>&amp;bearbeiten=1">✏️ ändern</a>
+                  <?php endif; ?>
+                  <?php if (!$ergImTasting || $ergTastingAdmin): ?>
+                    <form method="post" style="display:inline; margin:0;" onsubmit="return confirm('Diese Verkostung wirklich löschen?');">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="bewertung_loeschen">
+                      <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                      <input type="hidden" name="person" value="<?= e($mv['person']) ?>">
+                      <input type="hidden" name="zeit" value="<?= e((string)(int)($mv['zeit'] ?? 0)) ?>">
+                      <input type="hidden" name="zurueck" value="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">
+                      <button class="loeschen" type="submit">🗑</button>
+                    </form>
+                  <?php endif; ?>
+                </span>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+
         <div class="card zu">
           <h2>Einzelbewertungen</h2>
           <div class="tabelle-scroll">
@@ -7033,9 +7189,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     <td><b><?= number_format($summe / count($KATEGORIEN), 1, ',', '') ?></b></td>
                     <td><?= (int)($b['flaschen'] ?? 0) ?></td>
                     <?php if ($eingeloggt): ?>
+                      <?php
+                        // ändern: eigene Zeile (oder Tasting-Admin). löschen: bei Tasting-Getränk
+                        // nur der Tasting-Admin, sonst die eigene Bewertung.
+                        $darfAendern = $eigeneZeile || $ergTastingAdmin;
+                        $darfLoeschen = $ergImTasting ? $ergTastingAdmin : $eigeneZeile;
+                      ?>
                       <td>
-                        <?php if ($eigeneZeile || $darfNamen): // eigene Bewertung – oder Gastgeber/Admin ?>
+                        <?php if ($darfAendern): ?>
                           <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>&amp;bearbeiten=1">ändern</a>
+                        <?php endif; ?>
+                        <?php if ($darfLoeschen): ?>
                           <form method="post" style="display:inline" onsubmit="return confirm('Diese Bewertung wirklich löschen?');">
                             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                             <input type="hidden" name="aktion" value="bewertung_loeschen">
@@ -8061,7 +8225,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
   <nav class="tab-leiste">
     <a href="./" class="<?= $bereich === 'verkosten' ? 'aktiv' : '' ?>"><span class="tab-icon">🥂</span>Verkosten</a>
-    <a href="?liste=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">🕘</span>Historie</a>
+    <a href="?liste=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">📖</span>Logbuch</a>
     <a href="?tasting=1" class="<?= $bereich === 'tasting' ? 'aktiv' : '' ?>"><span class="tab-icon">👥</span>Tasting</a>
   </nav>
 
