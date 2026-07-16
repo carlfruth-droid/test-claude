@@ -1583,6 +1583,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Stammdaten gespeichert.'));
     }
 
+    if ($aktion === 'anregung_toggle') {
+        // Nur der App-Administrator entscheidet, welche Getränke in „Anregungen“ erscheinen
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        if (!globalerAdmin(datenLaden())) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Das darf nur der App-Administrator.'));
+        }
+        $an = false;
+        datenAendern(function (array $d) use ($cid, &$an): array {
+            foreach ($d['champagner'] as &$c) {
+                if ($c['id'] === $cid) {
+                    $an = empty($c['anregung']);
+                    $c['anregung'] = $an;
+                }
+            }
+            unset($c);
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode($an ? 'Getränk ist jetzt unter „Anregungen“ sichtbar.' : 'Getränk aus „Anregungen“ entfernt.'));
+    }
+
     if ($aktion === 'foto_upload') {
         $cid = (string)($_POST['champagner_id'] ?? '');
         $champagner = champagnerHolen(datenLaden(), $cid);
@@ -7393,6 +7413,23 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <button class="knopf zweit" type="submit">Speichern</button>
           </form>
         </details>
+        <?php if ($istAdmin): ?>
+          <div class="card">
+            <h2>💡 Anregungen</h2>
+            <p class="anzahl" style="margin-bottom:0.6rem;">Nur du als App-Administrator entscheidest, welche Getränke im Menüpunkt „Anregungen“ öffentlich (anonym) sichtbar sind.</p>
+            <form method="post" style="margin:0;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="anregung_toggle">
+              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+              <?php if (!empty($aktiverChampagner['anregung'])): ?>
+                <p style="margin:0 0 0.5rem;"><span class="bewerter-chip">💡 In Anregungen aufgenommen</span></p>
+                <button class="knopf zweit" type="submit">Aus Anregungen entfernen</button>
+              <?php else: ?>
+                <button class="knopf" type="submit">💡 In Anregungen aufnehmen</button>
+              <?php endif; ?>
+            </form>
+          </div>
+        <?php endif; ?>
       <?php endif; ?>
 
       <?php $recherche = trim((string)($aktiverChampagner['recherche'] ?? '')); ?>
@@ -8182,11 +8219,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <input type="search" class="filter-feld" placeholder="🔍 Getränk, Weingut oder Traube suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php
-        // Anregungen: ALLE Getränke der Datenbank – anonym, nur die aggregierte
+        // Anregungen: NUR Getränke, die der App-Administrator ausdrücklich
+        // aufgenommen hat (Feld „anregung“) – anonym, nur die aggregierte
         // Wertung (Sterne + Anzahl), niemals einzelne Bewerter-Namen.
         $champagnerListe = array_values(array_filter(
             $daten['champagner'],
-            fn($c) => ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)
+            fn($c) => !empty($c['anregung'])
+                && ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)
         ));
         if ($sortierung === 'name') {
             usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
@@ -8198,7 +8237,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       ?>
       <?php $katName = $kategorie === 'alle' ? 'Getränk' : $KATEGORIEN_GETRAENKE[$kategorie][1]; ?>
       <?php if ($champagnerListe === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;">Hier ist noch kein <?= e($katName) ?> erfasst – leg unter <a href="./">🥂 Verkosten</a> mit „Neues Getränk“ los!</p></div>
+        <div class="card"><p style="color:var(--muted); font-style:italic;">Hier ist noch nichts als Anregung aufgenommen. Der App-Administrator nimmt Getränke über deren Ergebnis-Seite in die Anregungen auf.</p></div>
       <?php endif; ?>
       <?php foreach ($champagnerListe as $c): ?>
         <?php
@@ -8248,7 +8287,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
   <nav class="tab-leiste">
     <a href="./" class="<?= $bereich === 'verkosten' ? 'aktiv' : '' ?>"><span class="tab-icon">🥂</span>Verkosten</a>
     <a href="?meine=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">📖</span>Logbuch</a>
-    <a href="?anregungen=1" class="<?= $bereich === 'anregungen' ? 'aktiv' : '' ?>"><span class="tab-icon">💡</span>Anregungen</a>
     <a href="?tasting=1" class="<?= $bereich === 'tasting' ? 'aktiv' : '' ?>"><span class="tab-icon">👥</span>Tasting</a>
   </nav>
 
