@@ -4790,6 +4790,8 @@ if (isset($_GET['blind'])) {
     $ansicht = 'meine';
 } elseif (isset($_GET['konto'])) {
     $ansicht = 'konto';
+} elseif (isset($_GET['blindinfo'])) {
+    $ansicht = 'blindinfo';
 } elseif (isset($_GET['ueber'])) {
     $ansicht = 'ueber';
 } elseif (isset($_GET['nutzung'])) {
@@ -5396,10 +5398,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php else: ?>
           <a href="./">🥂&nbsp;Verkosten</a>
         <?php endif; ?>
-        <?php if ($kopfWeingut !== null): ?>
+        <?php // Weingut-Anker NUR beim Verkosten und nur, wenn wirklich eines gewählt ist ?>
+        <?php if ($kopfWeingut !== null && $bereich === 'verkosten'): ?>
           <a href="?vk=<?= e(rawurlencode($kopfWeingut['id'])) ?>">🍇&nbsp;<?= e($kopfWeingut['name']) ?></a>
-        <?php else: ?>
-          <a href="?vk=ohne">🏠&nbsp;ohne Weingut</a>
         <?php endif; ?>
         <?php if ($kopfGlas !== null): ?>
           <a href="?bewerten=<?= e(rawurlencode($kopfGlas['id'])) ?>">🥂&nbsp;<?= e($kopfGlas['name']) ?></a>
@@ -5417,6 +5418,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="./">🥂 Verkosten</a>
       <a href="?meine=1">📖 Logbuch</a>
       <a href="?anregungen=1">💡 Anregungen</a>
+      <a href="?blindinfo=1">🙈 Blindverkostung</a>
       <a href="?tasting=1">👥 Tastings</a>
       <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
@@ -5524,6 +5526,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'blindetiketten'): ?>
       <h1>Blind-Etiketten 🕶️</h1>
       <p class="untertitel">QR-Etiketten für Blindverkostungen – ausdrucken und aufkleben.</p>
+    <?php elseif ($ansicht === 'blindinfo'): ?>
+      <h1>Blindverkostung 🙈</h1>
+      <p class="untertitel">Warum sie die sensorische Genusskompetenz verbessert.</p>
     <?php elseif ($ansicht === 'vbenutzer'): ?>
       <p class="zurueck"><a href="?verwaltung=1">&larr; Zur Verwaltung</a></p>
       <h1>Benutzer 🛡️</h1>
@@ -7824,6 +7829,71 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <p style="margin:0.7rem 0 1rem;">Deine Wertung ist gespeichert. Welches Getränk das war, verrät dir der Gastgeber später mit der Auflösung.</p>
         <a class="knopf" href="./">Fertig</a>
       </div>
+
+    <?php elseif ($ansicht === 'blindinfo'): ?>
+      <!-- ==================== BLINDVERKOSTUNG: WARUM? (Info-Seite) ==================== -->
+      <div class="card">
+        <h2>🥂 Blindverkostung – Warum sie die sensorische Genusskompetenz verbessert</h2>
+        <p>Eine Blindverkostung ist eine der wirkungsvollsten Methoden, um die eigene sensorische Genusskompetenz zu entwickeln. Sie schaltet äußere Einflüsse aus und richtet die Aufmerksamkeit vollständig auf das, was tatsächlich wahrgenommen wird. So lernt das Gehirn, Gerüche, Geschmäcker und Texturen objektiver zu erkennen und dauerhaft einzuordnen.</p>
+      </div>
+
+      <p class="untertitel" style="margin:1rem 0 0.5rem;">🎯 Warum Blindverkostungen so effektiv sind</p>
+
+      <details class="card">
+        <summary>👁️ 1. Erwartungen werden ausgeschaltet</summary>
+        <p style="margin-top:0.6rem;">Marke, Preis, Herkunft, Verpackung oder Empfehlungen beeinflussen unsere Wahrnehmung stärker, als uns bewusst ist. Bei einer Blindverkostung entfallen diese Informationen. Bewertet wird ausschließlich das, was die Sinne tatsächlich wahrnehmen.</p>
+      </details>
+      <details class="card">
+        <summary>🧠 2. Aufbau eines sensorischen Gedächtnisses</summary>
+        <p style="margin-top:0.6rem;">Mit jeder Verkostung speichert das Gehirn neue Referenzen. Typische Eigenschaften wie Säure, Süße, Bitterkeit, Tannin, Mineralität oder Röstaromen werden mit realen Geschmackserlebnissen verknüpft. Dadurch können sie später immer schneller und sicherer erkannt werden.</p>
+      </details>
+      <details class="card">
+        <summary>🔍 3. Bewusstere Wahrnehmung</summary>
+        <p style="margin-top:0.6rem;">Da keine äußeren Hinweise vorhanden sind, richtet sich die Aufmerksamkeit automatisch auf Details wie Aromaintensität, Mundgefühl, Balance, Nachhall und die zeitliche Entwicklung eines Getränks. Die Verkostung wird konzentrierter und präziser.</p>
+      </details>
+      <details class="card">
+        <summary>❤️ 4. Den eigenen Geschmack besser kennenlernen</summary>
+        <p style="margin-top:0.6rem;">Viele Menschen stellen bei Blindverkostungen fest, dass ihre tatsächlichen Vorlieben von ihren bisherigen Annahmen abweichen. Ohne Etikett oder Preis zählt nur der persönliche Genuss. Das hilft, den eigenen Geschmack objektiver kennenzulernen.</p>
+      </details>
+      <details class="card">
+        <summary>🎓 5. Lernen durch unmittelbares Feedback</summary>
+        <p style="margin-top:0.6rem;">Nach der Auflösung werden Fehleinschätzungen sofort korrigiert. Jede Korrektur erweitert das sensorische Wissen und verbessert zukünftige Entscheidungen. Fehler sind dabei kein Misserfolg, sondern der eigentliche Lernprozess.</p>
+      </details>
+      <details class="card">
+        <summary>🌈 6. Feinere Unterschiede erkennen</summary>
+        <p style="margin-top:0.6rem;">Mit zunehmender Übung wächst die Fähigkeit, immer subtilere Unterschiede wahrzunehmen. Aus allgemeinen Eindrücken wie „fruchtig“ oder „nussig“ werden präzise Beschreibungen wie grüner Apfel, weiße Blüten, Haselnuss oder Brioche. Gleichzeitig erweitert sich das eigene sensorische Vokabular.</p>
+      </details>
+      <details class="card">
+        <summary>⚖️ 7. Objektiver bewerten</summary>
+        <p style="margin-top:0.6rem;">Blindverkostungen fördern eine Bewertung nach tatsächlicher Qualität, Harmonie und Komplexität statt nach Image, Preis oder Bekanntheit einer Marke. Dadurch entstehen ehrlichere und konsistentere Bewertungen.</p>
+      </details>
+      <details class="card">
+        <summary>💪 8. Mehr Sicherheit und Selbstvertrauen</summary>
+        <p style="margin-top:0.6rem;">Wer regelmäßig blind verkostet, entwickelt Vertrauen in die eigene Wahrnehmung. Aromen werden schneller erkannt, treffender beschrieben und sicherer bewertet. Die eigene Genusskompetenz wächst mit jeder Verkostung.</p>
+      </details>
+
+      <div class="card">
+        <h2>🔄 Blindverkostung als persönliches Training</h2>
+        <p style="margin-bottom:0.7rem;">Eine Blindverkostung ist nicht nur ein Test, sondern ein Lernwerkzeug. Jede Verkostung folgt demselben erfolgreichen Prinzip:</p>
+        <p style="text-align:center; font-weight:600; margin-bottom:0.7rem;">👃 Wahrnehmen → 🤔 Entscheiden → 🎁 Auflösen → 💡 Verstehen → 🚀 Lernen</p>
+        <p>Mit jeder Wiederholung verbessert sich die Fähigkeit, Getränke bewusst zu genießen, Unterschiede zu erkennen und den eigenen Geschmack immer präziser einzuordnen.</p>
+      </div>
+
+      <div class="card">
+        <h2>🤖 Die Vision für TasteLog</h2>
+        <p style="margin-bottom:0.7rem;">TasteLog nutzt Blindverkostungen nicht nur als Spiel, sondern als intelligentes Trainingssystem.</p>
+        <p style="margin-bottom:0.5rem;">🧩 Die App erkennt, welche sensorischen Eigenschaften ein Nutzer bereits sicher beherrscht und wo noch Lernpotenzial besteht.</p>
+        <p style="margin-bottom:0.5rem;">🎯 Anschließend schlägt sie gezielt Blindverkostungen vor, die genau diese Fähigkeiten trainieren.</p>
+        <p style="margin-bottom:0.5rem;">📈 So entsteht ein persönlicher Lernpfad, der die sensorische Wahrnehmung Schritt für Schritt verbessert.</p>
+        <p style="margin-bottom:0.7rem;">🏆 Das Ergebnis ist eine nachhaltig wachsende Genusskompetenz – unabhängig davon, ob es um Bier, Wein, Champagner, Whisky, Kaffee, Tee oder andere Getränke geht.</p>
+        <p style="font-style:italic; color:var(--muted);">Je häufiger du blind verkostest, desto weniger urteilst du nach Etiketten – und desto mehr vertraust du deinen eigenen Sinnen.</p>
+      </div>
+
+      <?php if ($eingeloggt): ?>
+        <div class="knopfreihe" style="margin-top:0.5rem;">
+          <a class="knopf" href="?meine=1">🕶️ Eigene Blindprobe anlegen (über ein Getränk im Logbuch)</a>
+        </div>
+      <?php endif; ?>
 
     <?php elseif ($ansicht === 'blindetiketten'): ?>
       <!-- ==================== BLIND-ETIKETTEN (Druck / PDF) – die eigenen, je Konto ==================== -->
