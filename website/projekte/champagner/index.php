@@ -568,12 +568,19 @@ function darfGetraenkeAnlegen(array $daten, ?array $tasting): bool
 }
 
 /**
- * Darf der aktuelle Nutzer dieses Getränk verwalten (ändern/löschen)?
- * App-Administrator: alle. Sonst: Getränke in Tastings, in denen man Admin ist.
+ * Ist der aktuelle Nutzer OWNER dieses Getränks (darf ändern/löschen/Blindprobe)?
+ * Ein Getränk kann mehrere Owner haben: den App-Administrator, den Anleger
+ * (besitzer) und – bei Getränken in einem Tasting – alle Owner des Tastings.
  */
 function darfGetraenkAdministrieren(array $daten, array $c): bool
 {
     if (globalerAdmin($daten)) {
+        return true;
+    }
+    // Wer das Getränk angelegt hat, ist Owner
+    $konto = aktuellerBenutzer($daten);
+    if ($konto !== null && (string)($c['besitzer'] ?? '') !== ''
+        && (string)$c['besitzer'] === (string)$konto['id']) {
         return true;
     }
     $tid = (string)($c['tasting_id'] ?? '');
@@ -603,7 +610,7 @@ function verlangeGetraenkeRecht(): void
     $d = datenLaden();
     $mt = meinTasting($d);
     if ($mt !== null && !darfGetraenkeAnlegen($d, $mt)) {
-        zurueck('?tasting=' . rawurlencode((string)$mt['id']) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Getränke oder Weingüter anlegen – frag den Gastgeber.'));
+        zurueck('?tasting=' . rawurlencode((string)$mt['id']) . '&fehler=' . rawurlencode('Nur ein Owner des Tastings darf Getränke oder Weingüter anlegen – frag den Gastgeber.'));
     }
 }
 
@@ -682,11 +689,11 @@ function teilnehmerLimitErreicht(array $t): bool
     return !empty($t['gast']) && count($t['teilnehmer'] ?? []) >= 2;
 }
 
-/** Blindtasting-Etiketten des aktuellen App-Administrators (individuell je Konto). */
+/** Blindtasting-Etiketten des aktuellen Nutzers (individuell je Konto – wer sie anlegt, dem gehören sie). */
 function blindEintraege(array $daten): array
 {
     $konto = aktuellerBenutzer($daten);
-    if ($konto === null || empty($konto['admin'])) {
+    if ($konto === null) {
         return [];
     }
     return array_values(array_filter(
@@ -1468,7 +1475,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $neueId = bin2hex(random_bytes(4));
         $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $jahrgang, $kat, $weingutId, $neueId, $meinTid): array {
+        $besitzerNeu = (string)(aktuellerBenutzer(datenLaden())['id'] ?? ''); // wer anlegt, ist Owner
+        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $jahrgang, $kat, $weingutId, $neueId, $meinTid, $besitzerNeu): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
@@ -1477,7 +1485,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'jahrgang' => $jahrgang, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'jahrgang' => $jahrgang, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'besitzer' => $besitzerNeu, 'zeit' => time()];
             return $d;
         });
         zurueck('?ok=' . rawurlencode('„' . $name . '“ wurde angelegt – jetzt bewerten!'));
@@ -1559,12 +1567,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $neueWeingutId = bin2hex(random_bytes(4));
             $nName = $erkannt['name'];
             $nRebsorte = (string)($erkannt['rebsorte'] ?? '');
-            datenAendern(function (array $d) use ($nName, $nRebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
+            $besitzerNeu = (string)(aktuellerBenutzer(datenLaden())['id'] ?? ''); // wer anlegt, ist Owner
+            datenAendern(function (array $d) use ($nName, $nRebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid, $besitzerNeu): array {
                 if ($weingutNeu !== '') {
                     $d['weingueter'][] = ['id' => $neueWeingutId, 'name' => $weingutNeu, 'notiz' => '', 'zeit' => time()];
                     $weingutId = $neueWeingutId;
                 }
-                $d['champagner'][] = ['id' => $neueId, 'name' => $nName, 'preis' => '', 'rebsorte' => $nRebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
+                $d['champagner'][] = ['id' => $neueId, 'name' => $nName, 'preis' => '', 'rebsorte' => $nRebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'besitzer' => $besitzerNeu, 'zeit' => time()];
                 if ($meinTid !== '') {
                     foreach ($d['tastings'] as &$t) {
                         if ($t['id'] === $meinTid) {
@@ -1621,7 +1630,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $neueId = bin2hex(random_bytes(4));
         $neueWeingutId = bin2hex(random_bytes(4));
         $meinTid = (string)(meinTasting(datenLaden())['id'] ?? '');
-        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $jahrgang, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid): array {
+        $besitzerNeu = (string)(aktuellerBenutzer(datenLaden())['id'] ?? ''); // wer anlegt, ist Owner
+        datenAendern(function (array $d) use ($name, $preis, $rebsorte, $jahrgang, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid, $besitzerNeu): array {
             foreach ($d['champagner'] as $c) {
                 if (mb_strtolower($c['name']) === mb_strtolower($name) && (string)($c['tasting_id'] ?? '') === $meinTid) {
                     zurueck('?neu=2&fehler=' . rawurlencode('Diesen Champagner gibt es schon in der Liste.'));
@@ -1642,7 +1652,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($weingutId !== '' && weingutHolen($d, $weingutId) === null) {
                 $weingutId = '';
             }
-            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'jahrgang' => $jahrgang, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'zeit' => time()];
+            $d['champagner'][] = ['id' => $neueId, 'name' => $name, 'preis' => $preis, 'rebsorte' => $rebsorte, 'jahrgang' => $jahrgang, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'besitzer' => $besitzerNeu, 'zeit' => time()];
             return $d;
         });
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
@@ -1792,14 +1802,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'blind_anlegen') {
-        // App-Administrator legt ein Blindtasting-Etikett an (individuell je Konto)
+        // Blindprobe wird direkt AM GETRÄNK angelegt – von jedem OWNER des
+        // Getränks (Anleger, Tasting-Owner oder App-Admin), individuell je Konto.
         $cid = (string)($_POST['champagner_id'] ?? '');
         $konto = aktuellerBenutzer(datenLaden());
-        if ($konto === null || empty($konto['admin'])) {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Blindtasting-Etiketten darf nur der App-Administrator anlegen.'));
+        if ($konto === null) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte zuerst mit deinem Benutzerkonto anmelden.'));
         }
-        if (champagnerHolen(datenLaden(), $cid) === null) {
+        $cBlind = champagnerHolen(datenLaden(), $cid);
+        if ($cBlind === null) {
             zurueck('?fehler=' . rawurlencode('Dieses Getränk existiert nicht (mehr).'));
+        }
+        if (!darfGetraenkAdministrieren(datenLaden(), $cBlind)) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Blind-Etiketten kann nur ein Owner dieses Getränks anlegen.'));
         }
         $label = mb_substr(trim((string)($_POST['label'] ?? '')), 0, 24);
         if ($label === '') {
@@ -1815,17 +1830,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'blind_loeschen') {
+        // Eigene Blind-Etiketten löschen (der App-Admin darf notfalls jedes)
         $token = (string)($_POST['token'] ?? '');
         $cid = (string)($_POST['champagner_id'] ?? '');
         $konto = aktuellerBenutzer(datenLaden());
-        if ($konto === null || empty($konto['admin'])) {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Das darf nur der App-Administrator.'));
+        if ($konto === null) {
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte zuerst mit deinem Benutzerkonto anmelden.'));
         }
         $kontoId = (string)$konto['id'];
-        datenAendern(function (array $d) use ($token, $kontoId): array {
+        $istAppAdmin = globalerAdmin(datenLaden());
+        datenAendern(function (array $d) use ($token, $kontoId, $istAppAdmin): array {
             $d['blind'] = array_values(array_filter(
                 $d['blind'] ?? [],
-                fn($b) => !(hash_equals((string)($b['token'] ?? ''), $token) && (string)($b['admin'] ?? '') === $kontoId)
+                fn($b) => !(hash_equals((string)($b['token'] ?? ''), $token)
+                    && ($istAppAdmin || (string)($b['admin'] ?? '') === $kontoId))
             ));
             return $d;
         });
@@ -2018,7 +2036,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Getränk ohne Tasting (persönlich): jeder darf seine EIGENE Bewertung löschen.
         if ($cTasting !== null) {
             if (tastingRolle($d0, $cTasting) !== 'admin') {
-                zurueck($zielUrl . '&fehler=' . rawurlencode('Bewertungen im Tasting kann nur der Tasting-Administrator löschen.'));
+                zurueck($zielUrl . '&fehler=' . rawurlencode('Bewertungen im Tasting kann nur ein Owner des Tastings löschen.'));
             }
         } elseif (!$eigene) {
             zurueck($zielUrl . '&fehler=' . rawurlencode('Du kannst nur deine eigene Bewertung löschen.'));
@@ -2173,14 +2191,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $nReb = (string)($erkannt['rebsorte'] ?? '');
                     $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'spirituose', 'sonstiges'], true)
                         ? (string)$erkannt['typ'] : 'champagner';
-                    datenAendern(function (array $d) use ($nName, $nReb, $nTyp, $weingutId, $weingutNeu, $neueId, $neueWgId, $tid, $mtime): array {
+                    $besitzerNeu = (string)(aktuellerBenutzer(datenLaden())['id'] ?? ''); // wer anlegt, ist Owner
+                    datenAendern(function (array $d) use ($nName, $nReb, $nTyp, $weingutId, $weingutNeu, $neueId, $neueWgId, $tid, $mtime, $besitzerNeu): array {
                         if ($weingutNeu !== '') {
                             $d['weingueter'][] = ['id' => $neueWgId, 'name' => $weingutNeu, 'notiz' => '', 'zeit' => $mtime];
                             $weingutId = $neueWgId;
                         }
                         $d['champagner'][] = [
                             'id' => $neueId, 'name' => $nName, 'preis' => '', 'rebsorte' => $nReb,
-                            'weingut_id' => $weingutId, 'typ' => $nTyp, 'tasting_id' => $tid, 'zeit' => $mtime,
+                            'weingut_id' => $weingutId, 'typ' => $nTyp, 'tasting_id' => $tid, 'besitzer' => $besitzerNeu, 'zeit' => $mtime,
                         ];
                         return $d;
                     });
@@ -3013,7 +3032,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tObj = null;
         foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
         if (!darfTastingVerwalten(datenLaden(), $tObj)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf das Tasting ändern.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf das Tasting ändern.'));
         }
         $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
         if ($titel === '') {
@@ -3035,7 +3054,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tObj = null;
         foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
         if (!darfTastingVerwalten(datenLaden(), $tObj)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf das Tasting löschen.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf das Tasting löschen.'));
         }
         datenAendern(function (array $d) use ($tid): array {
             $d['tastings'] = array_values(array_filter($d['tastings'], fn($t) => $t['id'] !== $tid));
@@ -3049,7 +3068,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tObj = null;
         foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
         if (!darfTastingVerwalten(datenLaden(), $tObj)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Teilnehmer hinzufügen.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf Teilnehmer hinzufügen.'));
         }
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
         $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
@@ -3082,7 +3101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tObj = null;
         foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
         if (!darfTastingVerwalten(datenLaden(), $tObj)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Rollen ändern.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf Rollen ändern.'));
         }
         datenAendern(function (array $d) use ($tid, $token, $rolle): array {
             foreach ($d['tastings'] as &$t) {
@@ -3104,7 +3123,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tObj = null;
         foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
         if (!darfTastingVerwalten(datenLaden(), $tObj)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Teilnehmer entfernen.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf Teilnehmer entfernen.'));
         }
         datenAendern(function (array $d) use ($tid, $token): array {
             foreach ($d['tastings'] as &$t) {
@@ -3176,7 +3195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         // Getränke ins Tasting holen darf nur der Tasting-Administrator
         if (!darfTastingVerwalten($d0, $zielTasting)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Administrator darf Getränke ins Tasting holen.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner des Tastings darf Getränke ins Tasting holen.'));
         }
         datenAendern(function (array $d) use ($tid, $cid): array {
             foreach ($d['champagner'] as &$c) {
@@ -3219,7 +3238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         // Löschen darf nur, wer das Getränk verwalten darf (App- oder Tasting-Admin)
         if (!darfGetraenkAdministrieren(datenLaden(), $cLoesch)) {
-            zurueck('?ergebnis=' . rawurlencode($id) . '&fehler=' . rawurlencode('Nur der zuständige Administrator darf dieses Getränk löschen.'));
+            zurueck('?ergebnis=' . rawurlencode($id) . '&fehler=' . rawurlencode('Nur ein Owner darf dieses Getränk löschen.'));
         }
         datenAendern(function (array $d) use ($id): array {
             $d['champagner']  = array_values(array_filter($d['champagner'], fn($c) => $c['id'] !== $id));
@@ -5231,6 +5250,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <a href="?meine=1">📖 Logbuch</a>
       <a href="?anregungen=1">💡 Anregungen</a>
       <a href="?tasting=1">👥 Tastings</a>
+      <?php if ($benutzerAktiv !== null): ?>
+        <a href="?blindetiketten=1">🕶️ Blind-Etiketten</a>
+      <?php endif; ?>
       <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
         <summary>ℹ️ Hilfe &amp; Info</summary>
@@ -5248,7 +5270,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <summary>🛠️ Administration</summary>
           <a href="?weingueter=1&amp;alle=1">🍇 Alle Weingüter</a>
           <a href="?fotos=1&amp;alle=1">📸 Alle Fotos</a>
-          <a href="?blindetiketten=1">🕶️ Blind-Etiketten</a>
           <a href="?verwaltung=1">🛠️ Verwaltung</a>
         </details>
       <?php endif; ?>
@@ -6124,7 +6145,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $vt = $verwaltungTasting;
         $vBeitritt = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($vt['beitritt'] ?? '');
         $vQrPng = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' . rawurlencode($vBeitritt);
-        $vRollen = ['admin' => '🛠️ Admin', 'tester' => '🥂 Tester', 'viewer' => '👁️ Betrachter'];
+        $vRollen = ['admin' => '🛠️ Owner', 'tester' => '🥂 Tester', 'viewer' => '👁️ Betrachter'];
         // ---- Dashboard-Zahlen (nur der Tasting-Admin sieht diese Seite) ----
         $vtWeine = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$vt['id'])));
         $rollenZaehler = ['admin' => 0, 'tester' => 0, 'viewer' => 0];
@@ -6150,11 +6171,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       ?>
       <div class="card">
         <h2>📊 Dashboard</h2>
-        <p class="anzahl" style="margin-bottom:0.7rem;">Übersicht nur für dich als Tasting-Administrator – Teilnehmer sehen sie nicht.</p>
+        <p class="anzahl" style="margin-bottom:0.7rem;">Übersicht nur für Owner des Tastings – Teilnehmer sehen sie nicht.</p>
         <div class="dash-kacheln">
           <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['tester'] ?></span><span class="dash-label">🥂 Tester</span></div>
           <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['viewer'] ?></span><span class="dash-label">👁️ Betrachter</span></div>
-          <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['admin'] ?></span><span class="dash-label">🛠️ Admins</span></div>
+          <div class="dash-kachel"><span class="dash-zahl"><?= $rollenZaehler['admin'] ?></span><span class="dash-label">🛠️ Owner</span></div>
           <div class="dash-kachel"><span class="dash-zahl"><?= $bestellGesamt ?></span><span class="dash-label">🛒 Bestellungen</span></div>
           <div class="dash-kachel"><span class="dash-zahl"><?= count($vtWeine) ?></span><span class="dash-label">🍾 Getränke</span></div>
         </div>
@@ -6191,7 +6212,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
       <div class="card">
         <h2>👥 Teilnehmer &amp; Rollen</h2>
-        <p class="anzahl" style="margin-bottom:0.7rem;">🛠️ Admin darf Getränke/Weingüter anlegen und verwalten · 🥂 Tester darf bewerten · 👁️ Betrachter sieht nur zu.</p>
+        <p class="anzahl" style="margin-bottom:0.7rem;">🛠️ Owner darf Getränke/Weingüter anlegen und verwalten (ein Tasting kann mehrere Owner haben) · 🥂 Tester darf bewerten · 👁️ Betrachter sieht nur zu.</p>
         <?php if (($vt['teilnehmer'] ?? []) === []): ?>
           <p class="anzahl" style="font-style:italic;">Noch niemand dabei – oben einladen.</p>
         <?php endif; ?>
@@ -6242,7 +6263,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="text" name="email" placeholder="E-Mail (für die Einladung)" maxlength="80" inputmode="email">
             <select name="rolle">
               <option value="tester">🥂 Tester (darf bewerten)</option>
-              <option value="admin">🛠️ Admin (darf alles verwalten)</option>
+              <option value="admin">🛠️ Owner (verwaltet das Tasting)</option>
               <option value="viewer">👁️ Betrachter (nur zusehen)</option>
             </select>
             <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
@@ -7229,7 +7250,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                       <span class="thumb platzhalter"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
                     <?php endif; ?>
                     <span class="flasche-info">
-                      <span class="f-name"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '' ?> <?= e($c['name']) ?><?= $ein['admin'] ? ' <span class="bewerter-chip" style="font-size:0.68rem;">🛠️ verwaltet</span>' : '' ?></span>
+                      <span class="f-name"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '' ?> <?= e($c['name']) ?><?= $ein['admin'] ? ' <span class="bewerter-chip" style="font-size:0.68rem;">🛠️ Owner</span>' : '' ?></span>
                       <span class="f-meta"><?= e(implode(' · ', $meta)) ?></span>
                       <?php if ($andereJg !== []): ?>
                         <span class="f-meta" style="color:var(--accent);">📅 auch als Jahrgang <?= e(implode(', ', $andereJg)) ?> vorhanden</span>
@@ -7499,9 +7520,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       </div>
 
     <?php elseif ($ansicht === 'blindetiketten'): ?>
-      <!-- ==================== BLIND-ETIKETTEN (Druck / PDF) ==================== -->
-      <?php if (!$istAdmin): ?>
-        <div class="card"><p>Diese Seite ist nur für den App-Administrator.</p></div>
+      <!-- ==================== BLIND-ETIKETTEN (Druck / PDF) – die eigenen, je Konto ==================== -->
+      <?php if ($benutzerAktiv === null): ?>
+        <div class="card"><p style="margin-bottom:0.8rem;">Melde dich mit deinem Benutzerkonto an, um deine Blind-Etiketten zu sehen.</p><a class="knopf" href="?konto=1">Zum Benutzerkonto</a></div>
       <?php else: ?>
         <?php
           $meineBlind = blindEintraege($daten);
@@ -7754,7 +7775,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <div class="card">
             <h2>📖 Meine Verkostungen (<?= count($meineVerkostungen) ?>)</h2>
             <?php if ($ergImTasting && !$ergTastingAdmin): ?>
-              <p class="anzahl" style="margin-bottom:0.6rem;">Im Tasting bleiben deine Bewertungen erhalten – löschen kann sie nur der Tasting-Administrator. Ändern kannst du sie jederzeit.</p>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Im Tasting bleiben deine Bewertungen erhalten – löschen kann sie nur ein Owner des Tastings. Ändern kannst du sie jederzeit.</p>
             <?php else: ?>
               <p class="anzahl" style="margin-bottom:0.6rem;">Hier kannst du jede einzelne Verkostung ändern oder löschen.</p>
             <?php endif; ?>
@@ -7968,6 +7989,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php endif; ?>
             </form>
           </div>
+        <?php endif; ?>
+        <?php // 🕶️ Blindtasting hängt AM GETRÄNK: jeder Owner (Anleger, Tasting-Owner, App-Admin) kann es hier einrichten ?>
+        <?php if ($benutzerAktiv !== null && darfGetraenkAdministrieren($daten, $aktiverChampagner)): ?>
           <?php
             $blindDieses = array_values(array_filter(blindEintraege($daten), fn($b) => (string)$b['cid'] === (string)$aktiverChampagner['id']));
           ?>
