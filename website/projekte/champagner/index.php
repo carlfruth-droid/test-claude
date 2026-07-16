@@ -1624,7 +1624,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             fotosUmhaengen($praefix, 'neu', $neueId);
             unset($_SESSION['neu']);
             if (!$direktVerkosten) {
-                zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $nName . '“ erkannt und angelegt – bewerten kannst du jederzeit später.'));
+                // Der richtige Start: gleich der Internet-Check, der die Stammdaten
+                // (Rebsorte, Jahrgang, Süße, Preis, Erzeuger) validiert und vorschlägt
+                @set_time_limit(120);
+                $rechAuto = getraenkRecherchieren($neueId);
+                $meldung = $rechAuto['ok']
+                    ? '„' . $nName . '“ erkannt und angelegt – Internet-Check fertig.' . ($rechAuto['vorschlag'] ? ' Unten wartet ein Stammdaten-Vorschlag.' : '')
+                    : '„' . $nName . '“ erkannt und angelegt – der Internet-Check lieferte gerade nichts, du kannst ihn unten jederzeit starten.';
+                zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode($meldung) . '#recherche');
             }
             zurueck('?bewerten=' . rawurlencode($neueId) . $vkAnhang . '&ok=' . rawurlencode('„' . $nName . '“ erkannt und angelegt – los geht’s! (Preis & Co. später unter „Stammdaten“ ergänzbar)'));
         }
@@ -1711,7 +1718,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             });
         }
         if (!$direktVerkosten) {
-            zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – bewerten kannst du jederzeit später.'));
+            // Der richtige Start: gleich der Internet-Check mit Stammdaten-Vorschlag
+            @set_time_limit(120);
+            $rechAuto = getraenkRecherchieren($neueId);
+            $meldung = $rechAuto['ok']
+                ? '„' . $name . '“ ist angelegt – Internet-Check fertig.' . ($rechAuto['vorschlag'] ? ' Unten wartet ein Stammdaten-Vorschlag.' : '')
+                : '„' . $name . '“ ist angelegt – der Internet-Check lieferte gerade nichts, du kannst ihn unten jederzeit starten.';
+            zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode($meldung) . '#recherche');
         }
         zurueck('?bewerten=' . rawurlencode($neueId) . ($vk !== '' ? '&vk=' . rawurlencode($vk) : '') . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
     }
@@ -2689,54 +2702,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'champagner_recherche') {
         $cid = (string)($_POST['champagner_id'] ?? '');
-        $c = champagnerHolen(datenLaden(), $cid);
-        if ($c === null) {
-            zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
+        if (champagnerHolen(datenLaden(), $cid) === null) {
+            zurueck('?fehler=' . rawurlencode('Dieses Getränk existiert nicht (mehr).'));
         }
-        $wg = weingutHolen(datenLaden(), (string)($c['weingut_id'] ?? ''));
-        $auftrag = 'Recherchiere im Web den Champagner "' . $c['name'] . '"'
-            . ($wg !== null ? ' vom Erzeuger "' . $wg['name'] . '"' : '')
-            . '. Fasse kurz auf Deutsch zusammen, als Stichpunkte mit Zeilenumbrüchen, insgesamt höchstens ~120 Wörter: '
-            . 'Stil und Rebsorten, Dosage, Besonderheiten der Herstellung, Bewertungen/Auszeichnungen (falls findbar), üblicher Preis. '
-            . 'Keine Einleitung, keine Erklärungen, keine Quellenangaben. '
-            . 'Ganz am Ende, als eigene letzte Zeile, zusätzlich genau dieses JSON mit deinen besten Werten (unbekannte Felder leer lassen): '
-            . '{"rebsorte":"...","preis":"z. B. ca. 45 €"}';
-        $text = claudeWebsuche($auftrag);
-        if ($text === '') {
+        $ergebnis = getraenkRecherchieren($cid);
+        if (!$ergebnis['ok']) {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.') . '#recherche');
         }
-        // Struktur-Zeile am Ende herauslösen → Vorschlag für die Stammdaten
-        $vorschlag = [];
-        if (preg_match_all('/\{[^{}]*\}/s', $text, $mm) && $mm[0] !== []) {
-            $roh = end($mm[0]);
-            $j = json_decode($roh, true);
-            if (is_array($j)) {
-                $text = trim(str_replace($roh, '', $text));
-                $vr = mb_substr(trim((string)($j['rebsorte'] ?? '')), 0, 80);
-                $vp = mb_substr(trim((string)($j['preis'] ?? '')), 0, 20);
-                if ($vr !== '' && mb_strtolower($vr) !== mb_strtolower(trim((string)($c['rebsorte'] ?? '')))) {
-                    $vorschlag['rebsorte'] = $vr;
-                }
-                if ($vp !== '' && $vp !== trim((string)($c['preis'] ?? ''))) {
-                    $vorschlag['preis'] = $vp;
-                }
-            }
-        }
-        datenAendern(function (array $d) use ($cid, $text, $vorschlag): array {
-            foreach ($d['champagner'] as &$c2) {
-                if ($c2['id'] === $cid) {
-                    $c2['recherche'] = $text;
-                    if ($vorschlag !== []) {
-                        $c2['recherche_vorschlag'] = $vorschlag;
-                    } else {
-                        unset($c2['recherche_vorschlag']);
-                    }
-                }
-            }
-            return $d;
-        });
         // Zurück direkt zur (offenen) Recherche-Karte – nicht irgendwo anders hin
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($vorschlag !== [] ? ' Dort wartet ein Stammdaten-Vorschlag auf deine Bestätigung.' : '')) . '#recherche');
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($ergebnis['vorschlag'] ? ' Dort wartet ein Stammdaten-Vorschlag auf deine Bestätigung.' : '')) . '#recherche');
     }
 
     if ($aktion === 'weingut_recherche') {
@@ -2797,7 +2771,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($c === null) {
                 zurueck('?fehler=' . rawurlencode('Dieses Getränk existiert nicht (mehr).'));
             }
-            datenAendern(function (array $d) use ($id, $uebernehmen): array {
+            $neueWgId = bin2hex(random_bytes(4)); // falls ein neuer Erzeuger angelegt werden muss
+            datenAendern(function (array $d) use ($id, $uebernehmen, $neueWgId): array {
                 foreach ($d['champagner'] as &$c2) {
                     if ($c2['id'] !== $id) {
                         continue;
@@ -2810,9 +2785,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (($v['preis'] ?? '') !== '') {
                             $c2['preis'] = (string)$v['preis'];
                         }
+                        if (preg_match('/^\d{4}$/', (string)($v['jahrgang'] ?? ''))) {
+                            $c2['jahrgang'] = (string)$v['jahrgang'];
+                        }
+                        if (($v['beschreibung'] ?? '') !== '' && trim((string)($c2['beschreibung'] ?? '')) === '') {
+                            $c2['beschreibung'] = (string)$v['beschreibung'];
+                        }
+                        // Erzeuger verknüpfen: vorhandenes Weingut per Name finden, sonst neu anlegen
+                        if (($v['weingut'] ?? '') !== '' && (string)($c2['weingut_id'] ?? '') === '') {
+                            $wgName = (string)$v['weingut'];
+                            $wgId = '';
+                            foreach ($d['weingueter'] as $w) {
+                                if (mb_strtolower(trim((string)$w['name'])) === mb_strtolower(trim($wgName))) {
+                                    $wgId = (string)$w['id'];
+                                    break;
+                                }
+                            }
+                            if ($wgId === '') {
+                                $d['weingueter'][] = ['id' => $neueWgId, 'name' => $wgName, 'notiz' => '', 'zeit' => time()];
+                                $wgId = $neueWgId;
+                            }
+                            $c2['weingut_id'] = $wgId;
+                        }
                     }
                     unset($c2['recherche_vorschlag']);
                 }
+                unset($c2);
                 return $d;
             });
             zurueck('?ergebnis=' . rawurlencode($id) . '&ok=' . rawurlencode($uebernehmen ? 'Stammdaten aus der Recherche übernommen.' : 'Vorschlag verworfen.') . '#recherche');
@@ -4477,6 +4475,95 @@ function weingutNameErmitteln(string $standort, float $lat, float $lon, array $k
 }
 
 /** Allgemeine KI-Websuche: liefert die Textantwort oder '' (kein Schlüssel/kein Ergebnis). */
+/**
+ * 🔎 Internet-Check eines Getränks: typbewusste Web-Recherche (kein stures
+ * „Champagner“ mehr), inkl. Validierung des Erzeugers. Speichert den
+ * Recherche-Text und einen Stammdaten-Vorschlag (Rebsorte/Sorte, Jahrgang,
+ * Süße, Preis, Erzeuger, Kurzbeschreibung) am Getränk.
+ * Rückgabe: ['ok' => bool, 'vorschlag' => bool]
+ */
+function getraenkRecherchieren(string $cid): array
+{
+    $c = champagnerHolen(datenLaden(), $cid);
+    if ($c === null) {
+        return ['ok' => false, 'vorschlag' => false];
+    }
+    $typ = (string)($c['typ'] ?? 'champagner');
+    $arten = [
+        'champagner' => 'Champagner', 'rotwein' => 'Rotwein', 'weisswein' => 'Weißwein',
+        'bier' => 'Bier', 'spirituose' => 'Spirituose', 'sonstiges' => 'Delikatesse/Feinkost-Produkt',
+    ];
+    $art = $arten[$typ] ?? 'Getränk';
+    $wg = weingutHolen(datenLaden(), (string)($c['weingut_id'] ?? ''));
+    $sortenwort = match ($typ) {
+        'bier'       => 'Bierstil',
+        'spirituose' => 'Art (z. B. Single Malt, Gin)',
+        'sonstiges'  => 'Art des Produkts',
+        default      => 'Rebsorte(n)',
+    };
+    $auftrag = 'Recherchiere im Web: ' . $art . ' „' . $c['name'] . '“'
+        . ($wg !== null ? ' vom Erzeuger „' . $wg['name'] . '“' : '')
+        . ((string)($c['jahrgang'] ?? '') !== '' ? ', Jahrgang ' . (string)$c['jahrgang'] : '')
+        . '. Prüfe zuerst, ob Name und Erzeuger zusammenpassen und um welche Art Produkt es sich WIRKLICH handelt – korrigiere stillschweigend, statt zu belehren. '
+        . 'Fasse dann kurz auf Deutsch zusammen, als Stichpunkte mit Zeilenumbrüchen, insgesamt höchstens ~120 Wörter: '
+        . 'Stil/Charakter, ' . $sortenwort . ', Süße/Dosage (falls zutreffend), Besonderheiten der Herstellung, Bewertungen/Auszeichnungen (falls findbar), üblicher Preis. '
+        . 'Keine Einleitung, keine Entschuldigungen, keine Belehrungen („das ist kein …“), keine Quellenangaben. '
+        . 'Ganz am Ende, als eigene letzte Zeile, zusätzlich genau dieses JSON mit deinen besten Werten (unbekannte Felder leer lassen): '
+        . '{"rebsorte":"' . $sortenwort . '","jahrgang":"JJJJ","suesse":"z. B. brut, trocken, halbtrocken","preis":"z. B. ca. 45 €","weingut":"korrekter Erzeugername","beschreibung":"1–2 Sätze Charakteristik inkl. Süße/Stil"}';
+    $text = claudeWebsuche($auftrag);
+    if ($text === '') {
+        return ['ok' => false, 'vorschlag' => false];
+    }
+    // Struktur-Zeile am Ende herauslösen → Vorschlag für die Stammdaten
+    $vorschlag = [];
+    if (preg_match_all('/\{[^{}]*\}/s', $text, $mm) && $mm[0] !== []) {
+        $roh = end($mm[0]);
+        $j = json_decode($roh, true);
+        if (is_array($j)) {
+            $text = trim(str_replace($roh, '', $text));
+            $vr = mb_substr(trim((string)($j['rebsorte'] ?? '')), 0, 80);
+            $vp = mb_substr(trim((string)($j['preis'] ?? '')), 0, 20);
+            $vj = trim((string)($j['jahrgang'] ?? ''));
+            $vs = mb_substr(trim((string)($j['suesse'] ?? '')), 0, 40);
+            $vw = mb_substr(trim((string)($j['weingut'] ?? '')), 0, 60);
+            $vb = mb_substr(trim((string)($j['beschreibung'] ?? '')), 0, 500);
+            if ($vr !== '' && mb_strtolower($vr) !== mb_strtolower(trim((string)($c['rebsorte'] ?? '')))) {
+                $vorschlag['rebsorte'] = $vr;
+            }
+            if ($vp !== '' && $vp !== trim((string)($c['preis'] ?? ''))) {
+                $vorschlag['preis'] = $vp;
+            }
+            if (preg_match('/^\d{4}$/', $vj) && $vj !== trim((string)($c['jahrgang'] ?? ''))) {
+                $vorschlag['jahrgang'] = $vj;
+            }
+            if ($vs !== '') {
+                $vorschlag['suesse'] = $vs;
+            }
+            if ($vw !== '' && (string)($c['weingut_id'] ?? '') === '') {
+                $vorschlag['weingut'] = $vw; // Erzeuger-Vorschlag nur, wenn noch keiner zugeordnet ist
+            }
+            if ($vb !== '' && trim((string)($c['beschreibung'] ?? '')) === '') {
+                $vorschlag['beschreibung'] = $vb;
+            }
+        }
+    }
+    datenAendern(function (array $d) use ($cid, $text, $vorschlag): array {
+        foreach ($d['champagner'] as &$c2) {
+            if ($c2['id'] === $cid) {
+                $c2['recherche'] = $text;
+                if ($vorschlag !== []) {
+                    $c2['recherche_vorschlag'] = $vorschlag;
+                } else {
+                    unset($c2['recherche_vorschlag']);
+                }
+            }
+        }
+        unset($c2);
+        return $d;
+    });
+    return ['ok' => true, 'vorschlag' => $vorschlag !== []];
+}
+
 function claudeWebsuche(string $auftrag, int $maxTokens = 800): string
 {
     $keyDatei = __DIR__ . '/daten/apikey.php';
@@ -8214,16 +8301,28 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php if ($recherche !== ''): ?>
             <p><?= verlinken($recherche) ?></p>
           <?php else: ?>
-            <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Champagner.</p>
+            <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Getränk.</p>
           <?php endif; ?>
           <?php if ($cVorschlag !== [] && $eingeloggt): ?>
             <div style="background:var(--accent-hell); border-radius:12px; padding:0.7rem 0.9rem; margin-top:0.7rem;">
               <p style="margin-bottom:0.4rem;"><b>💡 Für die Stammdaten gefunden – übernehmen?</b></p>
               <?php if (isset($cVorschlag['rebsorte'])): ?>
-                <p class="anzahl" style="margin:0.15rem 0;">🍇 Rebsorte: <b><?= e($cVorschlag['rebsorte']) ?></b><?= trim((string)($aktiverChampagner['rebsorte'] ?? '')) !== '' ? ' – bisher: ' . e((string)$aktiverChampagner['rebsorte']) : '' ?></p>
+                <p class="anzahl" style="margin:0.15rem 0;">🍇 Sorte: <b><?= e($cVorschlag['rebsorte']) ?></b><?= trim((string)($aktiverChampagner['rebsorte'] ?? '')) !== '' ? ' – bisher: ' . e((string)$aktiverChampagner['rebsorte']) : '' ?></p>
+              <?php endif; ?>
+              <?php if (isset($cVorschlag['jahrgang'])): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">📅 Jahrgang: <b><?= e((string)$cVorschlag['jahrgang']) ?></b><?= trim((string)($aktiverChampagner['jahrgang'] ?? '')) !== '' ? ' – bisher: ' . e((string)$aktiverChampagner['jahrgang']) : '' ?></p>
+              <?php endif; ?>
+              <?php if (isset($cVorschlag['suesse'])): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">🍬 Süße/Dosage: <b><?= e((string)$cVorschlag['suesse']) ?></b> <span class="anzahl">(wird in der Beschreibung vermerkt)</span></p>
               <?php endif; ?>
               <?php if (isset($cVorschlag['preis'])): ?>
                 <p class="anzahl" style="margin:0.15rem 0;">💶 Preis: <b><?= e($cVorschlag['preis']) ?></b><?= trim((string)($aktiverChampagner['preis'] ?? '')) !== '' ? ' – bisher: ' . e((string)$aktiverChampagner['preis']) : '' ?></p>
+              <?php endif; ?>
+              <?php if (isset($cVorschlag['weingut'])): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">🏛️ Erzeuger: <b><?= e((string)$cVorschlag['weingut']) ?></b> <span class="anzahl">(wird verknüpft bzw. neu angelegt)</span></p>
+              <?php endif; ?>
+              <?php if (isset($cVorschlag['beschreibung'])): ?>
+                <p class="anzahl" style="margin:0.15rem 0;">📝 Beschreibung: <b><?= e((string)$cVorschlag['beschreibung']) ?></b></p>
               <?php endif; ?>
               <div class="knopfreihe" style="margin-top:0.5rem;">
                 <form method="post" style="margin:0;">
