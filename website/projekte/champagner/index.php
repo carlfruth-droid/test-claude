@@ -1524,6 +1524,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'schnell_foto') {
         verlangeGetraenkeRecht();
+        // Nur anlegen ODER danach direkt verkosten? (Haken im Formular)
+        $direktVerkosten = ($_POST['direkt_verkosten'] ?? '') === '1';
         // Schritt 1 der Schnell-Erfassung: Foto sichern und Etikett erkennen
         $praefix = 'neu-' . bin2hex(random_bytes(4));
         [$hochgeladen, ] = fotoUploadVerarbeiten($BILD_TYPEN, $praefix);
@@ -1573,6 +1575,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($proz >= 85 && champagnerInTasting($c, $meinTid)) {
                     fotosUmhaengen($praefix, 'neu', $c['id']);
                     unset($_SESSION['neu']);
+                    if (!$direktVerkosten) {
+                        zurueck('?ergebnis=' . rawurlencode($c['id']) . '&ok=' . rawurlencode('„' . $c['name'] . '“ ist schon in der Datenbank – Foto zugeordnet.'));
+                    }
                     zurueck('?bewerten=' . rawurlencode($c['id']) . $vkAnhang . '&ok=' . rawurlencode('„' . $c['name'] . '“ ist schon in der Datenbank – Foto zugeordnet, direkt bewerten!'));
                 }
             }
@@ -1599,13 +1604,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $nName = $erkannt['name'];
             $nRebsorte = (string)($erkannt['rebsorte'] ?? '');
             $besitzerNeu = (string)(aktuellerBenutzer(datenLaden())['id'] ?? ''); // wer anlegt, ist Owner
-            datenAendern(function (array $d) use ($nName, $nRebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid, $besitzerNeu): array {
+            datenAendern(function (array $d) use ($nName, $nRebsorte, $kat, $weingutId, $weingutNeu, $neueId, $neueWeingutId, $meinTid, $besitzerNeu, $direktVerkosten): array {
                 if ($weingutNeu !== '') {
                     $d['weingueter'][] = ['id' => $neueWeingutId, 'name' => $weingutNeu, 'notiz' => '', 'zeit' => time()];
                     $weingutId = $neueWeingutId;
                 }
                 $d['champagner'][] = ['id' => $neueId, 'name' => $nName, 'preis' => '', 'rebsorte' => $nRebsorte, 'weingut_id' => $weingutId, 'typ' => $kat, 'tasting_id' => $meinTid, 'besitzer' => $besitzerNeu, 'zeit' => time()];
-                if ($meinTid !== '') {
+                // „im Glas“ nur markieren, wenn auch wirklich verkostet wird
+                if ($meinTid !== '' && $direktVerkosten) {
                     foreach ($d['tastings'] as &$t) {
                         if ($t['id'] === $meinTid) {
                             $t['aktiv_cid'] = $neueId;
@@ -1617,11 +1623,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             });
             fotosUmhaengen($praefix, 'neu', $neueId);
             unset($_SESSION['neu']);
+            if (!$direktVerkosten) {
+                zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $nName . '“ erkannt und angelegt – bewerten kannst du jederzeit später.'));
+            }
             zurueck('?bewerten=' . rawurlencode($neueId) . $vkAnhang . '&ok=' . rawurlencode('„' . $nName . '“ erkannt und angelegt – los geht’s! (Preis & Co. später unter „Stammdaten“ ergänzbar)'));
         }
 
-        // Nichts erkannt: kurzes Formular zum Eintragen zeigen
-        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? ''), 'vk' => $vk, 'kat' => $kat];
+        // Nichts erkannt: kurzes Formular zum Eintragen zeigen (Haken-Wunsch mitnehmen)
+        $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? ''), 'vk' => $vk, 'kat' => $kat, 'direkt' => $direktVerkosten];
         zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
     }
 
@@ -1689,8 +1698,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Alle Fotos vom Zwischen-Präfix auf den neuen Champagner umhängen
         fotosUmhaengen((string)($_SESSION['neu']['praefix'] ?? ''), 'neu', $neueId);
         unset($_SESSION['neu']);
-        // Für die eigene Tasting-Gruppe automatisch „ins Glas“ stellen
-        if ($meinTid !== '') {
+        // Nur wenn direkt verkostet wird: fürs Tasting „ins Glas“ stellen und zum Wizard
+        $direktVerkosten = ($_POST['direkt_verkosten'] ?? '') === '1';
+        if ($meinTid !== '' && $direktVerkosten) {
             datenAendern(function (array $d) use ($meinTid, $neueId): array {
                 foreach ($d['tastings'] as &$t) {
                     if ($t['id'] === $meinTid) {
@@ -1699,6 +1709,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 return $d;
             });
+        }
+        if (!$direktVerkosten) {
+            zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – bewerten kannst du jederzeit später.'));
         }
         zurueck('?bewerten=' . rawurlencode($neueId) . ($vk !== '' ? '&vk=' . rawurlencode($vk) : '') . '&ok=' . rawurlencode('„' . $name . '“ ist angelegt – jetzt direkt bewerten!'));
     }
@@ -5121,6 +5134,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     details.unterkarte > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
     details.unterkarte > summary::-webkit-details-marker { display: none; }
     .log-aktionen { display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; padding: 0 0.7rem 0.6rem; }
+    /* Ergebnis-Seite: Zurück + Selbst bewerten bleiben oben immer sichtbar */
+    .erg-aktionen {
+      position: sticky; top: var(--filter-top, 3.4rem); z-index: 45;
+      display: flex; gap: 0.5rem; align-items: center;
+      background: var(--bg); padding: 0.45rem 0 0.55rem; margin-bottom: 0.4rem;
+    }
+    .erg-aktionen .knopf { flex-shrink: 0; }
     details.detail-antworten { margin: 0.15rem 0 0.7rem; }
     details.detail-antworten > summary { cursor: pointer; color: var(--accent); font-size: 0.88rem; list-style: none; }
     details.detail-antworten > summary::-webkit-details-marker { display: none; }
@@ -8006,12 +8026,19 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       ?>
       <?php $flaschenGesamt = array_sum(array_map(fn($b) => (int)($b['flaschen'] ?? 0), $bewertungen)); ?>
       <?php $cBeschreibung = trim((string)($aktiverChampagner['beschreibung'] ?? '')); ?>
-      <?php if ($cBeschreibung !== ''): ?>
-        <div class="card">
-          <h2>📝 Beschreibung</h2>
-          <p style="margin-top:0.3rem;"><?= nl2br(e($cBeschreibung)) ?></p>
-        </div>
-      <?php endif; ?>
+      <?php $meineBTop = meineBewertung($daten, $aktiverChampagner['id']); ?>
+      <div class="erg-aktionen">
+        <a class="knopf zweit" href="?meine=1" onclick="if (history.length > 1 && document.referrer.indexOf(location.host) !== -1) { history.back(); return false; }">&larr; Zur&uuml;ck</a>
+        <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>"><?= $meineBTop !== null ? '🔁 Nochmal bewerten' : '🥂 Selbst bewerten' ?></a>
+      </div>
+
+      <?php
+        $fotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? ''));
+        $erkanntVorschlag = null;
+        if (($_SESSION['erkannt']['cid'] ?? '') === $aktiverChampagner['id']) {
+            $erkanntVorschlag = $_SESSION['erkannt'];
+        }
+      ?>
       <div class="card">
         <div class="gesamt">
           <?= sterneAnzeige($gesamt) ?>
@@ -8068,14 +8095,11 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <span class="anzahl">Noch keine Bewertungen – sei die/der Erste!</span>
           <?php endif; ?>
         </p>
-        <?php $meineB = meineBewertung($daten, $aktiverChampagner['id']); ?>
-        <div class="knopfreihe" style="margin-top:0.4rem; align-items:center;">
-          <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>"><?= $meineB !== null ? '🔁 Noch einmal bewerten' : 'Jetzt selbst bewerten' ?></a>
-          <?php if ($meineB !== null): ?>
-            <span class="anzahl">Du hast am <?= date('d.m.Y \u\m H:i', (int)($meineB['zeit'] ?? 0)) ?> Uhr bewertet.</span>
-          <?php endif; ?>
-        </div>
+        <?php if ($meineBTop !== null): ?>
+          <p class="anzahl" style="margin-top:0.4rem; text-align:center;">Du hast am <?= date('d.m.Y \u\m H:i', (int)($meineBTop['zeit'] ?? 0)) ?> Uhr bewertet.</p>
+        <?php endif; ?>
       </div>
+
 
       <?php
         // Einladender: Wer dich per Link zum Mitbewerten geholt hat, dessen
@@ -8119,281 +8143,12 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
       <?php endif; ?>
 
-      <?php
-        $fotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? ''));
-        $erkanntVorschlag = null;
-        if (($_SESSION['erkannt']['cid'] ?? '') === $aktiverChampagner['id']) {
-            $erkanntVorschlag = $_SESSION['erkannt'];
-        }
-      ?>
-      <?php if ($bewertungen !== []): ?>
+      <?php if ($cBeschreibung !== ''): ?>
         <div class="card">
-          <h2>Durchschnitt je Kategorie</h2>
-          <?php foreach ($KATS_TYP as $schluessel => [$titel, $frage]): ?>
-            <div class="ergebnis-kategorie">
-              <span><?= e($titel) ?></span>
-              <?= sterneAnzeige($schnitte[$schluessel]) ?>
-            </div>
-          <?php endforeach; ?>
-        </div>
-
-        <?php if ($bewertungen !== []): ?>
-          <div class="card">
-            <h2>Notizen &amp; Umfeld</h2>
-            <?php $notizNr = 0; foreach ($bewertungen as $b): $notizNr++; ?>
-              <?php
-                $eigene = isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))]);
-                // Ort/Wetter/„zusammen mit“ nur bei der eigenen Bewertung oder für
-                // Gastgeber/Admin – sonst bleibt es anonym
-                $umfeld = [date('d.m.Y, H:i', (int)($b['zeit'] ?? 0)) . ' Uhr'];
-                if ($darfNamen || $eigene) {
-                    if (trim((string)($b['ort'] ?? '')) !== '') { $umfeld[] = '📍 ' . (string)$b['ort']; }
-                    if (trim((string)($b['wetter'] ?? '')) !== '') { $umfeld[] = (string)$b['wetter']; }
-                    $dabei = mitDabei($bewertungen, $b);
-                    if ($dabei !== [] && $darfNamen) { $umfeld[] = '👥 zusammen mit ' . implode(', ', $dabei); }
-                }
-                $warLive = bewertungWarLive($b, $aktiverChampagner);
-              ?>
-              <p class="notiz" style="margin-bottom:0.3rem;">
-                <b><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $notizNr)) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
-                <?php if (!$warLive): ?>
-                  <span class="bewerter-chip offen" title="Nicht im Verkostungs-Moment bewertet – Ort und Wetter beschreiben den Bewertungs-Zeitpunkt">⏳ nachträglich bewertet</span>
-                <?php endif; ?>
-                <?php if (trim((string)($b['notiz'] ?? '')) !== ''): ?><br><?= nl2br(e((string)$b['notiz'])) ?><?php endif; ?>
-              </p>
-              <?php
-                // 🔍 Die GENAUE Bewertung dieser Person: Sterne je Kategorie,
-                // Wizard-Antworten, Blind-Antworten, Menge/Preis. Sichtbar für den
-                // Bewerter selbst, Tasting-Mitglieder (sehen Namen) und Getränk-Owner.
-                $detailZeilen = [];
-                if ($eigene || $darfNamen || $ergOwner) {
-                    // 1) Sterne je Kategorie – exakt wie abgegeben
-                    foreach ($KATS_TYP as $dkS => [$dkTitel, $dkFrage]) {
-                        $dw = (int)($b['werte'][$dkS] ?? 0);
-                        if ($dw >= 1 && $dw <= 5) {
-                            $detailZeilen[] = ['⭐ ' . $dkTitel, str_repeat('★', $dw) . str_repeat('☆', 5 - $dw) . ' <span class="anzahl">(' . $dw . '/5)</span>'];
-                        }
-                    }
-                    // 2) Antworten aus dem Bewertungs-Wizard
-                    if (is_array($b['detail'] ?? null)) {
-                        foreach (detailLesbar($typAktiv, $b['detail']) as $dz) {
-                            $detailZeilen[] = $dz;
-                        }
-                    }
-                    // 3) Antworten auf die Gastgeber-Fragen der Blindprobe (mit ✅/❌ bei Punktefragen)
-                    foreach ((is_array($b['blind_antworten'] ?? null) ? $b['blind_antworten'] : []) as $ba) {
-                        $awTxt = (string)($ba['antwort'] ?? '');
-                        $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
-                        $detailZeilen[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
-                    }
-                    // 4) Menge, Bestellung, Preis
-                    if ((int)($b['flaschen'] ?? 0) > 0) { $detailZeilen[] = ['🍾 Flaschen', (string)(int)$b['flaschen']]; }
-                    if ((int)($b['bestellung'] ?? 0) > 0) { $detailZeilen[] = ['🛒 Bestellung', (string)(int)$b['bestellung']]; }
-                    if (trim((string)($b['preis'] ?? '')) !== '') { $detailZeilen[] = ['💶 Preis', e((string)$b['preis'])]; }
-                }
-              ?>
-              <?php if ($detailZeilen !== []): ?>
-                <details class="detail-antworten">
-                  <summary>🔍 Genaue Bewertung ansehen (<?= count($detailZeilen) ?>)</summary>
-                  <div class="detail-tabelle">
-                    <?php foreach ($detailZeilen as [$dt, $dw]): ?>
-                      <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
-                    <?php endforeach; ?>
-                  </div>
-                </details>
-              <?php endif; ?>
-            <?php endforeach; ?>
-          </div>
-        <?php endif; ?>
-
-        <?php
-          // 📖 Meine Verkostungen dieses Getränks – jede einzeln (auch mehrfach)
-          // mit Datum, Sternen, Notiz. Ändern/Löschen nach den Regeln:
-          //  - Getränk im Tasting → löschen nur der Tasting-Admin
-          //  - Getränk ohne Tasting → eigene Bewertung löschen
-          $meineVerkostungen = $eingeloggt ? meineBewertungenFuer($daten, (string)$aktiverChampagner['id']) : [];
-        ?>
-        <?php if ($meineVerkostungen !== []): ?>
-          <div class="card">
-            <h2>📖 Meine Verkostungen (<?= count($meineVerkostungen) ?>)</h2>
-            <?php if ($ergImTasting && !$ergTastingAdmin): ?>
-              <p class="anzahl" style="margin-bottom:0.6rem;">Im Tasting bleiben deine Bewertungen erhalten – löschen kann sie nur ein Owner des Tastings. Ändern kannst du sie jederzeit.</p>
-            <?php else: ?>
-              <p class="anzahl" style="margin-bottom:0.6rem;">Hier kannst du jede einzelne Verkostung ändern oder löschen.</p>
-            <?php endif; ?>
-            <?php foreach ($meineVerkostungen as $mvNr => $mv): ?>
-              <?php
-                $mvSumme = 0; $mvAnz = 0;
-                foreach ($mv['werte'] as $w) { $mvSumme += (int)$w; $mvAnz++; }
-                $mvSchnitt = $mvAnz > 0 ? $mvSumme / $mvAnz : null;
-              ?>
-              <div style="display:flex; align-items:flex-start; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.5rem 0;">
-                <span style="flex:1; min-width:0;">
-                  <b><?= sterneAnzeige($mvSchnitt) ?></b>
-                  <span class="anzahl"><?= e(date('d.m.Y H:i', (int)($mv['zeit'] ?? 0))) ?> Uhr</span>
-                  <?php if ((int)($mv['flaschen'] ?? 0) > 0): ?><span class="anzahl">· <?= (int)$mv['flaschen'] ?> Fl.</span><?php endif; ?>
-                  <?php if ((int)($mv['bestellung'] ?? 0) > 0): ?><span class="anzahl">· 🛒 <?= (int)$mv['bestellung'] ?></span><?php endif; ?>
-                  <?php if (trim((string)($mv['preis'] ?? '')) !== ''): ?><span class="anzahl">· <?= e((string)$mv['preis']) ?></span><?php endif; ?>
-                  <?php if (trim((string)($mv['notiz'] ?? '')) !== ''): ?><br><span style="font-style:italic;">„<?= e((string)$mv['notiz']) ?>“</span><?php endif; ?>
-                  <?php
-                    $mvDetail = [];
-                    foreach ($KATS_TYP as $dkS => [$dkTitel, $dkFrage]) {
-                        $dw = (int)($mv['werte'][$dkS] ?? 0);
-                        if ($dw >= 1 && $dw <= 5) {
-                            $mvDetail[] = ['⭐ ' . $dkTitel, str_repeat('★', $dw) . str_repeat('☆', 5 - $dw) . ' <span class="anzahl">(' . $dw . '/5)</span>'];
-                        }
-                    }
-                    if (is_array($mv['detail'] ?? null)) {
-                        foreach (detailLesbar($typAktiv, $mv['detail']) as $dz) { $mvDetail[] = $dz; }
-                    }
-                    foreach ((is_array($mv['blind_antworten'] ?? null) ? $mv['blind_antworten'] : []) as $ba) {
-                        $awTxt = (string)($ba['antwort'] ?? '');
-                        $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
-                        $mvDetail[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
-                    }
-                  ?>
-                  <?php if ($mvDetail !== []): ?>
-                    <details class="detail-antworten">
-                      <summary>🔍 Genaue Bewertung (<?= count($mvDetail) ?>)</summary>
-                      <div class="detail-tabelle">
-                        <?php foreach ($mvDetail as [$dt, $dw]): ?>
-                          <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
-                        <?php endforeach; ?>
-                      </div>
-                    </details>
-                  <?php endif; ?>
-                </span>
-                <span style="display:flex; gap:0.4rem; flex-shrink:0; align-items:center;">
-                  <?php if ($mvNr === 0): ?>
-                    <a class="knopf klein zweit" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($mv['person'])) ?>&amp;bearbeiten=1">✏️ ändern</a>
-                  <?php endif; ?>
-                  <?php if (!$ergImTasting || $ergTastingAdmin): ?>
-                    <form method="post" style="display:inline; margin:0;" onsubmit="return confirm('Diese Verkostung wirklich löschen?');">
-                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                      <input type="hidden" name="aktion" value="bewertung_loeschen">
-                      <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-                      <input type="hidden" name="person" value="<?= e($mv['person']) ?>">
-                      <input type="hidden" name="zeit" value="<?= e((string)(int)($mv['zeit'] ?? 0)) ?>">
-                      <input type="hidden" name="zurueck" value="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">
-                      <button class="loeschen" type="submit">🗑</button>
-                    </form>
-                  <?php endif; ?>
-                </span>
-              </div>
-            <?php endforeach; ?>
-          </div>
-        <?php endif; ?>
-
-        <div class="card zu">
-          <h2>Einzelbewertungen</h2>
-          <div class="tabelle-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Person</th>
-                  <?php foreach ($KATS_TYP as [$titel, $frage]): ?>
-                    <th><?= e(mb_substr($titel, 0, 4)) ?>.</th>
-                  <?php endforeach; ?>
-                  <th>Ø</th>
-                  <th>Fl.</th>
-                  <?php if ($eingeloggt): ?><th></th><?php endif; ?>
-                </tr>
-              </thead>
-              <tbody>
-                <?php $zeilNr = 0; foreach ($bewertungen as $b): $zeilNr++; ?>
-                  <?php $eigeneZeile = isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))]); ?>
-                  <tr>
-                    <td><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $zeilNr)) ?></td>
-                    <?php $summe = 0; foreach ($KATEGORIEN as $schluessel => $info): $w = (int)($b['werte'][$schluessel] ?? 0); $summe += $w; ?>
-                      <td><?= $w ?></td>
-                    <?php endforeach; ?>
-                    <td><b><?= number_format($summe / count($KATEGORIEN), 1, ',', '') ?></b></td>
-                    <td><?= (int)($b['flaschen'] ?? 0) ?></td>
-                    <?php if ($eingeloggt): ?>
-                      <?php
-                        // ändern: eigene Zeile (oder Tasting-Admin). löschen: bei Tasting-Getränk
-                        // nur der Tasting-Admin, sonst die eigene Bewertung.
-                        $darfAendern = $eigeneZeile || $ergTastingAdmin;
-                        $darfLoeschen = $ergImTasting ? $ergTastingAdmin : $eigeneZeile;
-                      ?>
-                      <td>
-                        <?php if ($darfAendern): ?>
-                          <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>&amp;bearbeiten=1">ändern</a>
-                        <?php endif; ?>
-                        <?php if ($darfLoeschen): ?>
-                          <form method="post" style="display:inline" onsubmit="return confirm('Diese Bewertung wirklich löschen?');">
-                            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                            <input type="hidden" name="aktion" value="bewertung_loeschen">
-                            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-                            <input type="hidden" name="person" value="<?= e($b['person']) ?>">
-                            <button class="loeschen" type="submit">löschen</button>
-                          </form>
-                        <?php endif; ?>
-                      </td>
-                    <?php endif; ?>
-                  </tr>
-                <?php endforeach; ?>
-              </tbody>
-            </table>
-          </div>
-          <p class="anzahl" style="margin-top:0.5rem;">Spalten: <?php $t = []; foreach ($KATS_TYP as [$titel, $frage]) { $t[] = mb_substr($titel, 0, 4) . '. = ' . $titel; } echo e(implode(', ', $t)); ?>, Fl. = Flaschen</p>
+          <h2>📝 Beschreibung</h2>
+          <p style="margin-top:0.3rem;"><?= nl2br(e($cBeschreibung)) ?></p>
         </div>
       <?php endif; ?>
-
-      <div class="card">
-        <h2>Fotos</h2>
-        <?php if ($fotos === []): ?>
-          <p style="color:var(--muted); font-style:italic;">Noch keine Fotos zu diesem Getränk.</p>
-        <?php else: ?>
-          <?php $titelbildAktuell = (string)($aktiverChampagner['titelbild'] ?? ''); ?>
-          <div class="foto-galerie">
-            <?php foreach ($fotos as $i => $foto): ?>
-              <?php $istTitelbild = $titelbildAktuell !== '' ? $foto === $titelbildAktuell : $i === 0; ?>
-              <div class="foto">
-                <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
-                  <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
-                </a>
-                <?php if ($istTitelbild): ?>
-                  <span class="titelbild-marke" title="Titelbild – erscheint als Vorschau in den Listen">⭐</span>
-                <?php elseif ($eingeloggt): ?>
-                  <form method="post" class="titelbild-form">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="titelbild_setzen">
-                    <input type="hidden" name="typ" value="champagner">
-                    <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
-                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                    <button type="submit" title="Als Titelbild festlegen">☆</button>
-                  </form>
-                <?php endif; ?>
-                <?php if ($eingeloggt): ?>
-                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="foto_loeschen">
-                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
-                    <button type="submit" title="Foto löschen">&#10005;</button>
-                  </form>
-                <?php endif; ?>
-              </div>
-            <?php endforeach; ?>
-          </div>
-          <?php if ($eingeloggt && count($fotos) > 1): ?>
-            <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (Vorschau in den Listen). Mit ☆ legst du ein anderes fest.</p>
-          <?php endif; ?>
-        <?php endif; ?>
-        <?php if ($eingeloggt): ?>
-          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="foto_upload">
-            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-            <?= fotoUploadFelder('c-up') ?>
-          </form>
-        <?php else: ?>
-          <div style="margin-top:1rem;">
-            <?= loginFormular('?ergebnis=' . rawurlencode($aktiverChampagner['id'])) ?>
-          </div>
-        <?php endif; ?>
-      </div>
-
       <?php if ($eingeloggt): ?>
         <details class="card"<?= $erkanntVorschlag !== null ? ' open' : '' ?>>
           <summary>✏️ Stammdaten bearbeiten</summary>
@@ -8442,107 +8197,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <button class="knopf zweit" type="submit">Speichern</button>
           </form>
         </details>
-        <?php if ($istAdmin): ?>
-          <div class="card">
-            <h2>💡 Anregungen</h2>
-            <p class="anzahl" style="margin-bottom:0.6rem;">Nur du als App-Administrator entscheidest, welche Getränke im Menüpunkt „Anregungen“ öffentlich (anonym) sichtbar sind.</p>
-            <form method="post" style="margin:0;">
-              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-              <input type="hidden" name="aktion" value="anregung_toggle">
-              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-              <?php if (!empty($aktiverChampagner['anregung'])): ?>
-                <p style="margin:0 0 0.5rem;"><span class="bewerter-chip">💡 In Anregungen aufgenommen</span></p>
-                <button class="knopf zweit" type="submit">Aus Anregungen entfernen</button>
-              <?php else: ?>
-                <button class="knopf" type="submit">💡 In Anregungen aufnehmen</button>
-              <?php endif; ?>
-            </form>
-          </div>
-        <?php endif; ?>
-        <?php // 🕶️ Blindtasting hängt AM GETRÄNK: jeder Owner (Anleger, Tasting-Owner, App-Admin) kann es hier einrichten ?>
-        <?php if ($benutzerAktiv !== null && darfGetraenkAdministrieren($daten, $aktiverChampagner)): ?>
-          <?php
-            $blindDieses = array_values(array_filter(blindEintraege($daten), fn($b) => (string)$b['cid'] === (string)$aktiverChampagner['id']));
-          ?>
-            <div class="card">
-              <h2>🕶️ Blindtasting</h2>
-              <p class="anzahl" style="margin-bottom:0.6rem;">Kreuze ein Getränk als Blindprobe an: gib eine kurze Kennung (z. B. A, B, C …) ein. Es entsteht ein QR-Etikett mit deiner Kennung in der Mitte – zum Ausdrucken und Aufkleben. Wer den QR-Code scannt, sieht nur die Bewertungsseite, nicht das Getränk. Ein zweiter QR-Code führt zur Auflösung.</p>
-              <form method="post" style="margin:0 0 0.6rem;">
-                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                <input type="hidden" name="aktion" value="blind_anlegen">
-                <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-                <label style="display:flex; align-items:center; gap:0.55rem; margin-bottom:0.5rem; cursor:pointer;">
-                  <input type="checkbox" name="blind_an" value="ja" checked style="width:auto;">
-                  <span>Als Blindprobe verwenden</span>
-                </label>
-                <input type="text" name="label" placeholder="Kennung, z. B. A" maxlength="24" required>
-                <details class="unterkarte" style="margin:0.5rem 0;">
-                  <summary>❓ Bis zu 5 eigene Fragen an die Verkoster (optional)</summary>
-                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein, Freitext oder Auswahl (eigenes Dropdown). Markierst du eine <b>richtige Antwort</b>, sammeln die Verkoster Punkte und du bekommst eine 🏆 Ergebnisliste.</p>
-                  <?php for ($fi = 1; $fi <= 5; $fi++): ?>
-                    <div style="margin-bottom:0.55rem;">
-                      <div style="display:flex; gap:0.4rem;">
-                        <input type="text" name="frage_text_<?= $fi ?>" placeholder="Frage <?= $fi ?>, z. B. Würdest du das kaufen?" maxlength="120" style="flex:1; margin-bottom:0;">
-                        <select name="frage_typ_<?= $fi ?>" class="frage-typ" data-nr="<?= $fi ?>" style="width:auto; margin-bottom:0;">
-                          <option value="janein">Ja/Nein</option>
-                          <option value="freitext">Freitext</option>
-                          <option value="auswahl">Auswahl</option>
-                        </select>
-                      </div>
-                      <input type="text" name="frage_optionen_<?= $fi ?>" id="frage-optionen-<?= $fi ?>" placeholder="Optionen mit Komma trennen – * markiert die richtige, z. B. zu jung, *genau richtig, zu reif" maxlength="400" style="margin:0.3rem 0 0;" hidden>
-                      <select name="frage_richtig_<?= $fi ?>" id="frage-richtig-<?= $fi ?>" style="width:auto; margin:0.3rem 0 0;">
-                        <option value="">Richtige Antwort: keine (keine Punkte)</option>
-                        <option value="Ja">Richtige Antwort: 👍 Ja</option>
-                        <option value="Nein">Richtige Antwort: 👎 Nein</option>
-                      </select>
-                    </div>
-                  <?php endfor; ?>
-                  <script>
-                    document.querySelectorAll('.frage-typ').forEach(function (s) {
-                      s.addEventListener('change', function () {
-                        var opt = document.getElementById('frage-optionen-' + s.dataset.nr);
-                        var ri = document.getElementById('frage-richtig-' + s.dataset.nr);
-                        if (opt) { opt.hidden = s.value !== 'auswahl'; }
-                        if (ri) { ri.hidden = s.value !== 'janein'; }
-                      });
-                    });
-                  </script>
-                </details>
-                <button class="knopf zweit" type="submit" style="margin-top:0.5rem;">🕶️ Blind-Etikett erzeugen</button>
-              </form>
-              <?php if ($blindDieses !== []): ?>
-                <p class="anzahl" style="margin:0.4rem 0 0.3rem;">Vorhandene Blind-Etiketten dieses Getränks:</p>
-                <?php foreach ($blindDieses as $bd): ?>
-                  <div class="ergebnis-kategorie" style="align-items:center;">
-                    <span>🕶️ <b><?= e($bd['label']) ?></b><?php if (is_array($bd['fragen'] ?? null) && $bd['fragen'] !== []): ?> <span class="anzahl">· ❓ <?= count($bd['fragen']) ?> Frage(n)</span><?php endif; ?></span>
-                    <span style="display:flex; gap:0.4rem; align-items:center;">
-                      <a class="knopf klein zweit" href="?blindpng=<?= e(rawurlencode((string)$bd['token'])) ?>">⬇️ PNG</a>
-                      <form method="post" style="margin:0;" onsubmit="return confirm('Blind-Etikett „<?= e($bd['label']) ?>“ löschen?');">
-                        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                        <input type="hidden" name="aktion" value="blind_loeschen">
-                        <input type="hidden" name="token" value="<?= e($bd['token']) ?>">
-                        <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-                        <button class="loeschen" type="submit">✕</button>
-                      </form>
-                    </span>
-                  </div>
-                <?php endforeach; ?>
-              <?php endif; ?>
-              <?php if ($blindDieses !== []): ?>
-                <a class="knopf" href="?blindetiketten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>" style="margin-top:0.7rem; display:inline-block;">🖨️ Etiketten dieses Getränks drucken / als PDF</a>
-              <?php endif; ?>
-              <?php $blindStand = blindPunkte($daten, [(string)$aktiverChampagner['id']]); ?>
-              <?php if ($blindStand !== []): ?>
-                <h3 style="margin:1rem 0 0.3rem; font-size:1rem;">🏆 Ergebnisliste dieses Getränks</h3>
-                <?php $platz = 0; foreach ($blindStand as $bsName => $bs): $platz++; ?>
-                  <div class="ergebnis-kategorie">
-                    <span><?= ['🥇', '🥈', '🥉'][$platz - 1] ?? $platz . '.' ?> <b><?= e($bsName) ?></b></span>
-                    <span><b><?= (int)$bs['punkte'] ?></b> / <?= (int)$bs['gesamt'] ?> richtig</span>
-                  </div>
-                <?php endforeach; ?>
-              <?php endif; ?>
-            </div>
-        <?php endif; ?>
       <?php endif; ?>
 
       <?php $recherche = trim((string)($aktiverChampagner['recherche'] ?? '')); ?>
@@ -8640,10 +8294,378 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         <?php endif; ?>
       </div>
 
-      <div class="knopfreihe">
-        <a class="knopf" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">Jetzt selbst bewerten</a>
-        <a class="knopf zweit" href="?meine=1">Zum Logbuch</a>
+        <?php if ($bewertungen !== []): ?>
+          <div class="card">
+            <h2>Notizen &amp; Umfeld</h2>
+            <?php $notizNr = 0; foreach ($bewertungen as $b): $notizNr++; ?>
+              <?php
+                $eigene = isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))]);
+                // Ort/Wetter/„zusammen mit“ nur bei der eigenen Bewertung oder für
+                // Gastgeber/Admin – sonst bleibt es anonym
+                $umfeld = [date('d.m.Y, H:i', (int)($b['zeit'] ?? 0)) . ' Uhr'];
+                if ($darfNamen || $eigene) {
+                    if (trim((string)($b['ort'] ?? '')) !== '') { $umfeld[] = '📍 ' . (string)$b['ort']; }
+                    if (trim((string)($b['wetter'] ?? '')) !== '') { $umfeld[] = (string)$b['wetter']; }
+                    $dabei = mitDabei($bewertungen, $b);
+                    if ($dabei !== [] && $darfNamen) { $umfeld[] = '👥 zusammen mit ' . implode(', ', $dabei); }
+                }
+                $warLive = bewertungWarLive($b, $aktiverChampagner);
+              ?>
+              <p class="notiz" style="margin-bottom:0.3rem;">
+                <b><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $notizNr)) ?></b> <span class="anzahl">(<?= e(implode(' · ', $umfeld)) ?>)</span>
+                <?php if (!$warLive): ?>
+                  <span class="bewerter-chip offen" title="Nicht im Verkostungs-Moment bewertet – Ort und Wetter beschreiben den Bewertungs-Zeitpunkt">⏳ nachträglich bewertet</span>
+                <?php endif; ?>
+                <?php if (trim((string)($b['notiz'] ?? '')) !== ''): ?><br><?= nl2br(e((string)$b['notiz'])) ?><?php endif; ?>
+              </p>
+              <?php
+                // 🔍 Die GENAUE Bewertung dieser Person: Sterne je Kategorie,
+                // Wizard-Antworten, Blind-Antworten, Menge/Preis. Sichtbar für den
+                // Bewerter selbst, Tasting-Mitglieder (sehen Namen) und Getränk-Owner.
+                $detailZeilen = [];
+                if ($eigene || $darfNamen || $ergOwner) {
+                    // 1) Sterne je Kategorie – exakt wie abgegeben
+                    foreach ($KATS_TYP as $dkS => [$dkTitel, $dkFrage]) {
+                        $dw = (int)($b['werte'][$dkS] ?? 0);
+                        if ($dw >= 1 && $dw <= 5) {
+                            $detailZeilen[] = ['⭐ ' . $dkTitel, str_repeat('★', $dw) . str_repeat('☆', 5 - $dw) . ' <span class="anzahl">(' . $dw . '/5)</span>'];
+                        }
+                    }
+                    // 2) Antworten aus dem Bewertungs-Wizard
+                    if (is_array($b['detail'] ?? null)) {
+                        foreach (detailLesbar($typAktiv, $b['detail']) as $dz) {
+                            $detailZeilen[] = $dz;
+                        }
+                    }
+                    // 3) Antworten auf die Gastgeber-Fragen der Blindprobe (mit ✅/❌ bei Punktefragen)
+                    foreach ((is_array($b['blind_antworten'] ?? null) ? $b['blind_antworten'] : []) as $ba) {
+                        $awTxt = (string)($ba['antwort'] ?? '');
+                        $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
+                        $detailZeilen[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
+                    }
+                    // 4) Menge, Bestellung, Preis
+                    if ((int)($b['flaschen'] ?? 0) > 0) { $detailZeilen[] = ['🍾 Flaschen', (string)(int)$b['flaschen']]; }
+                    if ((int)($b['bestellung'] ?? 0) > 0) { $detailZeilen[] = ['🛒 Bestellung', (string)(int)$b['bestellung']]; }
+                    if (trim((string)($b['preis'] ?? '')) !== '') { $detailZeilen[] = ['💶 Preis', e((string)$b['preis'])]; }
+                }
+              ?>
+              <?php if ($detailZeilen !== []): ?>
+                <details class="detail-antworten">
+                  <summary>🔍 Genaue Bewertung ansehen (<?= count($detailZeilen) ?>)</summary>
+                  <div class="detail-tabelle">
+                    <?php foreach ($detailZeilen as [$dt, $dw]): ?>
+                      <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
+                    <?php endforeach; ?>
+                  </div>
+                </details>
+              <?php endif; ?>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+
+      <div class="card">
+        <h2>Fotos</h2>
+        <?php if ($fotos === []): ?>
+          <p style="color:var(--muted); font-style:italic;">Noch keine Fotos zu diesem Getränk.</p>
+        <?php else: ?>
+          <?php $titelbildAktuell = (string)($aktiverChampagner['titelbild'] ?? ''); ?>
+          <div class="foto-galerie">
+            <?php foreach ($fotos as $i => $foto): ?>
+              <?php $istTitelbild = $titelbildAktuell !== '' ? $foto === $titelbildAktuell : $i === 0; ?>
+              <div class="foto">
+                <a href="bilder/<?= e(rawurlencode($foto)) ?>" target="_blank">
+                  <img src="<?= e(thumbUrl($foto)) ?>" alt="" loading="lazy">
+                </a>
+                <?php if ($istTitelbild): ?>
+                  <span class="titelbild-marke" title="Titelbild – erscheint als Vorschau in den Listen">⭐</span>
+                <?php elseif ($eingeloggt): ?>
+                  <form method="post" class="titelbild-form">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="titelbild_setzen">
+                    <input type="hidden" name="typ" value="champagner">
+                    <input type="hidden" name="id" value="<?= e($aktiverChampagner['id']) ?>">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Als Titelbild festlegen">☆</button>
+                  </form>
+                <?php endif; ?>
+                <?php if ($eingeloggt): ?>
+                  <form method="post" onsubmit="return confirm('Dieses Foto wirklich löschen?');">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="foto_loeschen">
+                    <input type="hidden" name="datei" value="<?= e($foto) ?>">
+                    <button type="submit" title="Foto löschen">&#10005;</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+          <?php if ($eingeloggt && count($fotos) > 1): ?>
+            <p class="anzahl" style="margin-top:0.5rem;">⭐ = Titelbild (Vorschau in den Listen). Mit ☆ legst du ein anderes fest.</p>
+          <?php endif; ?>
+        <?php endif; ?>
+        <?php if ($eingeloggt): ?>
+          <form method="post" enctype="multipart/form-data" style="margin-top:1rem;">
+            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+            <input type="hidden" name="aktion" value="foto_upload">
+            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+            <?= fotoUploadFelder('c-up') ?>
+          </form>
+        <?php else: ?>
+          <div style="margin-top:1rem;">
+            <?= loginFormular('?ergebnis=' . rawurlencode($aktiverChampagner['id'])) ?>
+          </div>
+        <?php endif; ?>
       </div>
+
+
+        <?php if ($istAdmin): ?>
+          <div class="card">
+            <h2>💡 Anregungen</h2>
+            <p class="anzahl" style="margin-bottom:0.6rem;">Nur du als App-Administrator entscheidest, welche Getränke im Menüpunkt „Anregungen“ öffentlich (anonym) sichtbar sind.</p>
+            <form method="post" style="margin:0;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="anregung_toggle">
+              <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+              <?php if (!empty($aktiverChampagner['anregung'])): ?>
+                <p style="margin:0 0 0.5rem;"><span class="bewerter-chip">💡 In Anregungen aufgenommen</span></p>
+                <button class="knopf zweit" type="submit">Aus Anregungen entfernen</button>
+              <?php else: ?>
+                <button class="knopf" type="submit">💡 In Anregungen aufnehmen</button>
+              <?php endif; ?>
+            </form>
+          </div>
+        <?php endif; ?>
+
+      <?php if ($bewertungen !== []): ?>
+        <div class="card">
+          <h2>Durchschnitt je Kategorie</h2>
+          <?php foreach ($KATS_TYP as $schluessel => [$titel, $frage]): ?>
+            <div class="ergebnis-kategorie">
+              <span><?= e($titel) ?></span>
+              <?= sterneAnzeige($schnitte[$schluessel]) ?>
+            </div>
+          <?php endforeach; ?>
+        </div>
+
+        <div class="card zu">
+          <h2>Einzelbewertungen</h2>
+          <div class="tabelle-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Person</th>
+                  <?php foreach ($KATS_TYP as [$titel, $frage]): ?>
+                    <th><?= e(mb_substr($titel, 0, 4)) ?>.</th>
+                  <?php endforeach; ?>
+                  <th>Ø</th>
+                  <th>Fl.</th>
+                  <?php if ($eingeloggt): ?><th></th><?php endif; ?>
+                </tr>
+              </thead>
+              <tbody>
+                <?php $zeilNr = 0; foreach ($bewertungen as $b): $zeilNr++; ?>
+                  <?php $eigeneZeile = isset($meineNamenErg[mb_strtolower(trim((string)$b['person']))]); ?>
+                  <tr>
+                    <td><?= e(bewerterAnzeige($b, $darfNamen, $meineNamenErg, $zeilNr)) ?></td>
+                    <?php $summe = 0; foreach ($KATEGORIEN as $schluessel => $info): $w = (int)($b['werte'][$schluessel] ?? 0); $summe += $w; ?>
+                      <td><?= $w ?></td>
+                    <?php endforeach; ?>
+                    <td><b><?= number_format($summe / count($KATEGORIEN), 1, ',', '') ?></b></td>
+                    <td><?= (int)($b['flaschen'] ?? 0) ?></td>
+                    <?php if ($eingeloggt): ?>
+                      <?php
+                        // ändern: eigene Zeile (oder Tasting-Admin). löschen: bei Tasting-Getränk
+                        // nur der Tasting-Admin, sonst die eigene Bewertung.
+                        $darfAendern = $eigeneZeile || $ergTastingAdmin;
+                        $darfLoeschen = $ergImTasting ? $ergTastingAdmin : $eigeneZeile;
+                      ?>
+                      <td>
+                        <?php if ($darfAendern): ?>
+                          <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>&amp;bearbeiten=1">ändern</a>
+                        <?php endif; ?>
+                        <?php if ($darfLoeschen): ?>
+                          <form method="post" style="display:inline" onsubmit="return confirm('Diese Bewertung wirklich löschen?');">
+                            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                            <input type="hidden" name="aktion" value="bewertung_loeschen">
+                            <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                            <input type="hidden" name="person" value="<?= e($b['person']) ?>">
+                            <button class="loeschen" type="submit">löschen</button>
+                          </form>
+                        <?php endif; ?>
+                      </td>
+                    <?php endif; ?>
+                  </tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+          <p class="anzahl" style="margin-top:0.5rem;">Spalten: <?php $t = []; foreach ($KATS_TYP as [$titel, $frage]) { $t[] = mb_substr($titel, 0, 4) . '. = ' . $titel; } echo e(implode(', ', $t)); ?>, Fl. = Flaschen</p>
+        </div>
+      <?php endif; ?>
+
+        <?php
+          // 📖 Meine Verkostungen dieses Getränks – jede einzeln (auch mehrfach)
+          // mit Datum, Sternen, Notiz. Ändern/Löschen nach den Regeln:
+          //  - Getränk im Tasting → löschen nur der Tasting-Admin
+          //  - Getränk ohne Tasting → eigene Bewertung löschen
+          $meineVerkostungen = $eingeloggt ? meineBewertungenFuer($daten, (string)$aktiverChampagner['id']) : [];
+        ?>
+        <?php if ($meineVerkostungen !== []): ?>
+          <div class="card">
+            <h2>📖 Meine Verkostungen (<?= count($meineVerkostungen) ?>)</h2>
+            <?php if ($ergImTasting && !$ergTastingAdmin): ?>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Im Tasting bleiben deine Bewertungen erhalten – löschen kann sie nur ein Owner des Tastings. Ändern kannst du sie jederzeit.</p>
+            <?php else: ?>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Hier kannst du jede einzelne Verkostung ändern oder löschen.</p>
+            <?php endif; ?>
+            <?php foreach ($meineVerkostungen as $mvNr => $mv): ?>
+              <?php
+                $mvSumme = 0; $mvAnz = 0;
+                foreach ($mv['werte'] as $w) { $mvSumme += (int)$w; $mvAnz++; }
+                $mvSchnitt = $mvAnz > 0 ? $mvSumme / $mvAnz : null;
+              ?>
+              <div style="display:flex; align-items:flex-start; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.5rem 0;">
+                <span style="flex:1; min-width:0;">
+                  <b><?= sterneAnzeige($mvSchnitt) ?></b>
+                  <span class="anzahl"><?= e(date('d.m.Y H:i', (int)($mv['zeit'] ?? 0))) ?> Uhr</span>
+                  <?php if ((int)($mv['flaschen'] ?? 0) > 0): ?><span class="anzahl">· <?= (int)$mv['flaschen'] ?> Fl.</span><?php endif; ?>
+                  <?php if ((int)($mv['bestellung'] ?? 0) > 0): ?><span class="anzahl">· 🛒 <?= (int)$mv['bestellung'] ?></span><?php endif; ?>
+                  <?php if (trim((string)($mv['preis'] ?? '')) !== ''): ?><span class="anzahl">· <?= e((string)$mv['preis']) ?></span><?php endif; ?>
+                  <?php if (trim((string)($mv['notiz'] ?? '')) !== ''): ?><br><span style="font-style:italic;">„<?= e((string)$mv['notiz']) ?>“</span><?php endif; ?>
+                  <?php
+                    $mvDetail = [];
+                    foreach ($KATS_TYP as $dkS => [$dkTitel, $dkFrage]) {
+                        $dw = (int)($mv['werte'][$dkS] ?? 0);
+                        if ($dw >= 1 && $dw <= 5) {
+                            $mvDetail[] = ['⭐ ' . $dkTitel, str_repeat('★', $dw) . str_repeat('☆', 5 - $dw) . ' <span class="anzahl">(' . $dw . '/5)</span>'];
+                        }
+                    }
+                    if (is_array($mv['detail'] ?? null)) {
+                        foreach (detailLesbar($typAktiv, $mv['detail']) as $dz) { $mvDetail[] = $dz; }
+                    }
+                    foreach ((is_array($mv['blind_antworten'] ?? null) ? $mv['blind_antworten'] : []) as $ba) {
+                        $awTxt = (string)($ba['antwort'] ?? '');
+                        $wertung = array_key_exists('korrekt', $ba) ? (!empty($ba['korrekt']) ? ' <b>✅ richtig</b>' : ' <b>❌ falsch</b>') : '';
+                        $mvDetail[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt)) . $wertung];
+                    }
+                  ?>
+                  <?php if ($mvDetail !== []): ?>
+                    <details class="detail-antworten">
+                      <summary>🔍 Genaue Bewertung (<?= count($mvDetail) ?>)</summary>
+                      <div class="detail-tabelle">
+                        <?php foreach ($mvDetail as [$dt, $dw]): ?>
+                          <div class="detail-zeile"><span class="dt"><?= e($dt) ?></span><span class="dw"><?= $dw ?></span></div>
+                        <?php endforeach; ?>
+                      </div>
+                    </details>
+                  <?php endif; ?>
+                </span>
+                <span style="display:flex; gap:0.4rem; flex-shrink:0; align-items:center;">
+                  <?php if ($mvNr === 0): ?>
+                    <a class="knopf klein zweit" href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($mv['person'])) ?>&amp;bearbeiten=1">✏️ ändern</a>
+                  <?php endif; ?>
+                  <?php if (!$ergImTasting || $ergTastingAdmin): ?>
+                    <form method="post" style="display:inline; margin:0;" onsubmit="return confirm('Diese Verkostung wirklich löschen?');">
+                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                      <input type="hidden" name="aktion" value="bewertung_loeschen">
+                      <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                      <input type="hidden" name="person" value="<?= e($mv['person']) ?>">
+                      <input type="hidden" name="zeit" value="<?= e((string)(int)($mv['zeit'] ?? 0)) ?>">
+                      <input type="hidden" name="zurueck" value="?ergebnis=<?= e(rawurlencode($aktiverChampagner['id'])) ?>">
+                      <button class="loeschen" type="submit">🗑</button>
+                    </form>
+                  <?php endif; ?>
+                </span>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+
+        <?php // 🕶️ Blindtasting hängt AM GETRÄNK: jeder Owner (Anleger, Tasting-Owner, App-Admin) kann es hier einrichten ?>
+        <?php if ($benutzerAktiv !== null && darfGetraenkAdministrieren($daten, $aktiverChampagner)): ?>
+          <?php
+            $blindDieses = array_values(array_filter(blindEintraege($daten), fn($b) => (string)$b['cid'] === (string)$aktiverChampagner['id']));
+          ?>
+            <div class="card">
+              <h2>🕶️ Blindtasting</h2>
+              <p class="anzahl" style="margin-bottom:0.6rem;">Kreuze ein Getränk als Blindprobe an: gib eine kurze Kennung (z. B. A, B, C …) ein. Es entsteht ein QR-Etikett mit deiner Kennung in der Mitte – zum Ausdrucken und Aufkleben. Wer den QR-Code scannt, sieht nur die Bewertungsseite, nicht das Getränk. Ein zweiter QR-Code führt zur Auflösung.</p>
+              <form method="post" style="margin:0 0 0.6rem;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="blind_anlegen">
+                <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                <label style="display:flex; align-items:center; gap:0.55rem; margin-bottom:0.5rem; cursor:pointer;">
+                  <input type="checkbox" name="blind_an" value="ja" checked style="width:auto;">
+                  <span>Als Blindprobe verwenden</span>
+                </label>
+                <input type="text" name="label" placeholder="Kennung, z. B. A" maxlength="24" required>
+                <details class="unterkarte" style="margin:0.5rem 0;">
+                  <summary>❓ Bis zu 5 eigene Fragen an die Verkoster (optional)</summary>
+                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein, Freitext oder Auswahl (eigenes Dropdown). Markierst du eine <b>richtige Antwort</b>, sammeln die Verkoster Punkte und du bekommst eine 🏆 Ergebnisliste.</p>
+                  <?php for ($fi = 1; $fi <= 5; $fi++): ?>
+                    <div style="margin-bottom:0.55rem;">
+                      <div style="display:flex; gap:0.4rem;">
+                        <input type="text" name="frage_text_<?= $fi ?>" placeholder="Frage <?= $fi ?>, z. B. Würdest du das kaufen?" maxlength="120" style="flex:1; margin-bottom:0;">
+                        <select name="frage_typ_<?= $fi ?>" class="frage-typ" data-nr="<?= $fi ?>" style="width:auto; margin-bottom:0;">
+                          <option value="janein">Ja/Nein</option>
+                          <option value="freitext">Freitext</option>
+                          <option value="auswahl">Auswahl</option>
+                        </select>
+                      </div>
+                      <input type="text" name="frage_optionen_<?= $fi ?>" id="frage-optionen-<?= $fi ?>" placeholder="Optionen mit Komma trennen – * markiert die richtige, z. B. zu jung, *genau richtig, zu reif" maxlength="400" style="margin:0.3rem 0 0;" hidden>
+                      <select name="frage_richtig_<?= $fi ?>" id="frage-richtig-<?= $fi ?>" style="width:auto; margin:0.3rem 0 0;">
+                        <option value="">Richtige Antwort: keine (keine Punkte)</option>
+                        <option value="Ja">Richtige Antwort: 👍 Ja</option>
+                        <option value="Nein">Richtige Antwort: 👎 Nein</option>
+                      </select>
+                    </div>
+                  <?php endfor; ?>
+                  <script>
+                    document.querySelectorAll('.frage-typ').forEach(function (s) {
+                      s.addEventListener('change', function () {
+                        var opt = document.getElementById('frage-optionen-' + s.dataset.nr);
+                        var ri = document.getElementById('frage-richtig-' + s.dataset.nr);
+                        if (opt) { opt.hidden = s.value !== 'auswahl'; }
+                        if (ri) { ri.hidden = s.value !== 'janein'; }
+                      });
+                    });
+                  </script>
+                </details>
+                <button class="knopf zweit" type="submit" style="margin-top:0.5rem;">🕶️ Blind-Etikett erzeugen</button>
+              </form>
+              <?php if ($blindDieses !== []): ?>
+                <p class="anzahl" style="margin:0.4rem 0 0.3rem;">Vorhandene Blind-Etiketten dieses Getränks:</p>
+                <?php foreach ($blindDieses as $bd): ?>
+                  <div class="ergebnis-kategorie" style="align-items:center;">
+                    <span>🕶️ <b><?= e($bd['label']) ?></b><?php if (is_array($bd['fragen'] ?? null) && $bd['fragen'] !== []): ?> <span class="anzahl">· ❓ <?= count($bd['fragen']) ?> Frage(n)</span><?php endif; ?></span>
+                    <span style="display:flex; gap:0.4rem; align-items:center;">
+                      <a class="knopf klein zweit" href="?blindpng=<?= e(rawurlencode((string)$bd['token'])) ?>">⬇️ PNG</a>
+                      <form method="post" style="margin:0;" onsubmit="return confirm('Blind-Etikett „<?= e($bd['label']) ?>“ löschen?');">
+                        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                        <input type="hidden" name="aktion" value="blind_loeschen">
+                        <input type="hidden" name="token" value="<?= e($bd['token']) ?>">
+                        <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                        <button class="loeschen" type="submit">✕</button>
+                      </form>
+                    </span>
+                  </div>
+                <?php endforeach; ?>
+              <?php endif; ?>
+              <?php if ($blindDieses !== []): ?>
+                <a class="knopf" href="?blindetiketten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>" style="margin-top:0.7rem; display:inline-block;">🖨️ Etiketten dieses Getränks drucken / als PDF</a>
+              <?php endif; ?>
+              <?php $blindStand = blindPunkte($daten, [(string)$aktiverChampagner['id']]); ?>
+              <?php if ($blindStand !== []): ?>
+                <h3 style="margin:1rem 0 0.3rem; font-size:1rem;">🏆 Ergebnisliste dieses Getränks</h3>
+                <?php $platz = 0; foreach ($blindStand as $bsName => $bs): $platz++; ?>
+                  <div class="ergebnis-kategorie">
+                    <span><?= ['🥇', '🥈', '🥉'][$platz - 1] ?? $platz . '.' ?> <b><?= e($bsName) ?></b></span>
+                    <span><b><?= (int)$bs['punkte'] ?></b> / <?= (int)$bs['gesamt'] ?> richtig</span>
+                  </div>
+                <?php endforeach; ?>
+              <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
       <?php if ($eingeloggt): ?>
         <form method="post" onsubmit="return confirm('„<?= e($aktiverChampagner['name']) ?>“ samt aller Bewertungen und Fotos löschen?');" style="margin-top:0.8rem;">
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -8749,10 +8771,22 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </select>
           <?php endif; ?>
           <input type="text" name="weingut_neu" id="neu-erzeuger-feld" value="<?= e($erkanntesWeingut === null ? $neu['weingut'] : '') ?>" placeholder="… oder neue(s) <?= e($erzLabel) ?> eintragen" maxlength="60">
+          <label style="display:flex; align-items:center; gap:0.55rem; margin:0.7rem 0 0.3rem; cursor:pointer;">
+            <input type="checkbox" name="direkt_verkosten" id="neu-direkt" value="1"<?= ($neu['direkt'] ?? true) ? ' checked' : '' ?> style="width:auto;">
+            <span>🥂 danach direkt verkosten</span>
+          </label>
           <div class="knopfreihe" style="margin-top:0.6rem;">
-            <button class="knopf" type="submit">Speichern &amp; bewerten</button>
+            <button class="knopf" type="submit" id="neu-speichern-knopf">Speichern &amp; bewerten</button>
             <a class="knopf zweit" href="?neu=1">Neu fotografieren</a>
           </div>
+          <script>
+            (function () {
+              var cb = document.getElementById('neu-direkt');
+              var k = document.getElementById('neu-speichern-knopf');
+              function passeAn() { k.innerHTML = cb.checked ? 'Speichern &amp; bewerten' : 'Nur speichern'; }
+              if (cb && k) { cb.addEventListener('change', passeAn); passeAn(); }
+            })();
+          </script>
         </form>
         <script>
           (function () {
@@ -8777,6 +8811,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="hidden" name="kat" value="<?= e(isset($KATEGORIEN_GETRAENKE[(string)($_GET['kat'] ?? '')]) ? (string)$_GET['kat'] : 'champagner') ?>">
           <h2>1. Etikett fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach ein Foto vom Etikett – oder wähl ein vorhandenes Bild aus. Danach geht es automatisch weiter.</p>
+          <label style="display:flex; align-items:center; gap:0.55rem; margin:0 0 0.8rem; cursor:pointer;">
+            <input type="checkbox" name="direkt_verkosten" value="1" checked style="width:auto;">
+            <span>🥂 danach direkt verkosten <small class="anzahl">(Haken raus = nur anlegen)</small></span>
+          </label>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="foto-kamera" style="display:none;">
           <input type="file" name="fotos[]" accept="image/*" multiple id="foto-galerie" style="display:none;">
           <div class="knopfreihe">
