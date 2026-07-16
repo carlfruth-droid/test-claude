@@ -1820,7 +1820,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($label === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte einen kurzen Text (z. B. A, B, C …) eingeben.'));
         }
-        // Bis zu 5 eigene Fragen des Gastgebers – Ja/Nein oder Freitext
+        // Bis zu 5 eigene Fragen des Gastgebers – Ja/Nein, Freitext oder Auswahl (Dropdown)
         $fragen = [];
         for ($i = 1; $i <= 5; $i++) {
             $fText = mb_substr(trim((string)($_POST['frage_text_' . $i] ?? '')), 0, 120);
@@ -1828,7 +1828,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 continue;
             }
             $fTyp = (string)($_POST['frage_typ_' . $i] ?? 'janein');
-            $fragen[] = ['text' => $fText, 'typ' => $fTyp === 'freitext' ? 'freitext' : 'janein'];
+            if (!in_array($fTyp, ['janein', 'freitext', 'auswahl'], true)) {
+                $fTyp = 'janein';
+            }
+            $frage = ['text' => $fText, 'typ' => $fTyp];
+            if ($fTyp === 'auswahl') {
+                // Antwort-Optionen: mit Komma getrennt, mind. 2, sonst wird es Freitext
+                $roh = array_filter(array_map(
+                    fn($o) => mb_substr(trim($o), 0, 60),
+                    explode(',', (string)($_POST['frage_optionen_' . $i] ?? ''))
+                ), fn($o) => $o !== '');
+                $optionen = array_slice(array_values(array_unique($roh)), 0, 10);
+                if (count($optionen) >= 2) {
+                    $frage['optionen'] = $optionen;
+                } else {
+                    $frage['typ'] = 'freitext';
+                }
+            }
+            $fragen[] = $frage;
         }
         $token = bin2hex(random_bytes(8));
         $kontoId = (string)$konto['id'];
@@ -3289,7 +3306,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($aw === '') {
                     continue;
                 }
-                $blindAntworten[] = ['frage' => (string)($bf['text'] ?? ''), 'typ' => (string)($bf['typ'] ?? 'janein'), 'antwort' => $aw];
+                $bfTyp = (string)($bf['typ'] ?? 'janein');
+                // Bei Auswahl/Ja-Nein zählt nur eine der vorgegebenen Antworten
+                if ($bfTyp === 'auswahl' && !in_array($aw, array_map('strval', (array)($bf['optionen'] ?? [])), true)) {
+                    continue;
+                }
+                if ($bfTyp === 'janein' && !in_array($aw, ['Ja', 'Nein'], true)) {
+                    continue;
+                }
+                $blindAntworten[] = ['frage' => (string)($bf['text'] ?? ''), 'typ' => $bfTyp, 'antwort' => $aw];
             }
         }
         // Betrachter (Viewer) dürfen im Tasting nicht bewerten – Gäste per QR schon.
@@ -7671,8 +7696,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <p class="wz-frage" style="margin-bottom:0.4rem;">❓ <b>Fragen des Gastgebers</b> <small>(optional)</small></p>
               <?php foreach ($blindFragen as $bfNr => $bf): ?>
                 <label class="wz-label"><?= e((string)$bf['text']) ?></label>
-                <?php if ((string)($bf['typ'] ?? 'janein') === 'freitext'): ?>
+                <?php $bfTyp = (string)($bf['typ'] ?? 'janein'); ?>
+                <?php if ($bfTyp === 'freitext'): ?>
                   <input type="text" name="blindfrage_<?= $bfNr + 1 ?>" placeholder="Deine Antwort …" maxlength="200">
+                <?php elseif ($bfTyp === 'auswahl' && is_array($bf['optionen'] ?? null) && $bf['optionen'] !== []): ?>
+                  <select name="blindfrage_<?= $bfNr + 1 ?>">
+                    <option value="">– keine Angabe –</option>
+                    <?php foreach ($bf['optionen'] as $bfo): ?>
+                      <option value="<?= e((string)$bfo) ?>"><?= e((string)$bfo) ?></option>
+                    <?php endforeach; ?>
+                  </select>
                 <?php else: ?>
                   <select name="blindfrage_<?= $bfNr + 1 ?>">
                     <option value="">– keine Angabe –</option>
@@ -8283,16 +8316,28 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <input type="text" name="label" placeholder="Kennung, z. B. A" maxlength="24" required>
                 <details class="unterkarte" style="margin:0.5rem 0;">
                   <summary>❓ Bis zu 5 eigene Fragen an die Verkoster (optional)</summary>
-                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein oder Freitext.</p>
+                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein, Freitext oder Auswahl (eigenes Dropdown).</p>
                   <?php for ($fi = 1; $fi <= 5; $fi++): ?>
-                    <div style="display:flex; gap:0.4rem; margin-bottom:0.4rem;">
-                      <input type="text" name="frage_text_<?= $fi ?>" placeholder="Frage <?= $fi ?>, z. B. Würdest du das kaufen?" maxlength="120" style="flex:1; margin-bottom:0;">
-                      <select name="frage_typ_<?= $fi ?>" style="width:auto; margin-bottom:0;">
-                        <option value="janein">Ja/Nein</option>
-                        <option value="freitext">Freitext</option>
-                      </select>
+                    <div style="margin-bottom:0.55rem;">
+                      <div style="display:flex; gap:0.4rem;">
+                        <input type="text" name="frage_text_<?= $fi ?>" placeholder="Frage <?= $fi ?>, z. B. Würdest du das kaufen?" maxlength="120" style="flex:1; margin-bottom:0;">
+                        <select name="frage_typ_<?= $fi ?>" class="frage-typ" data-nr="<?= $fi ?>" style="width:auto; margin-bottom:0;">
+                          <option value="janein">Ja/Nein</option>
+                          <option value="freitext">Freitext</option>
+                          <option value="auswahl">Auswahl</option>
+                        </select>
+                      </div>
+                      <input type="text" name="frage_optionen_<?= $fi ?>" id="frage-optionen-<?= $fi ?>" placeholder="Antwort-Optionen, mit Komma getrennt – z. B. zu jung, genau richtig, zu reif" maxlength="400" style="margin:0.3rem 0 0;" hidden>
                     </div>
                   <?php endfor; ?>
+                  <script>
+                    document.querySelectorAll('.frage-typ').forEach(function (s) {
+                      s.addEventListener('change', function () {
+                        var f = document.getElementById('frage-optionen-' + s.dataset.nr);
+                        if (f) { f.hidden = s.value !== 'auswahl'; }
+                      });
+                    });
+                  </script>
                 </details>
                 <button class="knopf zweit" type="submit" style="margin-top:0.5rem;">🕶️ Blind-Etikett erzeugen</button>
               </form>
