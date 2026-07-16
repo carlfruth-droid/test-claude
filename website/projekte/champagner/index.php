@@ -486,6 +486,27 @@ function darfGetraenkeAnlegen(array $daten, ?array $tasting): bool
     return tastingRolle($daten, $tasting) === 'admin';
 }
 
+/**
+ * Darf der aktuelle Nutzer dieses Getränk verwalten (ändern/löschen)?
+ * App-Administrator: alle. Sonst: Getränke in Tastings, in denen man Admin ist.
+ */
+function darfGetraenkAdministrieren(array $daten, array $c): bool
+{
+    if (globalerAdmin($daten)) {
+        return true;
+    }
+    $tid = (string)($c['tasting_id'] ?? '');
+    if ($tid === '') {
+        return false;
+    }
+    foreach ($daten['tastings'] as $t) {
+        if ($t['id'] === $tid) {
+            return tastingRolle($daten, $t) === 'admin';
+        }
+    }
+    return false;
+}
+
 /** Bewerten dürfen Tasting-Admins und Tester – Viewer nur zusehen. */
 function darfBewerten(array $daten, ?array $tasting): bool
 {
@@ -790,6 +811,59 @@ if (isset($_GET['debug']) && $eingeloggt) {
                 . '</pre>';
         }
     });
+}
+
+// Blind-QR als PNG zum Herunterladen: QR-Code mit der Kennung in der Mitte.
+// Damit kann man selbst beliebig viele Etiketten (z. B. für 100 Becher) erzeugen.
+if (isset($_GET['blindpng'])) {
+    $bd = datenLaden();
+    $bEintrag = blindEintragZuToken($bd, (string)$_GET['blindpng']);
+    if ($bEintrag === null) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Blind-Code ungültig.';
+        exit;
+    }
+    $bLabel = (string)$bEintrag['label'];
+    $bZiel  = 'https://fruthzeug.de/projekte/champagner/?blind=' . rawurlencode((string)$bEintrag['token']);
+    $bQrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=600x600&ecc=H&margin=14&data=' . rawurlencode($bZiel);
+    $bPng = null;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($bQrUrl);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_FOLLOWLOCATION => true, CURLOPT_HTTPHEADER => ['User-Agent: fruthzeug.de TasteLog']]);
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($code === 200 && is_string($resp) && $resp !== '') { $bPng = $resp; }
+    }
+    $bild = ($bPng !== null && function_exists('imagecreatefromstring')) ? @imagecreatefromstring($bPng) : false;
+    if ($bild !== false) {
+        $bw = imagesx($bild); $bh = imagesy($bild);
+        $cx = intdiv($bw, 2); $cy = intdiv($bh, 2);
+        $r = (int)round(min($bw, $bh) * 0.15);
+        $weiss = imagecolorallocate($bild, 255, 255, 255);
+        $schwarz = imagecolorallocate($bild, 17, 17, 17);
+        imagefilledellipse($bild, $cx, $cy, $r * 2, $r * 2, $weiss);
+        for ($i = 0; $i < 5; $i++) { imageellipse($bild, $cx, $cy, $r * 2 - $i, $r * 2 - $i, $schwarz); }
+        // Kennung font-frei zeichnen und in die Mitte skalieren
+        $txt = mb_strtoupper(mb_substr($bLabel, 0, 3));
+        $tmpW = max(1, imagefontwidth(5) * strlen($txt)); $tmpH = max(1, imagefontheight(5));
+        $tmp = imagecreatetruecolor($tmpW, $tmpH);
+        imagefill($tmp, 0, 0, imagecolorallocate($tmp, 255, 255, 255));
+        imagestring($tmp, 5, 0, 0, $txt, imagecolorallocate($tmp, 17, 17, 17));
+        $zielH = (int)round($r * 1.4); $zielW = (int)round($zielH * $tmpW / $tmpH);
+        if ($zielW > $r * 1.6) { $zielW = (int)round($r * 1.6); $zielH = (int)round($zielW * $tmpH / $tmpW); }
+        imagecopyresampled($bild, $tmp, $cx - intdiv($zielW, 2), $cy - intdiv($zielH, 2), 0, 0, $zielW, $zielH, $tmpW, $tmpH);
+        imagedestroy($tmp);
+        header('Content-Type: image/png');
+        header('Content-Disposition: attachment; filename="blind-' . (preg_replace('/[^A-Za-z0-9]/', '', $bLabel) ?: 'etikett') . '.png"');
+        imagepng($bild);
+        imagedestroy($bild);
+        exit;
+    }
+    // Fallback: der QR-Dienst liefert selbst ein PNG (ohne Kennung in der Mitte)
+    header('Location: ' . $bQrUrl);
+    exit;
 }
 
 // Bildinfo für die Großansicht: Aufnahmedatum, Kamera, Ort, Maße, Zuordnung.
@@ -3058,9 +3132,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'champagner_loeschen') {
         $id = (string)($_POST['id'] ?? '');
+        $cLoesch = champagnerHolen(datenLaden(), $id);
+        if ($cLoesch === null) {
+            zurueck('?fehler=' . rawurlencode('Dieses Getränk existiert nicht (mehr).'));
+        }
+        // Löschen darf nur, wer das Getränk verwalten darf (App- oder Tasting-Admin)
+        if (!darfGetraenkAdministrieren(datenLaden(), $cLoesch)) {
+            zurueck('?ergebnis=' . rawurlencode($id) . '&fehler=' . rawurlencode('Nur der zuständige Administrator darf dieses Getränk löschen.'));
+        }
         datenAendern(function (array $d) use ($id): array {
             $d['champagner']  = array_values(array_filter($d['champagner'], fn($c) => $c['id'] !== $id));
             $d['bewertungen'] = array_values(array_filter($d['bewertungen'], fn($b) => $b['champagner_id'] !== $id));
+            $d['blind']       = array_values(array_filter($d['blind'] ?? [], fn($b) => (string)($b['cid'] ?? '') !== $id));
             return $d;
         });
         if (preg_match('/^[a-f0-9]{8}$/', $id)) {
@@ -4775,6 +4858,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     details.unterkarte { border: 1px solid var(--border); border-radius: 12px; padding: 0.7rem 0.9rem; background: var(--bg); }
     details.unterkarte > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
     details.unterkarte > summary::-webkit-details-marker { display: none; }
+    .log-aktionen { display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; padding: 0 0.7rem 0.6rem; }
     /* Blind-Etiketten zum Ausdrucken */
     .druck-kopf { text-align: center; margin-bottom: 1rem; }
     .etikett-blatt { display: flex; flex-wrap: wrap; gap: 0.8rem; justify-content: center; margin-bottom: 1.4rem; padding-bottom: 1.2rem; border-bottom: 1px dashed var(--border); }
@@ -4796,7 +4880,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     .kombi-kein { width: 108px; height: 108px; display: flex; align-items: center; justify-content: center; font-size: 2.4rem; border: 1px solid #ccc; border-radius: 8px; }
     .etikett-loeschen { width: 100%; text-align: center; }
     @media print {
-      .site-header, .tab-leiste, footer, .druck-kopf button, .etikett-loeschen, #info-knopf { display: none !important; }
+      .site-header, .tab-leiste, footer, .druck-kopf button, .etikett-loeschen, .etikett-download, #info-knopf { display: none !important; }
       body { background: #fff !important; }
       main { padding: 0 !important; }
       .etikett-blatt { page-break-inside: avoid; border-bottom: none; }
@@ -6777,34 +6861,64 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             foreach ($daten['tastings'] as $t) {
                 $tastingTitelListe[$t['id']] = $t['titel'];
             }
-            // Meine Bewertungen einsammeln (neueste eigene Bewertung je Getränk)
+            // Logbuch = ALLE Getränke, die ich verwalte (App-/Tasting-Admin) PLUS
+            // alle, die ich selbst bewertet habe. Verwaltbare kann ich ändern/löschen.
             $eintraege = [];
             $flaschenSumme = 0;
+            $baueEintrag = function (array $c, ?array $b) use ($daten, $tastingTitelListe): array {
+                $sterne = null;
+                if ($b !== null) {
+                    $summe = 0; $anz = 0;
+                    foreach ($b['werte'] as $w) { $summe += (int)$w; $anz++; }
+                    $sterne = $anz > 0 ? $summe / $anz : null;
+                }
+                $wg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
+                return [
+                    'c'        => $c,
+                    'sterne'   => $sterne,
+                    'zeit'     => (int)($b['zeit'] ?? $c['zeit'] ?? 0),
+                    'notiz'    => $b !== null ? trim((string)($b['notiz'] ?? '')) : '',
+                    'weingut'  => $wg !== null ? $wg['name'] : '',
+                    'tasting'  => $tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? '',
+                    'ort'      => $b !== null ? trim((string)($b['ort'] ?? '')) : '',
+                    'wetter'   => $b !== null ? trim((string)($b['wetter'] ?? '')) : '',
+                    'admin'    => darfGetraenkAdministrieren($daten, $c),
+                    'bewertet' => $b !== null,
+                ];
+            };
+            // Meine neueste Bewertung je Getränk sammeln
+            $meineNeuesteProC = [];
             foreach ($daten['bewertungen'] as $b) {
                 if (!isset($meineNamenSet[mb_strtolower(trim((string)$b['person']))])) {
                     continue;
                 }
-                $c = champagnerHolen($daten, (string)$b['champagner_id']);
-                if ($c === null) {
-                    continue; // Getränk wurde gelöscht
+                $cidB = (string)$b['champagner_id'];
+                if (!isset($meineNeuesteProC[$cidB]) || (int)($b['zeit'] ?? 0) > (int)($meineNeuesteProC[$cidB]['zeit'] ?? 0)) {
+                    $meineNeuesteProC[$cidB] = $b;
                 }
-                $summe = 0;
-                $anz = 0;
-                foreach ($b['werte'] as $w) { $summe += (int)$w; $anz++; }
-                $wg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
                 $flaschenSumme += (int)($b['flaschen'] ?? 0);
-                $eintraege[$c['id']] = [
-                    'c'       => $c,
-                    'sterne'  => $anz > 0 ? $summe / $anz : null,
-                    'zeit'    => (int)($b['zeit'] ?? 0),
-                    'notiz'   => trim((string)($b['notiz'] ?? '')),
-                    'weingut' => $wg !== null ? $wg['name'] : '',
-                    'tasting' => $tastingTitelListe[(string)($c['tasting_id'] ?? '')] ?? '',
-                    'ort'     => trim((string)($b['ort'] ?? '')),
-                    'wetter'  => trim((string)($b['wetter'] ?? '')),
-                ];
+            }
+            // 1) Getränke, die ich verwalte (App-Admin: alle; Tasting-Admin: seine Tastings)
+            foreach ($daten['champagner'] as $c) {
+                if (darfGetraenkAdministrieren($daten, $c)) {
+                    $eintraege[$c['id']] = $baueEintrag($c, $meineNeuesteProC[$c['id']] ?? null);
+                }
+            }
+            // 2) Zusätzlich alles, was ich bewertet habe (auch ohne Adminrecht)
+            foreach ($meineNeuesteProC as $cidB => $b) {
+                if (isset($eintraege[$cidB])) { continue; }
+                $c = champagnerHolen($daten, (string)$cidB);
+                if ($c === null) { continue; }
+                $eintraege[$cidB] = $baueEintrag($c, $b);
             }
             $eintraege = array_values($eintraege);
+            // Weitere Jahrgänge: gleiche Getränke (Name) mit anderem Jahrgang
+            $jahrgaengeProName = [];
+            foreach ($daten['champagner'] as $cJg) {
+                $nm = mb_strtolower(trim((string)$cJg['name']));
+                $jg = trim((string)($cJg['jahrgang'] ?? ''));
+                if ($jg !== '') { $jahrgaengeProName[$nm][$jg] = true; }
+            }
             // Eigene Listen als Filter (📂 Favoriten, Nachkaufen …)
             $logListen = meineListen($daten);
             $logListeWahl = (string)($_GET['meineliste'] ?? '');
@@ -6946,12 +7060,18 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   $fotos = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
                   $meta = [];
                   $meta[] = date('d.m.Y', $ein['zeit']);
-                  if (trim((string)($c['jahrgang'] ?? '')) !== '') { $meta[] = '📅 ' . (string)$c['jahrgang']; }
+                  $jgDies = trim((string)($c['jahrgang'] ?? ''));
+                  if ($jgDies !== '') { $meta[] = '📅 ' . $jgDies; }
                   if (trim((string)($c['rebsorte'] ?? '')) !== '') { $meta[] = (string)$c['rebsorte']; }
                   if ($ein['weingut'] !== '') { $meta[] = '🍇 ' . $ein['weingut']; }
                   if ($ein['tasting'] !== '') { $meta[] = '👥 ' . $ein['tasting']; }
                   if ($ein['ort'] !== '') { $meta[] = '📍 ' . $ein['ort']; }
                   if ($ein['wetter'] !== '') { $meta[] = $ein['wetter']; }
+                  // Weitere Jahrgänge desselben Getränks (ohne den eigenen).
+                  // array_map strval: numerische Array-Schlüssel sind sonst ints.
+                  $nmDies = mb_strtolower(trim((string)$c['name']));
+                  $andereJg = array_values(array_filter(array_map('strval', array_keys($jahrgaengeProName[$nmDies] ?? [])), fn($j) => $j !== $jgDies));
+                  sort($andereJg);
                 ?>
                 <div class="card flasche filterbar">
                   <a class="flasche-link" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">
@@ -6961,19 +7081,37 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                       <span class="thumb platzhalter"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
                     <?php endif; ?>
                     <span class="flasche-info">
-                      <span class="f-name"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '' ?> <?= e($c['name']) ?></span>
+                      <span class="f-name"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '' ?> <?= e($c['name']) ?><?= $ein['admin'] ? ' <span class="bewerter-chip" style="font-size:0.68rem;">🛠️ verwaltet</span>' : '' ?></span>
                       <span class="f-meta"><?= e(implode(' · ', $meta)) ?></span>
-                      <span class="f-wertung"><?= sterneAnzeige($ein['sterne']) ?></span>
+                      <?php if ($andereJg !== []): ?>
+                        <span class="f-meta" style="color:var(--accent);">📅 auch als Jahrgang <?= e(implode(', ', $andereJg)) ?> vorhanden</span>
+                      <?php endif; ?>
+                      <?php if ($ein['bewertet']): ?>
+                        <span class="f-wertung"><?= sterneAnzeige($ein['sterne']) ?></span>
+                      <?php else: ?>
+                        <span class="f-meta"><span class="mein-status offen">🔲 noch nicht von dir bewertet</span></span>
+                      <?php endif; ?>
                       <?php if ($ein['notiz'] !== ''): ?>
                         <span class="f-meta" style="font-style:italic;">„<?= e(mb_strlen($ein['notiz']) > 90 ? mb_substr($ein['notiz'], 0, 90) . ' …' : $ein['notiz']) ?>“</span>
                       <?php endif; ?>
                     </span>
                   </a>
+                  <?php if ($ein['admin']): ?>
+                    <div class="log-aktionen">
+                      <a class="knopf klein zweit" href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>">✏️ ändern</a>
+                      <form method="post" style="margin:0;" onsubmit="return confirm('„<?= e($c['name']) ?>“ mit allen Bewertungen und Fotos wirklich löschen?');">
+                        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                        <input type="hidden" name="aktion" value="champagner_loeschen">
+                        <input type="hidden" name="id" value="<?= e($c['id']) ?>">
+                        <button class="loeschen" type="submit">🗑 löschen</button>
+                      </form>
+                    </div>
+                  <?php endif; ?>
                 </div>
               <?php endforeach; ?>
             </div>
           <?php else: ?>
-            <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Bewertungen von dir – ab zum Verkosten! 🥂</p></div>
+            <div class="card"><p style="color:var(--muted); font-style:italic;">Noch nichts hier – bewerte etwas oder lege unter <a href="./">🥂 Verkosten</a> ein Getränk an. 🥂</p></div>
           <?php endif; ?>
         <?php endif; ?>
       <?php endif; ?>
@@ -7247,6 +7385,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <span class="qr-badge"><small>🍷</small><b><?= e($bl['label']) ?></b></span>
               </div>
               <div class="etikett-fuss">QR scannen &amp; anonym bewerten</div>
+              <a class="knopf klein zweit etikett-download" href="?blindpng=<?= e(rawurlencode((string)$bl['token'])) ?>">⬇️ QR als PNG</a>
             </div>
             <div class="etikett">
               <div class="etikett-titel">🔓 Auflösung</div>
@@ -7704,13 +7843,16 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <?php foreach ($blindDieses as $bd): ?>
                   <div class="ergebnis-kategorie" style="align-items:center;">
                     <span>🕶️ <b><?= e($bd['label']) ?></b></span>
-                    <form method="post" style="margin:0;" onsubmit="return confirm('Blind-Etikett „<?= e($bd['label']) ?>“ löschen?');">
-                      <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                      <input type="hidden" name="aktion" value="blind_loeschen">
-                      <input type="hidden" name="token" value="<?= e($bd['token']) ?>">
-                      <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
-                      <button class="loeschen" type="submit">✕</button>
-                    </form>
+                    <span style="display:flex; gap:0.4rem; align-items:center;">
+                      <a class="knopf klein zweit" href="?blindpng=<?= e(rawurlencode((string)$bd['token'])) ?>">⬇️ PNG</a>
+                      <form method="post" style="margin:0;" onsubmit="return confirm('Blind-Etikett „<?= e($bd['label']) ?>“ löschen?');">
+                        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                        <input type="hidden" name="aktion" value="blind_loeschen">
+                        <input type="hidden" name="token" value="<?= e($bd['token']) ?>">
+                        <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                        <button class="loeschen" type="submit">✕</button>
+                      </form>
+                    </span>
                   </div>
                 <?php endforeach; ?>
               <?php endif; ?>
