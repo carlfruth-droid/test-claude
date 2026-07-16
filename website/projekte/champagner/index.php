@@ -419,21 +419,68 @@ function darfBewerterNamen(array $daten, ?array $tasting): bool
     return isset(meineTastings($daten)[$tasting['id']]);
 }
 
-/** Ein Tasting verwalten (Titel, Teilnehmer, löschen) darf nur Besitzer + Admin. */
-function darfTastingVerwalten(array $daten, ?array $tasting): bool
+/**
+ * Rolle des aktuellen Betrachters in EINEM Tasting: 'admin', 'tester' oder
+ * 'viewer'. Tasting-Admins dürfen verwalten und Getränke/Weingüter anlegen,
+ * Tester dürfen bewerten, Viewer nur zusehen. Der Ersteller (Besitzer) und
+ * der globale Administrator sind immer Tasting-Admin. Ein Tasting-Admin ist
+ * NUR für dieses Tasting Admin.
+ */
+function tastingRolle(array $daten, ?array $tasting): string
 {
     if ($tasting === null) {
-        return false;
+        return 'viewer';
     }
     $konto = aktuellerBenutzer($daten);
-    if ($konto === null) {
-        return false;
+    if ($konto !== null && !empty($konto['admin'])) {
+        return 'admin'; // globaler Administrator
     }
-    if (!empty($konto['admin'])) {
-        return true;
+    if ($konto !== null && (string)($tasting['besitzer'] ?? '') !== ''
+        && (string)($tasting['besitzer'] ?? '') === (string)$konto['id']) {
+        return 'admin'; // Ersteller des Tastings
     }
-    return (string)($tasting['besitzer'] ?? '') !== ''
-        && (string)($tasting['besitzer'] ?? '') === (string)$konto['id'];
+    $einl = (string)($_COOKIE['einladung'] ?? '');
+    $ich = mb_strtolower(trim((string)($_SESSION['person'] ?? '')));
+    foreach (($tasting['teilnehmer'] ?? []) as $p) {
+        $treffer = ($einl !== '' && hash_equals((string)($p['token'] ?? ''), $einl))
+            || ($ich !== '' && mb_strtolower(trim((string)($p['name'] ?? ''))) === $ich);
+        if ($treffer) {
+            $r = (string)($p['rolle'] ?? 'tester');
+            return in_array($r, ['admin', 'tester', 'viewer'], true) ? $r : 'tester';
+        }
+    }
+    return 'viewer';
+}
+
+/** Ein Tasting verwalten (Titel, Teilnehmer, einladen, löschen) darf nur Tasting-Admin. */
+function darfTastingVerwalten(array $daten, ?array $tasting): bool
+{
+    return tastingRolle($daten, $tasting) === 'admin';
+}
+
+/** Getränke/Weingüter in diesem Tasting anlegen darf nur Tasting-Admin. */
+function darfGetraenkeAnlegen(array $daten, ?array $tasting): bool
+{
+    return tastingRolle($daten, $tasting) === 'admin';
+}
+
+/** Bewerten dürfen Tasting-Admins und Tester – Viewer nur zusehen. */
+function darfBewerten(array $daten, ?array $tasting): bool
+{
+    return in_array(tastingRolle($daten, $tasting), ['admin', 'tester'], true);
+}
+
+/**
+ * Getränke/Weingüter anlegen: außerhalb eines Tastings (direkt) darf jeder;
+ * innerhalb eines Tastings nur der Tasting-Admin. Bricht mit Fehlermeldung ab.
+ */
+function verlangeGetraenkeRecht(): void
+{
+    $d = datenLaden();
+    $mt = meinTasting($d);
+    if ($mt !== null && !darfGetraenkeAnlegen($d, $mt)) {
+        zurueck('?tasting=' . rawurlencode((string)$mt['id']) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Getränke oder Weingüter anlegen – frag den Gastgeber.'));
+    }
 }
 
 /** Anzeigename eines Bewerters aus Sicht des Betrachters: Klarname, „Du“ oder anonym. */
@@ -993,7 +1040,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
                 foreach ($d['tastings'] as &$t) {
                     if ($t['id'] === $tid) {
-                        $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'agb_zeit' => time()];
+                        $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'rolle' => 'tester', 'agb_zeit' => time()];
                     }
                 }
                 return $d;
@@ -1083,6 +1130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'champagner_anlegen') {
+        verlangeGetraenkeRecht();
         $name = trim((string)($_POST['name'] ?? ''));
         $name = mb_substr($name, 0, 60);
         $preis = trim((string)($_POST['preis'] ?? ''));
@@ -1114,6 +1162,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'schnell_foto') {
+        verlangeGetraenkeRecht();
         // Schritt 1 der Schnell-Erfassung: Foto sichern und Etikett erkennen
         $praefix = 'neu-' . bin2hex(random_bytes(4));
         [$hochgeladen, ] = fotoUploadVerarbeiten($BILD_TYPEN, $praefix);
@@ -1225,6 +1274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'schnell_anlegen') {
+        verlangeGetraenkeRecht();
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 60);
         $preis = mb_substr(trim((string)($_POST['preis'] ?? '')), 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
@@ -1434,6 +1484,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'weingut_anlegen') {
+        verlangeGetraenkeRecht();
         $name = trim((string)($_POST['name'] ?? ''));
         $name = mb_substr($name, 0, 60);
         $notiz = trim((string)($_POST['notiz'] ?? ''));
@@ -2033,6 +2084,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($aktion === 'weingut_foto_neu') {
+        verlangeGetraenkeRecht();
         // Schritt 1: Foto sichern, GPS auslesen, Standort und Erzeuger ermitteln
         $praefix = 'wneu-' . bin2hex(random_bytes(4));
         [$hochgeladen, ] = fotoUploadVerarbeiten($BILD_TYPEN, $praefix);
@@ -2553,9 +2605,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'tasting_titel') {
         $tid = (string)($_POST['tasting_id'] ?? '');
+        $tObj = null;
+        foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
+        if (!darfTastingVerwalten(datenLaden(), $tObj)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf das Tasting ändern.'));
+        }
         $titel = mb_substr(trim((string)($_POST['titel'] ?? '')), 0, 60);
         if ($titel === '') {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Der Titel darf nicht leer sein.'));
+            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Der Titel darf nicht leer sein.'));
         }
         datenAendern(function (array $d) use ($tid, $titel): array {
             foreach ($d['tastings'] as &$t) {
@@ -2565,11 +2622,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
-        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Titel gespeichert.'));
+        zurueck('?tverwaltung=' . rawurlencode($tid) . '&ok=' . rawurlencode('Titel gespeichert.'));
     }
 
     if ($aktion === 'tasting_loeschen') {
         $tid = (string)($_POST['tasting_id'] ?? '');
+        $tObj = null;
+        foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
+        if (!darfTastingVerwalten(datenLaden(), $tObj)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf das Tasting löschen.'));
+        }
         datenAendern(function (array $d) use ($tid): array {
             $d['tastings'] = array_values(array_filter($d['tastings'], fn($t) => $t['id'] !== $tid));
             return $d;
@@ -2579,34 +2641,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'teilnehmer_anlegen') {
         $tid = (string)($_POST['tasting_id'] ?? '');
+        $tObj = null;
+        foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
+        if (!darfTastingVerwalten(datenLaden(), $tObj)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Teilnehmer hinzufügen.'));
+        }
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
         $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
+        $rolle = in_array((string)($_POST['rolle'] ?? 'tester'), ['admin', 'tester', 'viewer'], true) ? (string)$_POST['rolle'] : 'tester';
         if ($name === '') {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Bitte einen Namen angeben.'));
+            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Bitte einen Namen angeben.'));
         }
-        foreach (datenLaden()['tastings'] as $t) {
-            if ($t['id'] === $tid && teilnehmerLimitErreicht($t)) {
-                zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Dieses Tasting ist auf 2 Teilnehmer begrenzt (du + 1 Gast). Für große Runden kann der Administrator den Ersteller freischalten.'));
-            }
+        if ($tObj !== null && teilnehmerLimitErreicht($tObj)) {
+            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Dieses Tasting ist auf 2 Teilnehmer begrenzt (du + 1 Gast). Für große Runden kann der Administrator den Ersteller freischalten.'));
         }
         if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Die E-Mail-Adresse sieht nicht gültig aus.'));
+            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Die E-Mail-Adresse sieht nicht gültig aus.'));
         }
         $token = bin2hex(random_bytes(8));
-        datenAendern(function (array $d) use ($tid, $name, $email, $token): array {
+        datenAendern(function (array $d) use ($tid, $name, $email, $token, $rolle): array {
             foreach ($d['tastings'] as &$t) {
                 if ($t['id'] === $tid) {
-                    $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email];
+                    $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'rolle' => $rolle];
                 }
             }
             return $d;
         });
-        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode($name . ' ist dabei – Link kopieren oder per Mail senden!'));
+        zurueck('?tverwaltung=' . rawurlencode($tid) . '&ok=' . rawurlencode($name . ' ist dabei – Link kopieren oder per Mail senden!'));
+    }
+
+    if ($aktion === 'teilnehmer_rolle') {
+        $tid = (string)($_POST['tasting_id'] ?? '');
+        $token = (string)($_POST['token'] ?? '');
+        $rolle = in_array((string)($_POST['rolle'] ?? ''), ['admin', 'tester', 'viewer'], true) ? (string)$_POST['rolle'] : 'tester';
+        $tObj = null;
+        foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
+        if (!darfTastingVerwalten(datenLaden(), $tObj)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Rollen ändern.'));
+        }
+        datenAendern(function (array $d) use ($tid, $token, $rolle): array {
+            foreach ($d['tastings'] as &$t) {
+                if ($t['id'] === $tid) {
+                    foreach ($t['teilnehmer'] as &$p) {
+                        if ((string)$p['token'] === $token) { $p['rolle'] = $rolle; }
+                    }
+                    unset($p);
+                }
+            }
+            return $d;
+        });
+        zurueck('?tverwaltung=' . rawurlencode($tid) . '&ok=' . rawurlencode('Rolle geändert.'));
     }
 
     if ($aktion === 'teilnehmer_loeschen') {
         $tid = (string)($_POST['tasting_id'] ?? '');
         $token = (string)($_POST['token'] ?? '');
+        $tObj = null;
+        foreach (datenLaden()['tastings'] as $t) { if ($t['id'] === $tid) { $tObj = $t; break; } }
+        if (!darfTastingVerwalten(datenLaden(), $tObj)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur der Tasting-Admin darf Teilnehmer entfernen.'));
+        }
         datenAendern(function (array $d) use ($tid, $token): array {
             foreach ($d['tastings'] as &$t) {
                 if ($t['id'] === $tid) {
@@ -2615,7 +2709,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
-        zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Teilnehmer entfernt.'));
+        zurueck('?tverwaltung=' . rawurlencode($tid) . '&ok=' . rawurlencode('Teilnehmer entfernt.'));
     }
 
     if ($aktion === 'teilnehmer_mail') {
@@ -2726,6 +2820,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'bewerten') {
         $cid    = (string)($_POST['champagner_id'] ?? '');
+        // Betrachter (Viewer) dürfen im Tasting nicht bewerten – Gäste per QR schon
+        if (!$gastDarfBewerten) {
+            $cGet0 = champagnerHolen(datenLaden(), $cid);
+            if ($cGet0 !== null && (string)($cGet0['tasting_id'] ?? '') !== '') {
+                $cTast0 = null;
+                foreach (datenLaden()['tastings'] as $t) {
+                    if ($t['id'] === (string)$cGet0['tasting_id']) { $cTast0 = $t; break; }
+                }
+                if ($cTast0 !== null && tastingRolle(datenLaden(), $cTast0) === 'viewer') {
+                    zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Als Betrachter kannst du dieses Tasting nur ansehen, nicht bewerten.'));
+                }
+            }
+        }
         $person = trim((string)($_POST['person'] ?? ''));
         $person = mb_substr($person, 0, 40);
         if ($person === '') {
@@ -2760,6 +2867,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notiz = trim((string)($_POST['notiz'] ?? ''));
         $notiz = mb_substr($notiz, 0, 500);
         $flaschen = max(0, min(99, (int)($_POST['flaschen'] ?? 0)));
+        $bestellung = max(0, min(999, (int)($_POST['bestellung'] ?? 0)));
         $vk = (string)($_POST['vk'] ?? '');
         if ($vk !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vk)) {
             $vk = '';
@@ -2780,7 +2888,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $umfeldLat = null;
             $umfeldLon = null;
         }
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -2809,6 +2917,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'werte'         => $werte,
                 'notiz'         => $notiz,
                 'flaschen'      => $flaschen,
+                'bestellung'    => $bestellung,
                 'detail'        => $detail,
                 'tasting_id'    => $meinTastingId,
                 // Umfeld: Ort und Wetter zum Zeitpunkt der Bewertung
@@ -3998,6 +4107,19 @@ if (isset($_GET['bewerten'])) {
     $ansicht = 'beitreten';
 } elseif (isset($_GET['verwaltung'])) {
     $ansicht = 'verwaltung';
+} elseif (isset($_GET['tverwaltung'])) {
+    // Verwaltung EINES Tastings (Einladungen, Teilnehmer/Rollen, Titel, löschen)
+    $ansicht = 'tverwaltung';
+    $verwaltungTasting = null;
+    if (preg_match('/^[a-f0-9]{8}$/', (string)$_GET['tverwaltung'])) {
+        foreach ($daten['tastings'] as $t) {
+            if ($t['id'] === (string)$_GET['tverwaltung']) { $verwaltungTasting = $t; break; }
+        }
+    }
+    if ($verwaltungTasting === null || !darfTastingVerwalten($daten, $verwaltungTasting)) {
+        $ansicht = 'tasting_gesperrt';
+        $verwaltungTasting = null;
+    }
 } elseif (isset($_GET['meine'])) {
     $ansicht = 'meine';
 } elseif (isset($_GET['konto'])) {
@@ -4016,7 +4138,7 @@ if ($einladungFrage !== null) {
 // Bereich für die Tab-Leiste unten
 $bereich = match ($ansicht) {
     'verkosten', 'werkstatt', 'neu', 'wneu', 'bewerten' => 'verkosten',
-    'tastingplatz', 'beitreten', 'verwaltung' => 'tasting',
+    'tastingplatz', 'beitreten', 'verwaltung', 'tverwaltung' => 'tasting',
     default => 'entdecken',
 };
 
@@ -4632,6 +4754,10 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php elseif ($ansicht === 'tasting_gesperrt'): ?>
       <h1>Kein Zugriff 🔒</h1>
       <p class="untertitel">Dieses Tasting gehört jemand anderem.</p>
+    <?php elseif ($ansicht === 'tverwaltung'): ?>
+      <p class="zurueck"><a href="?tasting=<?= e(rawurlencode($verwaltungTasting['id'])) ?>">&larr; Zur&uuml;ck zum Tasting</a></p>
+      <h1>Verwaltung 🛠️</h1>
+      <p class="untertitel"><?= e($verwaltungTasting['titel']) ?> · Einladen, Rollen, Einstellungen</p>
     <?php elseif ($ansicht === 'verwaltung'): ?>
       <p class="zurueck"><a href="?tasting=1">&larr; Zur Tasting-&Uuml;bersicht</a></p>
       <h1>Verwaltung 🛠️</h1>
@@ -4785,10 +4911,15 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <?php endif; ?>
     <?php if ($ansicht === 'verkosten'): ?>
       <!-- ==================== VERKOSTEN-START ==================== -->
-      <a class="kachel" href="?neu=1" style="border-left:5px solid var(--accent);">
-        <span class="k-icon">🍾</span>
-        <span class="k-text"><b>Neues Getränk</b><small>Foto, Galerie oder von Hand – Art, Name &amp; Weingut werden erkannt, dann direkt bewerten</small></span>
-      </a>
+      <?php $vkMeinT = meinTasting($daten); $vkDarfAnlegen = $vkMeinT === null || darfGetraenkeAnlegen($daten, $vkMeinT); ?>
+      <?php if ($vkDarfAnlegen): ?>
+        <a class="kachel" href="?neu=1" style="border-left:5px solid var(--accent);">
+          <span class="k-icon">🍾</span>
+          <span class="k-text"><b>Neues Getränk</b><small>Foto, Galerie oder von Hand – Art, Name &amp; Weingut werden erkannt, dann direkt bewerten</small></span>
+        </a>
+      <?php elseif ($vkMeinT !== null): ?>
+        <div class="card"><p class="anzahl">🥂 Du bist bei „<?= e($vkMeinT['titel']) ?>“ dabei. Neue Getränke legt der Tasting-Admin an – du kannst die vorhandenen bewerten.</p></div>
+      <?php endif; ?>
       <?php
         // Schlichte Liste aller bisherigen Verkostungen: neueste Bewertung oben,
         // die ältesten unten. Wer neu bewertet, rückt mit dem Getränk nach oben.
@@ -5213,7 +5344,9 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
         <details class="card">
             <summary>🍇 Unsere Weingüter (<?= count($tastingWeingutIds) ?>)</summary>
+            <?php if (darfGetraenkeAnlegen($daten, $aktivesTasting)): ?>
             <a class="knopf zweit" href="?wneu=1&amp;vkmodus=1" style="margin-top:0.5rem; display:inline-block;">📷&nbsp; Neues Weingut per Foto erkennen</a>
+            <?php endif; ?>
             <div style="margin-top:0.5rem;">
               <?php foreach ($daten['weingueter'] as $w): ?>
                 <?php if (!isset(array_flip($tastingWeingutIds)[$w['id']])) { continue; } ?>
@@ -5268,36 +5401,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             </div>
           <?php endif; ?>
         </details>
-
-        <?php
-          $beitrittUrl = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? '');
-          $ansehenUrl = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($aktivesTasting['id']);
-        ?>
-        <?php if (darfTastingVerwalten($daten, $aktivesTasting)): ?>
-        <details class="card">
-          <summary>📱 Einladen &amp; Mitschauen (QR-Codes)</summary>
-          <div style="display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; text-align:center; margin-top:0.6rem;">
-            <div>
-              <p class="anzahl" style="margin-bottom:0.4rem;"><b>Mitmachen:</b> abfotografieren, Name eintragen, dabei sein.</p>
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&amp;margin=8&amp;data=<?= e(rawurlencode($beitrittUrl)) ?>"
-                   alt="QR-Code zum Beitreten" width="200" height="200"
-                   style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
-              <div class="knopfreihe" style="justify-content:center; margin-top:0.4rem;">
-                <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($beitrittUrl) ?>">Link kopieren</button>
-              </div>
-            </div>
-            <div>
-              <p class="anzahl" style="margin-bottom:0.4rem;"><b>Nur zuschauen:</b> sehen, aber nicht bewerten.</p>
-              <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&amp;margin=8&amp;data=<?= e(rawurlencode($ansehenUrl)) ?>"
-                   alt="QR-Code zum Mitschauen" width="200" height="200"
-                   style="border-radius:12px; border:1px solid var(--border); background:#fff; max-width:100%;">
-              <div class="knopfreihe" style="justify-content:center; margin-top:0.4rem;">
-                <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($ansehenUrl) ?>">Link kopieren</button>
-              </div>
-            </div>
-          </div>
-        </details>
-        <?php endif; ?>
 
         <?php
           // Getränke hierher holen: nur aus den EIGENEN Tastings des Nutzers
@@ -5449,9 +5552,40 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           // Bewerter, die (noch) nicht in der Teilnehmerliste stehen
           $externAktiv = array_filter($aktivAnzeige, fn($n, $ln) => !isset($teilnNamen[$ln]), ARRAY_FILTER_USE_BOTH);
         ?>
+        <?php
+          // 🛒 Meine Bestellungen in diesem Tasting (aus den eigenen Bewertungen)
+          $meineNamenB = meineNamen($daten);
+          $meineBestellungen = [];
+          $bestellSumme = 0;
+          foreach ($daten['bewertungen'] as $bb) {
+              if ((int)($bb['bestellung'] ?? 0) <= 0) { continue; }
+              if ((string)($bb['tasting_id'] ?? '') !== (string)$aktivesTasting['id']) { continue; }
+              if (!isset($meineNamenB[mb_strtolower(trim((string)($bb['person'] ?? '')))])) { continue; }
+              $bc = champagnerHolen($daten, (string)$bb['champagner_id']);
+              if ($bc === null) { continue; }
+              $meineBestellungen[] = ['c' => $bc, 'menge' => (int)$bb['bestellung']];
+              $bestellSumme += (int)$bb['bestellung'];
+          }
+        ?>
+        <?php if ($meineBestellungen !== []): ?>
+          <div class="card" style="border-left:5px solid var(--accent);">
+            <h2>🛒 Meine Bestellungen (<?= $bestellSumme ?>)</h2>
+            <?php foreach ($meineBestellungen as $mb): ?>
+              <?php $mbFotos = mitTitelbild(fotosFuer($mb['c']['id']), (string)($mb['c']['titelbild'] ?? '')); ?>
+              <a href="?ergebnis=<?= e(rawurlencode($mb['c']['id'])) ?>" style="display:flex; align-items:center; gap:0.55rem; border-bottom:1px solid var(--border); padding:0.4rem 0; text-decoration:none; color:var(--text);">
+                <?php if ($mbFotos !== []): ?><img src="<?= e(thumbUrl($mbFotos[0])) ?>" alt="" loading="lazy" style="width:40px; height:40px; border-radius:9px; object-fit:cover; flex-shrink:0;"><?php else: ?><span style="width:40px; text-align:center; font-size:1.2rem; flex-shrink:0;"><?= $KATEGORIEN_GETRAENKE[(string)($mb['c']['typ'] ?? 'champagner')][0] ?? '🍾' ?></span><?php endif; ?>
+                <span style="flex:1; min-width:0;"><b><?= e($mb['c']['name']) ?></b></span>
+                <span class="bewerter-chip"><?= $mb['menge'] ?>×</span>
+              </a>
+            <?php endforeach; ?>
+            <p class="anzahl" style="margin-top:0.5rem;">Beim Bewerten kannst du angeben, wie viele du bestellen möchtest.</p>
+          </div>
+        <?php endif; ?>
+
         <?php $darfVerwalten = darfTastingVerwalten($daten, $aktivesTasting); ?>
+        <?php $rollenIcon = ['admin' => '🛠️', 'tester' => '🥂', 'viewer' => '👁️']; ?>
         <div class="card">
-          <h2>Teilnehmer</h2>
+          <h2>Teilnehmer (<?= count($teiln) ?>)</h2>
           <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($passiv) ?> passiv</p>
           <?php foreach ($externAktiv as $n): ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
@@ -5462,65 +5596,123 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <?php
               $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]);
               $pFoto = profilFoto($daten, (string)$p['name']);
+              $pRolle = in_array((string)($p['rolle'] ?? 'tester'), ['admin', 'tester', 'viewer'], true) ? (string)$p['rolle'] : 'tester';
             ?>
             <div class="ergebnis-kategorie" style="align-items:center;">
-              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b><?= $darfVerwalten && $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
-              <?php if ($darfVerwalten): ?>
-              <span class="knopfreihe">
-                <button type="button" class="knopf klein zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?einladung=<?= e($p['token']) ?>">Link kopieren</button>
-                <?php if ($p['email'] !== ''): ?>
-                  <form method="post" style="display:inline">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="aktion" value="teilnehmer_mail">
-                    <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-                    <input type="hidden" name="token" value="<?= e($p['token']) ?>">
-                    <button class="knopf klein zweit" type="submit">✉️ Mail</button>
-                  </form>
-                <?php endif; ?>
-                <form method="post" style="display:inline" onsubmit="return confirm('<?= e($p['name']) ?> entfernen?');">
-                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                  <input type="hidden" name="aktion" value="teilnehmer_loeschen">
-                  <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-                  <input type="hidden" name="token" value="<?= e($p['token']) ?>">
-                  <button class="loeschen" type="submit">✕</button>
-                </form>
-              </span>
-              <?php endif; ?>
+              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b> <span class="anzahl"><?= $rollenIcon[$pRolle] ?> <?= $pRolle === 'admin' ? 'Admin' : ($pRolle === 'viewer' ? 'Betrachter' : 'Tester') ?></span></span>
             </div>
           <?php endforeach; ?>
-          <?php if ($darfVerwalten): ?>
-          <form method="post" style="margin-top:1rem;">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="teilnehmer_anlegen">
-            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <input type="text" name="name" placeholder="Name" maxlength="40" required>
-            <input type="text" name="email" placeholder="E-Mail (optional – für die Einladung)" maxlength="80" inputmode="email">
-            <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
-          </form>
-          <p class="anzahl" style="margin-top:0.5rem;">Jeder Teilnehmer bekommt einen persönlichen Link – ein Tipp darauf meldet ihn dauerhaft an (kein Passwort nötig).</p>
-          <?php endif; ?>
         </div>
 
         <?php if ($darfVerwalten): ?>
-        <div class="card zu">
-          <h2>Tasting verwalten</h2>
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="tasting_titel">
-            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <input type="text" name="titel" value="<?= e($aktivesTasting['titel']) ?>" maxlength="60" required>
-            <button class="knopf zweit" type="submit">Titel speichern</button>
-          </form>
-          <form method="post" class="abmelden" onsubmit="return confirm('Tasting „<?= e($aktivesTasting['titel']) ?>“ löschen? Bewertungen bleiben erhalten.');">
-            <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-            <input type="hidden" name="aktion" value="tasting_loeschen">
-            <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
-            <button type="submit">Tasting löschen</button>
-          </form>
-        </div>
+          <a class="kachel" href="?tverwaltung=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
+            <span class="k-icon">🛠️</span>
+            <span class="k-text"><b>Verwaltung</b><small>Einladen, Rollen vergeben, Titel ändern, löschen</small></span>
+          </a>
         <?php endif; ?>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
       <?php endif; ?>
+
+    <?php elseif ($ansicht === 'tverwaltung' && ($verwaltungTasting ?? null) !== null): ?>
+      <!-- ==================== TASTING-VERWALTUNG (nur Tasting-Admin) ==================== -->
+      <?php
+        $vt = $verwaltungTasting;
+        $vBeitritt = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($vt['beitritt'] ?? '');
+        $vAnsehen = 'https://fruthzeug.de/projekte/champagner/?liste=1&kat=alle&tid=' . rawurlencode($vt['id']);
+        $vQrPng = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' . rawurlencode($vBeitritt);
+        $vRollen = ['admin' => '🛠️ Admin', 'tester' => '🥂 Tester', 'viewer' => '👁️ Betrachter'];
+      ?>
+      <div class="card">
+        <h2>📱 Einladen</h2>
+        <p class="anzahl" style="margin-bottom:0.7rem;">Zeig oder druck diesen QR-Code: einmal scannen, Name eintragen, dabei. Neue Teilnehmer starten als <b>Tester</b> (dürfen bewerten).</p>
+        <div style="text-align:center;">
+          <img src="<?= e($vQrPng) ?>" alt="QR-Code zum Beitreten" width="220" height="220" style="border-radius:14px; border:1px solid var(--border); background:#fff; max-width:80%;">
+        </div>
+        <div class="knopfreihe" style="justify-content:center; margin-top:0.6rem;">
+          <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($vBeitritt) ?>">Beitritts-Link kopieren</button>
+          <a class="knopf klein zweit" href="<?= e($vQrPng) ?>" target="_blank" rel="noopener">🖨️ Zum Drucken öffnen</a>
+        </div>
+        <p class="anzahl" style="margin:0.8rem 0 0.3rem;"><b>Nur zuschauen</b> (sehen, nicht bewerten):</p>
+        <div class="knopfreihe">
+          <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($vAnsehen) ?>">Mitschau-Link kopieren</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>👥 Teilnehmer &amp; Rollen</h2>
+        <p class="anzahl" style="margin-bottom:0.7rem;">🛠️ Admin darf Getränke/Weingüter anlegen und verwalten · 🥂 Tester darf bewerten · 👁️ Betrachter sieht nur zu.</p>
+        <?php if (($vt['teilnehmer'] ?? []) === []): ?>
+          <p class="anzahl" style="font-style:italic;">Noch niemand dabei – oben einladen.</p>
+        <?php endif; ?>
+        <?php foreach (($vt['teilnehmer'] ?? []) as $p): ?>
+          <?php $pR = in_array((string)($p['rolle'] ?? 'tester'), ['admin','tester','viewer'], true) ? (string)$p['rolle'] : 'tester'; ?>
+          <div style="border-bottom:1px solid var(--border); padding:0.5rem 0;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+              <span><b><?= e($p['name']) ?></b><?= $p['email'] !== '' ? ' <span class="anzahl">' . e($p['email']) . '</span>' : '' ?></span>
+              <form method="post" onsubmit="return confirm('<?= e($p['name']) ?> entfernen?');" style="margin:0;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="teilnehmer_loeschen">
+                <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+                <input type="hidden" name="token" value="<?= e($p['token']) ?>">
+                <button class="loeschen" type="submit">✕</button>
+              </form>
+            </div>
+            <div class="knopfreihe" style="margin-top:0.4rem;">
+              <?php foreach ($vRollen as $rWert => $rLabel): ?>
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="teilnehmer_rolle">
+                  <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+                  <input type="hidden" name="token" value="<?= e($p['token']) ?>">
+                  <input type="hidden" name="rolle" value="<?= e($rWert) ?>">
+                  <button class="knopf klein <?= $pR === $rWert ? '' : 'zweit' ?>" type="submit"<?= $pR === $rWert ? ' disabled' : '' ?>><?= $rLabel ?></button>
+                </form>
+              <?php endforeach; ?>
+              <button type="button" class="knopf klein zweit link-kopieren" data-link="https://fruthzeug.de/projekte/champagner/?einladung=<?= e($p['token']) ?>">Link</button>
+              <?php if ($p['email'] !== ''): ?>
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="teilnehmer_mail">
+                  <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+                  <input type="hidden" name="token" value="<?= e($p['token']) ?>">
+                  <button class="knopf klein zweit" type="submit">✉️</button>
+                </form>
+              <?php endif; ?>
+            </div>
+          </div>
+        <?php endforeach; ?>
+        <form method="post" style="margin-top:1rem;">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="teilnehmer_anlegen">
+          <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+          <input type="text" name="name" placeholder="Name" maxlength="40" required>
+          <input type="text" name="email" placeholder="E-Mail (optional – für die Einladung)" maxlength="80" inputmode="email">
+          <select name="rolle">
+            <option value="tester">🥂 Tester (darf bewerten)</option>
+            <option value="admin">🛠️ Admin (darf alles verwalten)</option>
+            <option value="viewer">👁️ Betrachter (nur zusehen)</option>
+          </select>
+          <button class="knopf" type="submit">Teilnehmer hinzufügen</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>⚙️ Einstellungen</h2>
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="tasting_titel">
+          <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+          <label class="feld-label">Titel des Tastings</label>
+          <input type="text" name="titel" value="<?= e($vt['titel']) ?>" maxlength="60" required>
+          <button class="knopf zweit" type="submit">Titel speichern</button>
+        </form>
+        <form method="post" class="abmelden" style="margin-top:1rem;" onsubmit="return confirm('Tasting „<?= e($vt['titel']) ?>“ löschen? Bewertungen bleiben erhalten.');">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="tasting_loeschen">
+          <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
+          <button type="submit">Tasting löschen</button>
+        </form>
+      </div>
 
     <?php elseif ($ansicht === 'tasting_gesperrt'): ?>
       <!-- ==================== KEIN ZUGRIFF AUFS TASTING ==================== -->
@@ -6498,6 +6690,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="text" id="wz-person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40">
             <label class="wz-label">Flaschen mitgenommen/gekauft</label>
             <input type="number" id="wz-flaschen" min="0" max="99" inputmode="numeric" value="<?= (int)($vorhandene['flaschen'] ?? 0) ?>">
+            <label class="wz-label">🛒 Wie viele möchtest du bestellen?</label>
+            <input type="number" id="wz-bestellung" min="0" max="999" inputmode="numeric" value="<?= (int)($vorhandene['bestellung'] ?? 0) ?>">
             <label class="wz-label">Notiz <small>(optional)</small></label>
             <textarea id="wz-notiz" placeholder="Eigene Eindrücke …" maxlength="500" rows="2"><?= e((string)($vorhandene['notiz'] ?? '')) ?></textarea>
             <p class="wz-frage" style="margin-top:1rem;">Daraus ergibt sich deine Wertung – antippen zum Feinjustieren:</p>
@@ -7946,6 +8140,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         form.appendChild(verstecktPerson);
         var vn = document.createElement('input'); vn.type = 'hidden'; vn.name = 'notiz'; vn.value = document.getElementById('wz-notiz').value; form.appendChild(vn);
         var vf = document.createElement('input'); vf.type = 'hidden'; vf.name = 'flaschen'; vf.value = document.getElementById('wz-flaschen').value; form.appendChild(vf);
+        var vb = document.createElement('input'); vb.type = 'hidden'; vb.name = 'bestellung'; var bf = document.getElementById('wz-bestellung'); vb.value = bf ? bf.value : '0'; form.appendChild(vb);
         document.getElementById('detail-feld').value = JSON.stringify(antwort);
         var s = aktuelleSterne();
         KAT.forEach(function (k) { document.getElementById('stern-' + k).value = s[k]; });
