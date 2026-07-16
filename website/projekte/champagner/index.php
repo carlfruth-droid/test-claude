@@ -2703,7 +2703,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . '{"rebsorte":"...","preis":"z. B. ca. 45 €"}';
         $text = claudeWebsuche($auftrag);
         if ($text === '') {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.'));
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.') . '#recherche');
         }
         // Struktur-Zeile am Ende herauslösen → Vorschlag für die Stammdaten
         $vorschlag = [];
@@ -2735,7 +2735,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             return $d;
         });
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($vorschlag !== [] ? ' Dort wartet ein Stammdaten-Vorschlag auf deine Bestätigung.' : '')));
+        // Zurück direkt zur (offenen) Recherche-Karte – nicht irgendwo anders hin
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($vorschlag !== [] ? ' Dort wartet ein Stammdaten-Vorschlag auf deine Bestätigung.' : '')) . '#recherche');
     }
 
     if ($aktion === 'weingut_recherche') {
@@ -2814,7 +2815,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 return $d;
             });
-            zurueck('?ergebnis=' . rawurlencode($id) . '&ok=' . rawurlencode($uebernehmen ? 'Stammdaten aus der Recherche übernommen.' : 'Vorschlag verworfen.'));
+            zurueck('?ergebnis=' . rawurlencode($id) . '&ok=' . rawurlencode($uebernehmen ? 'Stammdaten aus der Recherche übernommen.' : 'Vorschlag verworfen.') . '#recherche');
         }
         if ($typ === 'weingut') {
             $w0 = weingutHolen(datenLaden(), $id);
@@ -5141,6 +5142,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       background: var(--bg); padding: 0.45rem 0 0.55rem; margin-bottom: 0.4rem;
     }
     .erg-aktionen .knopf { flex-shrink: 0; }
+    #recherche { scroll-margin-top: 7.5rem; } /* Anker landet unter Header + Sticky-Leiste */
     details.detail-antworten { margin: 0.15rem 0 0.7rem; }
     details.detail-antworten > summary { cursor: pointer; color: var(--accent); font-size: 0.88rem; list-style: none; }
     details.detail-antworten > summary::-webkit-details-marker { display: none; }
@@ -8199,16 +8201,21 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </details>
       <?php endif; ?>
 
-      <?php $recherche = trim((string)($aktiverChampagner['recherche'] ?? '')); ?>
+      <?php
+        $recherche = trim((string)($aktiverChampagner['recherche'] ?? ''));
+        $cVorschlag = is_array($aktiverChampagner['recherche_vorschlag'] ?? null) ? array_filter($aktiverChampagner['recherche_vorschlag']) : [];
+        // Karte offen lassen, sobald es etwas zu sehen gibt – sonst klappt sie
+        // nach der Recherche zu und die Seite springt scheinbar „irgendwo hin“
+        $rechercheOffen = $recherche !== '' || $cVorschlag !== [];
+      ?>
       <?php if ($recherche !== '' || $eingeloggt): ?>
-        <div class="card zu">
+        <div class="card<?= $rechercheOffen ? '' : ' zu' ?>" id="recherche">
           <h2>Recherche</h2>
           <?php if ($recherche !== ''): ?>
             <p><?= verlinken($recherche) ?></p>
           <?php else: ?>
             <p style="color:var(--muted); font-style:italic;">Noch keine Recherche zu diesem Champagner.</p>
           <?php endif; ?>
-          <?php $cVorschlag = is_array($aktiverChampagner['recherche_vorschlag'] ?? null) ? array_filter($aktiverChampagner['recherche_vorschlag']) : []; ?>
           <?php if ($cVorschlag !== [] && $eingeloggt): ?>
             <div style="background:var(--accent-hell); border-radius:12px; padding:0.7rem 0.9rem; margin-top:0.7rem;">
               <p style="margin-bottom:0.4rem;"><b>💡 Für die Stammdaten gefunden – übernehmen?</b></p>
@@ -8772,7 +8779,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
           <input type="text" name="weingut_neu" id="neu-erzeuger-feld" value="<?= e($erkanntesWeingut === null ? $neu['weingut'] : '') ?>" placeholder="… oder neue(s) <?= e($erzLabel) ?> eintragen" maxlength="60">
           <label style="display:flex; align-items:center; gap:0.55rem; margin:0.7rem 0 0.3rem; cursor:pointer;">
-            <input type="checkbox" name="direkt_verkosten" id="neu-direkt" value="1"<?= ($neu['direkt'] ?? true) ? ' checked' : '' ?> style="width:auto;">
+            <input type="checkbox" name="direkt_verkosten" id="neu-direkt" value="1"<?= ($neu['direkt'] ?? false) ? ' checked' : '' ?> style="width:auto;">
             <span>🥂 danach direkt verkosten</span>
           </label>
           <div class="knopfreihe" style="margin-top:0.6rem;">
@@ -8812,8 +8819,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <h2>1. Etikett fotografieren</h2>
           <p style="margin-bottom:0.9rem;">Mach ein Foto vom Etikett – oder wähl ein vorhandenes Bild aus. Danach geht es automatisch weiter.</p>
           <label style="display:flex; align-items:center; gap:0.55rem; margin:0 0 0.8rem; cursor:pointer;">
-            <input type="checkbox" name="direkt_verkosten" value="1" checked style="width:auto;">
-            <span>🥂 danach direkt verkosten <small class="anzahl">(Haken raus = nur anlegen)</small></span>
+            <input type="checkbox" name="direkt_verkosten" value="1" style="width:auto;">
+            <span>🥂 danach direkt verkosten <small class="anzahl">(ohne Haken wird nur angelegt)</small></span>
           </label>
           <input type="file" name="fotos[]" accept="image/*" capture="environment" id="foto-kamera" style="display:none;">
           <input type="file" name="fotos[]" accept="image/*" multiple id="foto-galerie" style="display:none;">
