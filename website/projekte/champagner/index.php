@@ -553,6 +553,27 @@ function darfTastingsAnlegen(?array $b): bool
     return $b !== null && (!empty($b['admin']) || !empty($b['darf_tasting']));
 }
 
+/** Eindeutiger Besitzer-Schlüssel für persönliche Listen (Konto oder Name). */
+function listenBesitzer(array $daten): string
+{
+    $k = aktuellerBenutzer($daten);
+    if ($k !== null) {
+        return 'u:' . (string)$k['id'];
+    }
+    $p = trim((string)($_SESSION['person'] ?? ''));
+    return $p !== '' ? 'p:' . mb_strtolower($p) : '';
+}
+
+/** Die eigenen Listen des aktuellen Nutzers. */
+function meineListen(array $daten): array
+{
+    $b = listenBesitzer($daten);
+    if ($b === '') {
+        return [];
+    }
+    return array_values(array_filter($daten['listen'] ?? [], fn($l) => (string)($l['besitzer'] ?? '') === $b));
+}
+
 /** Gast-Tasting = ohne Account angelegt: maximal Gastgeber + 1 eingeladene Person. */
 function teilnehmerLimitErreicht(array $t): bool
 {
@@ -601,8 +622,9 @@ function meineBewertung(array $daten, string $cid): ?array
     if ($ich === '') {
         return null;
     }
-    foreach ($daten['bewertungen'] as $b) {
-        if ($b['champagner_id'] === $cid && mb_strtolower(trim((string)$b['person'])) === $ich) {
+    // neueste eigene Verkostung dieses Getränks
+    foreach (bewertungenAlle($daten, $cid) as $b) {
+        if (mb_strtolower(trim((string)$b['person'])) === $ich) {
             return $b;
         }
     }
@@ -864,13 +886,13 @@ function e(string $s): string
 function datenLaden(): array
 {
     if (!is_file(DATEN_DATEI)) {
-        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => []];
+        return ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => []];
     }
     $roh = (string)file_get_contents(DATEN_DATEI);
     $d = json_decode($roh, true);
     return is_array($d)
-        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => []]
-        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => []];
+        ? $d + ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => []]
+        : ['champagner' => [], 'bewertungen' => [], 'weingueter' => [], 'tastings' => [], 'benutzer' => [], 'kontoanfragen' => [], 'profile' => [], 'listen' => [], 'bilder' => []];
 }
 
 /** Daten unter Sperre ändern: $fn bekommt die Daten und gibt die neuen zurück. */
@@ -1165,6 +1187,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         && ($_SESSION['gast_bewerten'] ?? '') === (string)($_POST['champagner_id'] ?? '');
     if (!$eingeloggt && !$gastDarfBewerten) {
         zurueck('?fehler=' . rawurlencode('Bitte zuerst mit dem Passwort anmelden.'));
+    }
+
+    if ($aktion === 'liste_anlegen') {
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
+        if ($name === '') {
+            zurueck('?konto=1&fehler=' . rawurlencode('Bitte einen Namen für die Liste angeben.'));
+        }
+        $besitzer = listenBesitzer(datenLaden());
+        if ($besitzer === '') {
+            zurueck('?konto=1&fehler=' . rawurlencode('Wir kennen deinen Namen noch nicht – bewerte erst einmal oder melde dich an.'));
+        }
+        $neueListe = ['id' => bin2hex(random_bytes(4)), 'besitzer' => $besitzer, 'name' => $name, 'cids' => [], 'zeit' => time()];
+        datenAendern(function (array $d) use ($neueListe): array {
+            $d['listen'][] = $neueListe;
+            return $d;
+        });
+        zurueck('?konto=1&ok=' . rawurlencode('Liste „' . $name . '“ angelegt.'));
+    }
+
+    if ($aktion === 'liste_loeschen') {
+        $lid = (string)($_POST['liste_id'] ?? '');
+        $besitzer = listenBesitzer(datenLaden());
+        datenAendern(function (array $d) use ($lid, $besitzer): array {
+            $d['listen'] = array_values(array_filter($d['listen'] ?? [], fn($l) => !((string)($l['id'] ?? '') === $lid && (string)($l['besitzer'] ?? '') === $besitzer)));
+            return $d;
+        });
+        zurueck('?konto=1&ok=' . rawurlencode('Liste gelöscht.'));
+    }
+
+    if ($aktion === 'liste_zuordnen') {
+        $lid = (string)($_POST['liste_id'] ?? '');
+        $cid = (string)($_POST['champagner_id'] ?? '');
+        $besitzer = listenBesitzer(datenLaden());
+        datenAendern(function (array $d) use ($lid, $cid, $besitzer): array {
+            foreach ($d['listen'] as &$l) {
+                if ((string)($l['id'] ?? '') === $lid && (string)($l['besitzer'] ?? '') === $besitzer) {
+                    $cids = array_values(array_unique(array_map('strval', $l['cids'] ?? [])));
+                    if (in_array($cid, $cids, true)) {
+                        $cids = array_values(array_filter($cids, fn($x) => $x !== $cid));
+                    } else {
+                        $cids[] = $cid;
+                    }
+                    $l['cids'] = $cids;
+                }
+            }
+            unset($l);
+            return $d;
+        });
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Listen aktualisiert.'));
     }
 
     if ($aktion === 'champagner_anlegen') {
@@ -2906,6 +2977,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notiz = mb_substr($notiz, 0, 500);
         $flaschen = max(0, min(99, (int)($_POST['flaschen'] ?? 0)));
         $bestellung = max(0, min(999, (int)($_POST['bestellung'] ?? 0)));
+        $preisNeu = mb_substr(trim((string)($_POST['preis'] ?? '')), 0, 20);
+        // „bearbeiten“ = eine bestehende Verkostung korrigieren (ersetzen); sonst
+        // gilt jede erneute Verkostung als NEUE Verkostung und bleibt zusätzlich erhalten
+        $bearbeiten = ($_POST['bearbeiten'] ?? '') === '1';
         $vk = (string)($_POST['vk'] ?? '');
         if ($vk !== 'ohne' && !preg_match('/^[a-f0-9]{8}$/', $vk)) {
             $vk = '';
@@ -2926,7 +3001,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $umfeldLat = null;
             $umfeldLon = null;
         }
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $preisNeu, $bearbeiten, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -2937,18 +3012,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$existiert) {
                 zurueck('?fehler=' . rawurlencode('Dieser Champagner existiert nicht (mehr).'));
             }
-            // Frühere Bewertung derselben Person für diesen Champagner ersetzen
+            // Neueste frühere Verkostung derselben Person (für Umfeld-Übernahme)
             $vorherige = null;
-            foreach ($d['bewertungen'] as $b) {
-                if ($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person)) {
+            foreach (bewertungenAlle($d, $cid) as $b) {
+                if (mb_strtolower(trim((string)$b['person'])) === mb_strtolower($person)) {
                     $vorherige = $b;
                     break;
                 }
             }
-            $d['bewertungen'] = array_values(array_filter(
-                $d['bewertungen'],
-                fn($b) => !($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person))
-            ));
+            // Nur beim ausdrücklichen Bearbeiten die vorhandene ersetzen –
+            // sonst bleibt jede frühere Verkostung als eigener Eintrag erhalten.
+            if ($bearbeiten) {
+                $d['bewertungen'] = array_values(array_filter(
+                    $d['bewertungen'],
+                    fn($b) => !($b['champagner_id'] === $cid && mb_strtolower($b['person']) === mb_strtolower($person))
+                ));
+            }
             $d['bewertungen'][] = [
                 'champagner_id' => $cid,
                 'person'        => $person,
@@ -2956,6 +3035,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'notiz'         => $notiz,
                 'flaschen'      => $flaschen,
                 'bestellung'    => $bestellung,
+                'preis'         => $preisNeu,
                 'detail'        => $detail,
                 'tasting_id'    => $meinTastingId,
                 // Umfeld: Ort und Wetter zum Zeitpunkt der Bewertung
@@ -3117,9 +3197,26 @@ $istAdminEcht = $benutzerAktiv !== null && !empty($benutzerAktiv['admin']); // e
 $istAdmin = $istAdminEcht && $rollenTest === '';
 
 /** Alle Bewertungen zu einem Champagner. */
+/** Für Schnitt & Anzahl: pro Person nur die NEUESTE Verkostung (Mehrfach-Verkostungen zählen nicht doppelt). */
 function bewertungenFuer(array $daten, string $cid): array
 {
-    return array_values(array_filter($daten['bewertungen'], fn($b) => $b['champagner_id'] === $cid));
+    $alle = bewertungenAlle($daten, $cid); // neueste zuerst
+    $proPerson = [];
+    foreach ($alle as $b) {
+        $k = mb_strtolower(trim((string)($b['person'] ?? '')));
+        if (!isset($proPerson[$k])) {
+            $proPerson[$k] = $b;
+        }
+    }
+    return array_values($proPerson);
+}
+
+/** Alle Verkostungen eines Getränks (auch mehrfache derselben Person), neueste zuerst. */
+function bewertungenAlle(array $daten, string $cid): array
+{
+    $alle = array_values(array_filter($daten['bewertungen'], fn($b) => $b['champagner_id'] === $cid));
+    usort($alle, fn($a, $b) => ((int)($b['zeit'] ?? 0)) <=> ((int)($a['zeit'] ?? 0)));
+    return $alle;
 }
 
 /** Gesamtschnitt (über alle Kategorien und Personen) oder null. */
@@ -4734,7 +4831,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
     <nav class="site-nav">
       <a href="./">🥂 Verkosten</a>
       <a href="?meine=1">📖 Meine Liste</a>
-      <a href="?liste=1">🔍 Entdecken</a>
+      <a href="?liste=1">🕘 Historie</a>
       <a href="?tasting=1">👥 Tastings</a>
       <a href="?konto=1">👤 Benutzerkonto</a>
       <details>
@@ -4837,8 +4934,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <h1>Mitbewerten 🥂</h1>
       <p class="untertitel">Sag uns kurz, wer du bist – dann geht’s direkt zur Bewertung.</p>
     <?php elseif ($ansicht === 'liste'): ?>
-      <h1>Entdecken 🔍</h1>
-      <p class="untertitel">Alle verkosteten Getränke im Überblick.</p>
+      <h1>Historie 🕘</h1>
+      <p class="untertitel">Deine Verkostungen im Überblick.</p>
     <?php elseif ($ansicht === 'weingueter'): ?>
       <h1>Weingüter 🍇</h1>
       <p class="untertitel">Die Erzeuger hinter den Flaschen – mit Notizen und Bildern.</p>
@@ -4973,77 +5070,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <?php elseif ($vkMeinT !== null): ?>
         <div class="card"><p class="anzahl">🥂 Du bist bei „<?= e($vkMeinT['titel']) ?>“ dabei. Neue Getränke legt der Tasting-Admin an – du kannst die vorhandenen bewerten.</p></div>
       <?php endif; ?>
-      <?php
-        // Schlichte Liste aller bisherigen Verkostungen: neueste Bewertung oben,
-        // die ältesten unten. Wer neu bewertet, rückt mit dem Getränk nach oben.
-        $letzteBewertungZeit = [];
-        foreach ($daten['bewertungen'] as $lb) {
-            $lbCid = (string)$lb['champagner_id'];
-            $letzteBewertungZeit[$lbCid] = max($letzteBewertungZeit[$lbCid] ?? 0, (int)($lb['zeit'] ?? 0));
-        }
-        $vkKat = (string)($_GET['kat'] ?? 'alle');
-        if ($vkKat !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$vkKat])) {
-            $vkKat = 'alle';
-        }
-        // Sichtbar sind nur Getränke aus den eigenen Tastings des Nutzers plus
-        // die selbst bewerteten (bzw. alles für den Administrator).
-        $vkMeineTs = meineTastings($daten);
-        $vkMeineNamen = meineNamen($daten);
-        $selbstBewertet = [];
-        foreach ($daten['bewertungen'] as $sb) {
-            if (isset($vkMeineNamen[mb_strtolower(trim((string)($sb['person'] ?? '')))])) {
-                $selbstBewertet[(string)$sb['champagner_id']] = true;
-            }
-        }
-        $verkostete = [];
-        foreach ($daten['champagner'] as $c) {
-            if (!isset($letzteBewertungZeit[$c['id']])) {
-                continue; // noch nie verkostet
-            }
-            $ctid = (string)($c['tasting_id'] ?? '');
-            $darf = $istAdmin
-                || ($ctid !== '' && isset($vkMeineTs[$ctid]))
-                || isset($selbstBewertet[$c['id']]);
-            if (!$darf) {
-                continue;
-            }
-            if ($vkKat !== 'alle' && (string)($c['typ'] ?? 'champagner') !== $vkKat) {
-                continue;
-            }
-            $verkostete[] = $c;
-        }
-        usort($verkostete, fn(array $x, array $y): int => $letzteBewertungZeit[$y['id']] <=> $letzteBewertungZeit[$x['id']]);
-      ?>
-      <div class="sortier-leiste" style="margin:1.1rem 0 0.6rem;">
-        <a class="<?= $vkKat === 'alle' ? 'aktiv' : '' ?>" href="./?kat=alle">⭐ Alle</a>
-        <?php foreach ($KATEGORIEN_GETRAENKE as $kSchluessel => [$kIcon, $kName, $kAktiviert]): ?>
-          <a class="<?= $vkKat === $kSchluessel ? 'aktiv' : '' ?>" href="./?kat=<?= e($kSchluessel) ?>"><?= $kIcon ?> <?= e($kName) ?></a>
-        <?php endforeach; ?>
-      </div>
-      <?php if ($verkostete === []): ?>
-        <div class="card"><p style="color:var(--muted); font-style:italic;">Noch keine Verkostungen<?= $vkKat !== 'alle' ? ' in dieser Kategorie' : '' ?> – leg mit „Neues Getränk“ los! 🥂</p></div>
-      <?php else: ?>
-        <div class="card" style="padding-top:0.4rem; padding-bottom:0.4rem;">
-          <?php foreach ($verkostete as $c): ?>
-            <?php
-              $cFotos = mitTitelbild(fotosFuer($c['id']), (string)($c['titelbild'] ?? ''));
-              $cBews = bewertungenFuer($daten, $c['id']);
-              $cWg = weingutHolen($daten, (string)($c['weingut_id'] ?? ''));
-              $cSchnitt = gesamtSchnitt($cBews);
-            ?>
-            <a href="?ergebnis=<?= e(rawurlencode($c['id'])) ?>" style="display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid var(--border); padding:0.45rem 0; text-decoration:none; color:var(--text);">
-              <?php if ($cFotos !== []): ?>
-                <img src="<?= e(thumbUrl($cFotos[0])) ?>" alt="" loading="lazy" style="width:44px; height:44px; border-radius:10px; object-fit:cover; flex-shrink:0;">
-              <?php else: ?>
-                <span style="width:44px; text-align:center; font-size:1.3rem; flex-shrink:0;"><?= $KATEGORIEN_GETRAENKE[(string)($c['typ'] ?? 'champagner')][0] ?? '🍾' ?></span>
-              <?php endif; ?>
-              <span style="flex:1; min-width:0;"><b><?= e($c['name']) ?></b><br>
-                <span class="anzahl"><?= $cWg !== null ? e($cWg['name']) . ' · ' : '' ?><?= sterneAnzeige($cSchnitt) ?> (<?= count($cBews) ?>) · bewertet am <?= date('d.m.Y', $letzteBewertungZeit[$c['id']]) ?></span>
-              </span>
-            </a>
-          <?php endforeach; ?>
-        </div>
-      <?php endif; ?>
+      <p class="anzahl" style="margin-top:1rem;">Deine bisherigen Verkostungen findest du unter <a href="?liste=1">🕘 Historie</a>.</p>
       <?php if (!$eingeloggt): ?>
         <div class="card" style="margin-top:1.2rem;"><?= loginFormular() ?></div>
       <?php endif; ?>
@@ -5052,7 +5079,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
       <!-- ==================== ARBEITSFLÄCHE (Weingut-Kontext) ==================== -->
       <a class="kachel" href="?neu=1<?= $kontextOhne ? '&amp;vk=ohne' : '&amp;vk=' . e(rawurlencode($kontextWeingut['id'])) ?>" style="border-left:5px solid var(--accent);">
         <span class="k-icon">📷</span>
-        <span class="k-text"><b>Champagner verkosten</b><small>Etikett fotografieren – erkennen – bewerten</small></span>
+        <span class="k-text"><b>Getränk verkosten</b><small>Etikett fotografieren – erkennen – bewerten</small></span>
       </a>
       <?php if (!$kontextOhne): ?>
         <a class="kachel" href="#" id="details-oeffnen" data-url="?weingut=<?= e(rawurlencode($kontextWeingut['id'])) ?>">
@@ -6698,6 +6725,31 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
         <?php endif; ?>
 
+        <?php if (listenBesitzer($daten) !== ''): ?>
+          <?php $konListen = meineListen($daten); ?>
+          <div class="card">
+            <h2>📂 Meine Listen</h2>
+            <p class="anzahl" style="margin-bottom:0.7rem;">Leg eigene Listen an (z. B. „Favoriten“, „Nachkaufen“, „Weihnachten“). Getränke ordnest du ihnen bei der Ergebnis-Seite zu; in der Historie kannst du danach filtern.</p>
+            <?php foreach ($konListen as $l): ?>
+              <div class="ergebnis-kategorie" style="align-items:center;">
+                <a href="?liste=1&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>"><b>📂 <?= e($l['name']) ?></b> <span class="anzahl">(<?= count($l['cids'] ?? []) ?>)</span></a>
+                <form method="post" style="margin:0;" onsubmit="return confirm('Liste „<?= e($l['name']) ?>“ löschen? Die Getränke bleiben erhalten.');">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="liste_loeschen">
+                  <input type="hidden" name="liste_id" value="<?= e((string)$l['id']) ?>">
+                  <button class="loeschen" type="submit">✕</button>
+                </form>
+              </div>
+            <?php endforeach; ?>
+            <form method="post" style="margin-top:1rem;">
+              <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+              <input type="hidden" name="aktion" value="liste_anlegen">
+              <input type="text" name="name" placeholder="Name der neuen Liste" maxlength="40" required>
+              <button class="knopf" type="submit">Liste anlegen</button>
+            </form>
+          </div>
+        <?php endif; ?>
+
     <?php elseif ($ansicht === 'bewerten'): ?>
       <!-- ==================== BEWERTUNGSFORMULAR ==================== -->
       <?php $gastDarfDies = ($_SESSION['gast_bewerten'] ?? '') === (string)$aktiverChampagner['id'] && ($_SESSION['gast_bewerten'] ?? '') !== ''; ?>
@@ -6730,6 +6782,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
           <input type="hidden" name="aktion" value="bewerten">
           <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+          <input type="hidden" name="bearbeiten" value="<?= isset($_GET['bearbeiten']) ? '1' : '0' ?>">
           <input type="hidden" name="vk" value="<?= e((string)($_GET['vk'] ?? '')) ?>">
           <input type="hidden" name="detail" id="detail-feld" value="">
           <input type="hidden" name="geo_lat" id="geo-lat" value="">
@@ -6773,6 +6826,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="number" id="wz-flaschen" min="0" max="99" inputmode="numeric" value="<?= (int)($vorhandene['flaschen'] ?? 0) ?>">
             <label class="wz-label">🛒 Wie viele möchtest du bestellen?</label>
             <input type="number" id="wz-bestellung" min="0" max="999" inputmode="numeric" value="<?= (int)($vorhandene['bestellung'] ?? 0) ?>">
+            <label class="wz-label">💶 Preis <small>(optional, z. B. 39,90 €)</small></label>
+            <input type="text" id="wz-preis" maxlength="20" value="<?= e((string)($vorhandene['preis'] ?? $aktiverChampagner['preis'] ?? '')) ?>">
             <label class="wz-label">Notiz <small>(optional)</small></label>
             <textarea id="wz-notiz" placeholder="Eigene Eindrücke …" maxlength="500" rows="2"><?= e((string)($vorhandene['notiz'] ?? '')) ?></textarea>
             <p class="wz-frage" style="margin-top:1rem;">Daraus ergibt sich deine Wertung – antippen zum Feinjustieren:</p>
@@ -6886,6 +6941,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
       <?php endif; ?>
 
+      <?php $ergListen = meineListen($daten); ?>
+      <?php if ($ergListen !== []): ?>
+        <div class="card zu">
+          <h2>📂 In meinen Listen</h2>
+          <div class="knopfreihe" style="margin-top:0.4rem;">
+            <?php foreach ($ergListen as $l): ?>
+              <?php $drin = in_array((string)$aktiverChampagner['id'], array_map('strval', $l['cids'] ?? []), true); ?>
+              <form method="post" style="margin:0;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="liste_zuordnen">
+                <input type="hidden" name="liste_id" value="<?= e((string)$l['id']) ?>">
+                <input type="hidden" name="champagner_id" value="<?= e($aktiverChampagner['id']) ?>">
+                <button class="knopf klein <?= $drin ? '' : 'zweit' ?>" type="submit"><?= $drin ? '✓ ' : '+ ' ?><?= e($l['name']) ?></button>
+              </form>
+            <?php endforeach; ?>
+          </div>
+          <p class="anzahl" style="margin-top:0.5rem;">Neue Listen legst du unter „👤 Benutzerkonto“ an.</p>
+        </div>
+      <?php endif; ?>
+
       <?php
         $fotos = mitTitelbild(fotosFuer($aktiverChampagner['id']), (string)($aktiverChampagner['titelbild'] ?? ''));
         $erkanntVorschlag = null;
@@ -6960,7 +7035,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                     <?php if ($eingeloggt): ?>
                       <td>
                         <?php if ($eigeneZeile || $darfNamen): // eigene Bewertung – oder Gastgeber/Admin ?>
-                          <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>">ändern</a>
+                          <a href="?bewerten=<?= e(rawurlencode($aktiverChampagner['id'])) ?>&amp;person=<?= e(rawurlencode($b['person'])) ?>&amp;bearbeiten=1">ändern</a>
                           <form method="post" style="display:inline" onsubmit="return confirm('Diese Bewertung wirklich löschen?');">
                             <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                             <input type="hidden" name="aktion" value="bewertung_loeschen">
@@ -7896,18 +7971,39 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           <?php endif; ?>
         </div>
       <?php endif; ?>
+      <?php
+        // Eigene Listen als Filter
+        $histListen = meineListen($daten);
+        $listeWahl = (string)($_GET['meineliste'] ?? '');
+        $listeAktiv = null;
+        foreach ($histListen as $l) { if ((string)$l['id'] === $listeWahl) { $listeAktiv = $l; break; } }
+        if ($listeAktiv === null) { $listeWahl = ''; }
+        $listeCids = $listeAktiv !== null ? array_map('strval', $listeAktiv['cids'] ?? []) : [];
+      ?>
+      <?php if ($histListen !== []): ?>
+        <div class="sortier-leiste">Liste:
+          <a class="<?= $listeWahl === '' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=<?= e($sortierung) ?>">⭐ Alle</a>
+          <?php foreach ($histListen as $l): ?>
+            <a class="<?= $listeWahl === (string)$l['id'] ? 'aktiv' : '' ?>" href="?liste=1&amp;meineliste=<?= e(rawurlencode((string)$l['id'])) ?>">📂 <?= e($l['name']) ?> (<?= count($l['cids'] ?? []) ?>)</a>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
       <div class="sortier-leiste">Sortieren:
-        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=datum&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Anlagedatum</a>
-        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=name&amp;tid=<?= e(rawurlencode($tidWahl)) ?>">Name</a>
+        <a class="<?= $sortierung === 'datum' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=datum&amp;tid=<?= e(rawurlencode($tidWahl)) ?><?= $listeWahl !== '' ? '&amp;meineliste=' . e(rawurlencode($listeWahl)) : '' ?>">Anlagedatum</a>
+        <a class="<?= $sortierung === 'name' ? 'aktiv' : '' ?>" href="?liste=1&amp;kat=<?= e($kategorie) ?>&amp;sort=name&amp;tid=<?= e(rawurlencode($tidWahl)) ?><?= $listeWahl !== '' ? '&amp;meineliste=' . e(rawurlencode($listeWahl)) : '' ?>">Name</a>
       </div>
-      <input type="search" class="filter-feld" placeholder="🔍 Champagner oder Weingut suchen …" data-ziel=".liste-scroll">
+      <input type="search" class="filter-feld" placeholder="🔍 Getränk oder Weingut suchen …" data-ziel=".liste-scroll">
       <div class="liste-scroll">
       <?php
-        $champagnerListe = $tidWahl === '' ? [] : array_values(array_filter(
+        // Bei aktiver Listen-Auswahl NUR die Getränke dieser Liste (ohne Tasting-Grenze)
+        $champagnerListe = $listeWahl !== ''
+          ? array_values(array_filter($daten['champagner'], fn($c) => in_array((string)$c['id'], $listeCids, true)
+                && ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)))
+          : ($tidWahl === '' ? [] : array_values(array_filter(
             $daten['champagner'],
             fn($c) => ($kategorie === 'alle' || ($c['typ'] ?? 'champagner') === $kategorie)
                 && ($tidWahl === 'alle' || champagnerInTasting($c, $tidWahl))
-        ));
+        )));
         if ($sortierung === 'name') {
             usort($champagnerListe, fn(array $x, array $y): int => strcmp(mb_strtolower($x['name']), mb_strtolower($y['name'])));
         } else {
@@ -7949,13 +8045,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
       <?php endforeach; ?>
 
-      <?php if ($eingeloggt): ?>
-        <form method="post" class="abmelden">
-          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-          <input type="hidden" name="aktion" value="logout">
-          <button type="submit">Abmelden</button>
-        </form>
-      <?php else: ?>
+      <?php if (!$eingeloggt): ?>
         <div class="card">
           <?= loginFormular() ?>
         </div>
@@ -7971,7 +8061,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
   <nav class="tab-leiste">
     <a href="./" class="<?= $bereich === 'verkosten' ? 'aktiv' : '' ?>"><span class="tab-icon">🥂</span>Verkosten</a>
-    <a href="?liste=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">🔍</span>Entdecken</a>
+    <a href="?liste=1" class="<?= $bereich === 'entdecken' ? 'aktiv' : '' ?>"><span class="tab-icon">🕘</span>Historie</a>
     <a href="?tasting=1" class="<?= $bereich === 'tasting' ? 'aktiv' : '' ?>"><span class="tab-icon">👥</span>Tasting</a>
   </nav>
 
@@ -8222,6 +8312,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         var vn = document.createElement('input'); vn.type = 'hidden'; vn.name = 'notiz'; vn.value = document.getElementById('wz-notiz').value; form.appendChild(vn);
         var vf = document.createElement('input'); vf.type = 'hidden'; vf.name = 'flaschen'; vf.value = document.getElementById('wz-flaschen').value; form.appendChild(vf);
         var vb = document.createElement('input'); vb.type = 'hidden'; vb.name = 'bestellung'; var bf = document.getElementById('wz-bestellung'); vb.value = bf ? bf.value : '0'; form.appendChild(vb);
+        var vp = document.createElement('input'); vp.type = 'hidden'; vp.name = 'preis'; var pf = document.getElementById('wz-preis'); vp.value = pf ? pf.value : ''; form.appendChild(vp);
         document.getElementById('detail-feld').value = JSON.stringify(antwort);
         var s = aktuelleSterne();
         KAT.forEach(function (k) { document.getElementById('stern-' + k).value = s[k]; });
