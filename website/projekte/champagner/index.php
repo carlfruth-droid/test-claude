@@ -1820,13 +1820,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($label === '') {
             zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Bitte einen kurzen Text (z. B. A, B, C …) eingeben.'));
         }
+        // Bis zu 5 eigene Fragen des Gastgebers – Ja/Nein oder Freitext
+        $fragen = [];
+        for ($i = 1; $i <= 5; $i++) {
+            $fText = mb_substr(trim((string)($_POST['frage_text_' . $i] ?? '')), 0, 120);
+            if ($fText === '') {
+                continue;
+            }
+            $fTyp = (string)($_POST['frage_typ_' . $i] ?? 'janein');
+            $fragen[] = ['text' => $fText, 'typ' => $fTyp === 'freitext' ? 'freitext' : 'janein'];
+        }
         $token = bin2hex(random_bytes(8));
         $kontoId = (string)$konto['id'];
-        datenAendern(function (array $d) use ($cid, $label, $token, $kontoId): array {
-            $d['blind'][] = ['token' => $token, 'cid' => $cid, 'label' => $label, 'admin' => $kontoId, 'zeit' => time()];
+        datenAendern(function (array $d) use ($cid, $label, $token, $kontoId, $fragen): array {
+            $d['blind'][] = ['token' => $token, 'cid' => $cid, 'label' => $label, 'admin' => $kontoId, 'fragen' => $fragen, 'zeit' => time()];
             return $d;
         });
-        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Blind-Etikett „' . $label . '“ erzeugt. Unter „🕶️ Blind-Etiketten“ im Menü kannst du alle ausdrucken.'));
+        zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Blind-Etikett „' . $label . '“ erzeugt' . ($fragen !== [] ? ' – mit ' . count($fragen) . ' Frage(n)' : '') . '.'));
     }
 
     if ($aktion === 'blind_loeschen') {
@@ -3264,6 +3274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Blindtasting: die Kennung kommt per Token (das Getränk bleibt anonym)
         $blindModus = ($_POST['blind'] ?? '') === '1';
         $blindLabelPost = '';
+        $blindAntworten = [];
         $cid    = (string)($_POST['champagner_id'] ?? '');
         if ($blindModus) {
             $bEintrag = blindEintragZuToken(datenLaden(), (string)($_POST['blind_token'] ?? ''));
@@ -3272,6 +3283,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $cid = (string)$bEintrag['cid'];
             $blindLabelPost = (string)$bEintrag['label'];
+            // Antworten auf die eigenen Fragen des Gastgebers einsammeln
+            foreach (array_slice(is_array($bEintrag['fragen'] ?? null) ? $bEintrag['fragen'] : [], 0, 5) as $bfNr => $bf) {
+                $aw = mb_substr(trim((string)($_POST['blindfrage_' . ($bfNr + 1)] ?? '')), 0, 200);
+                if ($aw === '') {
+                    continue;
+                }
+                $blindAntworten[] = ['frage' => (string)($bf['text'] ?? ''), 'typ' => (string)($bf['typ'] ?? 'janein'), 'antwort' => $aw];
+            }
         }
         // Betrachter (Viewer) dürfen im Tasting nicht bewerten – Gäste per QR schon.
         // Blind-Bewertungen kommen anonym von außen und sind immer erlaubt.
@@ -3346,7 +3365,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $umfeldLat = null;
             $umfeldLon = null;
         }
-        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $preisNeu, $bearbeiten, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon, $blindModus, $blindLabelPost): array {
+        datenAendern(function (array $d) use ($cid, $person, $werte, $notiz, $flaschen, $bestellung, $preisNeu, $bearbeiten, $detail, $meinTastingId, $umfeldOrt, $umfeldWetter, $umfeldLat, $umfeldLon, $blindModus, $blindLabelPost, $blindAntworten): array {
             $existiert = false;
             foreach ($d['champagner'] as $c) {
                 if ($c['id'] === $cid) {
@@ -3386,6 +3405,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Blindtasting: anonym abgegeben (Kennung z. B. „A“), zählt aber normal mit
                 'blind'         => $blindModus,
                 'blind_label'   => $blindLabelPost,
+                'blind_antworten' => $blindAntworten, // Antworten auf die Gastgeber-Fragen
                 // Umfeld: Ort und Wetter zum Zeitpunkt der Bewertung
                 'ort'           => $umfeldOrt !== '' ? $umfeldOrt : (string)($vorherige['ort'] ?? ''),
                 'wetter'        => $umfeldWetter !== '' ? $umfeldWetter : (string)($vorherige['wetter'] ?? ''),
@@ -4547,6 +4567,7 @@ $kontextWeingut = null;   // Arbeitsfläche: aktives Weingut ('ohne' = zu Hause/
 $kontextOhne = false;
 $blindLabel = '';         // Blindtasting: Kennung (z. B. „A“), sonst leer
 $blindToken = '';
+$blindFragen = [];        // eigene Fragen des Gastgebers (bis zu 5, Ja/Nein oder Freitext)
 if (isset($_GET['blind'])) {
     // Anonyme Blind-Bewertung per QR: nur bewerten, Getränk bleibt verdeckt
     $blindEintrag = blindEintragZuToken($daten, (string)$_GET['blind']);
@@ -4557,6 +4578,7 @@ if (isset($_GET['blind'])) {
         $ansicht = 'bewerten';
         $blindLabel = (string)$blindEintrag['label'];
         $blindToken = (string)$blindEintrag['token'];
+        $blindFragen = is_array($blindEintrag['fragen'] ?? null) ? array_slice($blindEintrag['fragen'], 0, 5) : [];
         $_SESSION['gast_bewerten'] = $aktiverChampagner['id']; // anonymes Bewerten ohne Login erlauben
     } else {
         $ansicht = 'blind_ungueltig';
@@ -7645,6 +7667,22 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
 
           <div class="wz-schritt" data-schritt="<?= $letzterSchritt ?>" hidden>
             <h2>✅ Fertig!</h2>
+            <?php if ($blindLabel !== '' && $blindFragen !== []): ?>
+              <p class="wz-frage" style="margin-bottom:0.4rem;">❓ <b>Fragen des Gastgebers</b> <small>(optional)</small></p>
+              <?php foreach ($blindFragen as $bfNr => $bf): ?>
+                <label class="wz-label"><?= e((string)$bf['text']) ?></label>
+                <?php if ((string)($bf['typ'] ?? 'janein') === 'freitext'): ?>
+                  <input type="text" name="blindfrage_<?= $bfNr + 1 ?>" placeholder="Deine Antwort …" maxlength="200">
+                <?php else: ?>
+                  <select name="blindfrage_<?= $bfNr + 1 ?>">
+                    <option value="">– keine Angabe –</option>
+                    <option value="Ja">👍 Ja</option>
+                    <option value="Nein">👎 Nein</option>
+                  </select>
+                <?php endif; ?>
+              <?php endforeach; ?>
+              <hr style="border:none; border-top:1px solid var(--border); margin:0.8rem 0;">
+            <?php endif; ?>
             <label class="wz-label">Dein Name</label>
             <input type="text" id="wz-person" placeholder="Dein Name" value="<?= e($formPerson) ?>" maxlength="40">
             <label class="wz-label">Flaschen mitgenommen/gekauft</label>
@@ -7957,9 +7995,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <?php
                 // 🔍 Detail-Antworten aus dem Bewertungs-Wizard: sichtbar für den
                 // Bewerter selbst, Tasting-Mitglieder (sehen Namen) und Getränk-Owner
-                $detailZeilen = ($eigene || $darfNamen || $ergOwner) && is_array($b['detail'] ?? null)
-                    ? detailLesbar($typAktiv, $b['detail'])
-                    : [];
+                $detailZeilen = [];
+                if ($eigene || $darfNamen || $ergOwner) {
+                    if (is_array($b['detail'] ?? null)) {
+                        $detailZeilen = detailLesbar($typAktiv, $b['detail']);
+                    }
+                    // Antworten auf die Gastgeber-Fragen der Blindprobe
+                    foreach ((is_array($b['blind_antworten'] ?? null) ? $b['blind_antworten'] : []) as $ba) {
+                        $awTxt = (string)($ba['antwort'] ?? '');
+                        $detailZeilen[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt))];
+                    }
+                }
               ?>
               <?php if ($detailZeilen !== []): ?>
                 <details class="detail-antworten">
@@ -8004,7 +8050,13 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   <?php if ((int)($mv['bestellung'] ?? 0) > 0): ?><span class="anzahl">· 🛒 <?= (int)$mv['bestellung'] ?></span><?php endif; ?>
                   <?php if (trim((string)($mv['preis'] ?? '')) !== ''): ?><span class="anzahl">· <?= e((string)$mv['preis']) ?></span><?php endif; ?>
                   <?php if (trim((string)($mv['notiz'] ?? '')) !== ''): ?><br><span style="font-style:italic;">„<?= e((string)$mv['notiz']) ?>“</span><?php endif; ?>
-                  <?php $mvDetail = is_array($mv['detail'] ?? null) ? detailLesbar($typAktiv, $mv['detail']) : []; ?>
+                  <?php
+                    $mvDetail = is_array($mv['detail'] ?? null) ? detailLesbar($typAktiv, $mv['detail']) : [];
+                    foreach ((is_array($mv['blind_antworten'] ?? null) ? $mv['blind_antworten'] : []) as $ba) {
+                        $awTxt = (string)($ba['antwort'] ?? '');
+                        $mvDetail[] = ['❓ ' . (string)($ba['frage'] ?? ''), e($awTxt === 'Ja' ? '👍 Ja' : ($awTxt === 'Nein' ? '👎 Nein' : $awTxt))];
+                    }
+                  ?>
                   <?php if ($mvDetail !== []): ?>
                     <details class="detail-antworten">
                       <summary>🔍 Detail-Antworten (<?= count($mvDetail) ?>)</summary>
@@ -8229,13 +8281,26 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                   <span>Als Blindprobe verwenden</span>
                 </label>
                 <input type="text" name="label" placeholder="Kennung, z. B. A" maxlength="24" required>
+                <details class="unterkarte" style="margin:0.5rem 0;">
+                  <summary>❓ Bis zu 5 eigene Fragen an die Verkoster (optional)</summary>
+                  <p class="anzahl" style="margin:0.5rem 0;">Diese Fragen werden bei der Blind-Bewertung mit gestellt – als Ja/Nein oder Freitext.</p>
+                  <?php for ($fi = 1; $fi <= 5; $fi++): ?>
+                    <div style="display:flex; gap:0.4rem; margin-bottom:0.4rem;">
+                      <input type="text" name="frage_text_<?= $fi ?>" placeholder="Frage <?= $fi ?>, z. B. Würdest du das kaufen?" maxlength="120" style="flex:1; margin-bottom:0;">
+                      <select name="frage_typ_<?= $fi ?>" style="width:auto; margin-bottom:0;">
+                        <option value="janein">Ja/Nein</option>
+                        <option value="freitext">Freitext</option>
+                      </select>
+                    </div>
+                  <?php endfor; ?>
+                </details>
                 <button class="knopf zweit" type="submit" style="margin-top:0.5rem;">🕶️ Blind-Etikett erzeugen</button>
               </form>
               <?php if ($blindDieses !== []): ?>
                 <p class="anzahl" style="margin:0.4rem 0 0.3rem;">Vorhandene Blind-Etiketten dieses Getränks:</p>
                 <?php foreach ($blindDieses as $bd): ?>
                   <div class="ergebnis-kategorie" style="align-items:center;">
-                    <span>🕶️ <b><?= e($bd['label']) ?></b></span>
+                    <span>🕶️ <b><?= e($bd['label']) ?></b><?php if (is_array($bd['fragen'] ?? null) && $bd['fragen'] !== []): ?> <span class="anzahl">· ❓ <?= count($bd['fragen']) ?> Frage(n)</span><?php endif; ?></span>
                     <span style="display:flex; gap:0.4rem; align-items:center;">
                       <a class="knopf klein zweit" href="?blindpng=<?= e(rawurlencode((string)$bd['token'])) ?>">⬇️ PNG</a>
                       <form method="post" style="margin:0;" onsubmit="return confirm('Blind-Etikett „<?= e($bd['label']) ?>“ löschen?');">
