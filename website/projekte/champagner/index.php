@@ -66,6 +66,10 @@ function kategorienFuer(string $typ, array $kategorien): array
         $kategorien['duft'] = ['Geruch', 'Wie angenehm und interessant riecht das Bier?'];
         $kategorien['perlage'] = ['Schaum & Rezenz', 'Wie sind Schaum und Kohlensäure?'];
         $kategorien['trinkfreude'] = ['Trinkfreude', 'Wie gerne würdest du noch eins bestellen?'];
+    } elseif ($typ === 'sonstiges') {
+        $kategorien['duft'] = ['Geruch', 'Wie angenehm und interessant riecht es?'];
+        $kategorien['perlage'] = ['Mundgefühl', 'Wie ist die Textur / das Mundgefühl?'];
+        $kategorien['trinkfreude'] = ['Trinkfreude', 'Wie gerne würdest du es wieder trinken?'];
     }
     return $kategorien;
 }
@@ -243,7 +247,11 @@ function wizardSchritte(string $typ): array
 /** Beschriftung des Sorten-Felds je Getränkeart. */
 function sortenLabel(string $typ): string
 {
-    return $typ === 'bier' ? 'Sorte/Stil, z. B. Pils, IPA (optional)' : 'Rebsorte, z. B. Chardonnay (optional)';
+    return match ($typ) {
+        'bier'      => 'Sorte/Stil, z. B. Pils, IPA (optional)',
+        'sonstiges' => 'Sorte/Art, z. B. Whisky, Gin, Kaffee (optional)',
+        default     => 'Rebsorte, z. B. Chardonnay (optional)',
+    };
 }
 
 /** Beim Bier ist der Erzeuger eine Brauerei, sonst ein Weingut/Haus. */
@@ -334,7 +342,7 @@ function sortenVorschlaege(string $typ): array
 function sortenChips(string $zielId, string $aktiveKat): string
 {
     $html = '<div class="sorten-chips" data-ziel="' . e($zielId) . '">';
-    foreach (['champagner', 'rotwein', 'weisswein', 'bier'] as $k) {
+    foreach (['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'] as $k) {
         $html .= '<div class="sorten-set" data-kat="' . $k . '"' . ($k === $aktiveKat ? '' : ' hidden') . '>';
         foreach (sortenVorschlaege($k) as $s => $info) {
             $html .= '<button type="button" class="sorte" data-info="' . e($info) . '">' . e($s) . '</button>';
@@ -412,8 +420,7 @@ function darfBewerterNamen(array $daten, ?array $tasting): bool
     if ($tasting === null) {
         return false;
     }
-    $konto = aktuellerBenutzer($daten);
-    if ($konto !== null && !empty($konto['admin'])) {
+    if (globalerAdmin($daten)) {
         return true;
     }
     return isset(meineTastings($daten)[$tasting['id']]);
@@ -426,12 +433,27 @@ function darfBewerterNamen(array $daten, ?array $tasting): bool
  * der globale Administrator sind immer Tasting-Admin. Ein Tasting-Admin ist
  * NUR für dieses Tasting Admin.
  */
+/** Ist der Betrachter globaler Administrator? (im Rollen-Vorschau-Modus: nein) */
+function globalerAdmin(array $daten): bool
+{
+    if (in_array((string)($_SESSION['rollen_test'] ?? ''), ['tester', 'viewer'], true)) {
+        return false; // Admin schaut sich die App gerade als Tester/Betrachter an
+    }
+    $k = aktuellerBenutzer($daten);
+    return $k !== null && !empty($k['admin']);
+}
+
 function tastingRolle(array $daten, ?array $tasting): string
 {
     if ($tasting === null) {
         return 'viewer';
     }
     $konto = aktuellerBenutzer($daten);
+    // Rollen-Vorschau: der globale Admin sieht das Tasting als Tester/Betrachter
+    if ($konto !== null && !empty($konto['admin'])
+        && in_array((string)($_SESSION['rollen_test'] ?? ''), ['tester', 'viewer'], true)) {
+        return (string)$_SESSION['rollen_test'];
+    }
     if ($konto !== null && !empty($konto['admin'])) {
         return 'admin'; // globaler Administrator
     }
@@ -935,7 +957,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($aktion === 'benutzer_logout') {
         setcookie('benutzer', '', ['expires' => time() - 3600, 'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax']);
+        unset($_SESSION['rollen_test']);
         zurueck('?konto=1&ok=' . rawurlencode('Vom Benutzerkonto abgemeldet.'));
+    }
+
+    if ($aktion === 'rollen_test') {
+        // Nur der echte globale Administrator darf die Vorschau umschalten
+        $konto = aktuellerBenutzer(datenLaden());
+        if ($konto === null || empty($konto['admin'])) {
+            zurueck('?fehler=' . rawurlencode('Diese Funktion ist nur für Administratoren.'));
+        }
+        $rolle = (string)($_POST['rolle'] ?? '');
+        if (in_array($rolle, ['tester', 'viewer'], true)) {
+            $_SESSION['rollen_test'] = $rolle;
+            zurueck('?ok=' . rawurlencode('Vorschau aktiv: Du siehst die App jetzt als ' . ($rolle === 'tester' ? 'Tester' : 'Betrachter') . '.'));
+        }
+        unset($_SESSION['rollen_test']);
+        zurueck('?ok=' . rawurlencode('Zurück in deiner Admin-Ansicht.'));
     }
 
     if ($aktion === 'mitbewerten_start') {
@@ -1137,7 +1175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $preis = mb_substr($preis, 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
@@ -1193,11 +1231,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vk = '';
         }
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         // Was für ein Getränk das ist, erkennt die KI selbst vom Etikett
-        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+        if (in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = (string)$erkannt['typ'];
         }
 
@@ -1279,7 +1317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $preis = mb_substr(trim((string)($_POST['preis'] ?? '')), 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
         $kat = (string)($_POST['kat'] ?? 'champagner');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = 'champagner';
         }
         $weingutId = (string)($_POST['weingut_id'] ?? '');
@@ -1389,7 +1427,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $preis = mb_substr($preis, 0, 20);
         $rebsorte = mb_substr(trim((string)($_POST['rebsorte'] ?? '')), 0, 80);
         $kat = (string)($_POST['kat'] ?? '');
-        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
+        if (!in_array($kat, ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)) {
             $kat = '';
         }
         $neuesTasting = null; // null = Feld nicht mitgeschickt, '' = „ohne Tasting“
@@ -1766,7 +1804,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $neueWgId = bin2hex(random_bytes(4));
                     $nName = $erkannt['name'];
                     $nReb = (string)($erkannt['rebsorte'] ?? '');
-                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier'], true)
+                    $nTyp = in_array((string)($erkannt['typ'] ?? ''), ['champagner', 'rotwein', 'weisswein', 'bier', 'sonstiges'], true)
                         ? (string)$erkannt['typ'] : 'champagner';
                     datenAendern(function (array $d) use ($nName, $nReb, $nTyp, $weingutId, $weingutNeu, $neueId, $neueWgId, $tid, $mtime): array {
                         if ($weingutNeu !== '') {
@@ -3073,7 +3111,10 @@ $blickTastingId = (string)(meinTasting($daten)['id'] ?? '');
 
 // Angemeldetes Benutzerkonto (Dauer-Cookie) – steuert Tasting-Anlage und Verwaltung
 $benutzerAktiv = aktuellerBenutzer($daten);
-$istAdmin = $benutzerAktiv !== null && !empty($benutzerAktiv['admin']);
+// Im Rollen-Vorschau-Modus verhält sich der Admin wie ein normaler Nutzer
+$rollenTest = in_array((string)($_SESSION['rollen_test'] ?? ''), ['tester', 'viewer'], true) ? (string)$_SESSION['rollen_test'] : '';
+$istAdminEcht = $benutzerAktiv !== null && !empty($benutzerAktiv['admin']); // echter globaler Admin (auch im Vorschau-Modus)
+$istAdmin = $istAdminEcht && $rollenTest === '';
 
 /** Alle Bewertungen zu einem Champagner. */
 function bewertungenFuer(array $daten, string $cid): array
@@ -4151,6 +4192,7 @@ $KATEGORIEN_GETRAENKE = [
     'rotwein'    => ['🍷', 'Rotwein', true],
     'weisswein'  => ['🥂', 'Weißwein', true],
     'bier'       => ['🍺', 'Bier', true],
+    'sonstiges'  => ['🥃', 'Sonstiges', true],
 ];
 $kategorie = (string)($_GET['kat'] ?? 'champagner');
 if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
@@ -4720,6 +4762,17 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
   </header>
 
   <main>
+    <?php if ($rollenTest !== '' && $istAdminEcht): ?>
+      <div class="hinweis" style="background:var(--violett-hell); border:1px solid var(--violett); color:var(--violett); display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; justify-content:space-between;">
+        <span>🎭 <b>Vorschau als <?= $rollenTest === 'tester' ? 'Tester 🥂' : 'Betrachter 👁️' ?></b> – so sehen es andere. Deine Admin-Rechte sind gerade ausgeblendet.</span>
+        <form method="post" style="margin:0;">
+          <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+          <input type="hidden" name="aktion" value="rollen_test">
+          <input type="hidden" name="rolle" value="off">
+          <button class="knopf klein" type="submit">🛠️ Zurück zu Admin</button>
+        </form>
+      </div>
+    <?php endif; ?>
     <?php if ($ansicht === 'verkosten'): ?>
       <div style="text-align:center; margin:0.4rem 0 0.9rem;">
         <img src="logo.png" alt="TasteLog" style="width:min(52vw, 15rem); height:auto; background:#fff; border-radius:16px; padding:0.7rem 1rem; box-shadow:0 2px 10px rgba(0,0,0,0.05);">
@@ -6615,6 +6668,34 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
               <button class="knopf zweit" type="submit">Vom Konto abmelden</button>
             </form>
           </div>
+          <?php if ($istAdminEcht): ?>
+            <div class="card">
+              <h2>🎭 Rollen-Vorschau (Admin)</h2>
+              <p class="anzahl" style="margin-bottom:0.7rem;">Sieh dir die App aus Sicht anderer an – im Tasting und generell –, um zu prüfen, ob alles wie gewünscht funktioniert. Deine Admin-Rechte sind dabei ausgeblendet; oben erscheint ein Hinweis mit „Zurück zu Admin“.</p>
+              <div class="knopfreihe">
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="rollen_test">
+                  <input type="hidden" name="rolle" value="tester">
+                  <button class="knopf <?= $rollenTest === 'tester' ? '' : 'zweit' ?>" type="submit"<?= $rollenTest === 'tester' ? ' disabled' : '' ?>>🥂 Als Tester ansehen</button>
+                </form>
+                <form method="post" style="margin:0;">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="rollen_test">
+                  <input type="hidden" name="rolle" value="viewer">
+                  <button class="knopf <?= $rollenTest === 'viewer' ? '' : 'zweit' ?>" type="submit"<?= $rollenTest === 'viewer' ? ' disabled' : '' ?>>👁️ Als Betrachter ansehen</button>
+                </form>
+                <?php if ($rollenTest !== ''): ?>
+                  <form method="post" style="margin:0;">
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="aktion" value="rollen_test">
+                    <input type="hidden" name="rolle" value="off">
+                    <button class="knopf" type="submit">🛠️ Zurück zu Admin</button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            </div>
+          <?php endif; ?>
         <?php endif; ?>
 
     <?php elseif ($ansicht === 'bewerten'): ?>
@@ -8178,7 +8259,8 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         $anleitungArt = in_array($ansicht, ['bewerten', 'ergebnis'], true) && $aktiverChampagner !== null
             ? (string)($aktiverChampagner['typ'] ?? 'champagner')
             : $kategorie;
-        if (!isset($KATEGORIEN_GETRAENKE[$anleitungArt])) {
+        // Für „Sonstiges“ (und Unbekanntes) die allgemeine Champagner-Anleitung
+        if (!in_array($anleitungArt, ['champagner', 'rotwein', 'weisswein', 'bier'], true)) {
             $anleitungArt = 'champagner';
         }
       ?>
