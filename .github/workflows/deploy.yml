@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - claude/hetzner-webhosting-setup-eah3q9
+      - claude/fruthzeug-rapidtech-page-x9r7t3
     paths:
       - 'website/**'
       - '.github/workflows/deploy.yml'
