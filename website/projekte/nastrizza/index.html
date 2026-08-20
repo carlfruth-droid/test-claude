@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Nastrizza – Pizza in Strisce. Croccante sempre.">
+  <meta name="theme-color" content="#141210">
+  <title>Nastrizza – Pizza in Strisce</title>
+  <style>
+    :root {
+      --bg: #141210;
+      --text: #ece7df;
+      --muted: #a39a8c;
+      --accent: #c46a34;
+      --border: #2c2825;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Georgia, 'Times New Roman', serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    a { color: var(--accent); }
+
+    .topbar {
+      padding: 0.85rem 1.2rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .topbar a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+    .topbar a:hover { color: var(--accent); }
+
+    main {
+      flex: 1;
+      width: 100%;
+      max-width: 40rem;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
+      text-align: center;
+    }
+    .logo {
+      width: min(85%, 22rem);
+      height: auto;
+      display: block;
+      margin: 0 auto 2rem;
+      border-radius: 16px;
+    }
+    h1 {
+      font-weight: normal;
+      letter-spacing: 0.04em;
+      font-size: clamp(1.6rem, 5vw, 2.4rem);
+    }
+    .claim {
+      margin-top: 0.6rem;
+      color: var(--muted);
+      font-style: italic;
+      letter-spacing: 0.03em;
+    }
+    .claim .hot { color: var(--accent); }
+    .lead {
+      margin-top: 2rem;
+      color: var(--text);
+    }
+    .soon {
+      display: inline-block;
+      margin-top: 2rem;
+      padding: 0.5rem 1.1rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    footer {
+      text-align: center;
+      padding: 2rem 1.5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <a href="/">&#8592; zurück zu fruthzeug.de</a>
+  </div>
+
+  <main>
+    <img class="logo" src="logo.jpg" alt="Nastrizza – Pizza in Strisce">
+    <h1>Nastrizza</h1>
+    <p class="claim">Pizza in strisce. <span class="hot">Croccante</span> sempre.</p>
+
+    <p class="lead">
+      Knusprige Pizza in Streifen – hauchdünn gebacken, immer croccante.
+      Hier entsteht gerade etwas Feines.
+    </p>
+
+    <span class="soon">Bald mehr &middot; est. 2026</span>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 Carl &middot; Privat &amp; nicht-kommerziell</p>
+  </footer>
+</body>
+</html>
