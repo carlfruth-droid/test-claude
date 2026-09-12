@@ -347,7 +347,7 @@
               </label>
             </div>
             <label>E-Mail
-              <input name="email" type="email" placeholder="name@firma.de" autocomplete="email">
+              <input name="email" type="email" placeholder="name@firma.de" autocomplete="email" required>
             </label>
             <div>
               <div class="roles-label">Ich interessiere mich als …</div>
@@ -358,8 +358,10 @@
                 <button type="button" class="role-pill">Teilnehmer:in</button>
               </div>
             </div>
+            <!-- Honeypot gegen Spam-Bots: für Menschen unsichtbar, muss leer bleiben -->
+            <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;">
             <button type="submit" class="form-submit">Interesse absenden</button>
-            <div class="form-note">Demo-Formular — noch ohne Anbindung</div>
+            <div class="form-note" id="interesse-fehler" style="display:none; color:#c0392b;"></div>
           </form>
           <div class="thanks-card hidden" id="interesse-danke">
             <div class="check">✓</div>
@@ -381,10 +383,11 @@
         </div>
         <div>
           <form class="nl-form" id="nl-form">
-            <input name="email" type="email" placeholder="Ihre E-Mail-Adresse" autocomplete="email">
+            <input name="email" type="email" placeholder="Ihre E-Mail-Adresse" autocomplete="email" required>
+            <input type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;">
             <button type="submit">Anmelden</button>
           </form>
-          <div class="nl-thanks hidden" id="nl-danke">✓ Danke — Sie erhalten eine Bestätigung per E-Mail. <span>(Demo)</span></div>
+          <div class="nl-thanks hidden" id="nl-danke">✓ Danke — Sie erhalten in Kürze eine Bestätigung per E-Mail.</div>
         </div>
       </div>
     </div>
@@ -439,16 +442,67 @@
     });
   });
 
+  // Interessens-Formular an senden.php anbinden
   document.getElementById('interesse-form').addEventListener('submit', function (e) {
     e.preventDefault();
-    this.classList.add('hidden');
-    document.getElementById('interesse-danke').classList.remove('hidden');
+    var form = this;
+    var fehler = document.getElementById('interesse-fehler');
+    var btn = form.querySelector('.form-submit');
+    fehler.style.display = 'none';
+
+    var rollen = Array.from(form.querySelectorAll('.role-pill.on'))
+      .map(function (p) { return p.textContent.trim(); }).join(', ');
+
+    var data = new FormData(form);
+    data.append('art', 'interesse');
+    data.append('rollen', rollen);
+
+    btn.disabled = true;
+    var alterText = btn.textContent;
+    btn.textContent = 'Wird gesendet …';
+
+    fetch('senden.php', { method: 'POST', body: data })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); })
+      .then(function (res) {
+        if (res && res.ok) {
+          form.classList.add('hidden');
+          document.getElementById('interesse-danke').classList.remove('hidden');
+        } else {
+          throw new Error((res && res.fehler) || 'Fehler beim Senden.');
+        }
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = alterText;
+        fehler.textContent = err.message + ' Alternativ: kontakt@rapidtech-3d.de';
+        fehler.style.display = 'block';
+      });
   });
 
+  // Newsletter-Formular an senden.php anbinden
   document.getElementById('nl-form').addEventListener('submit', function (e) {
     e.preventDefault();
-    this.classList.add('hidden');
-    document.getElementById('nl-danke').classList.remove('hidden');
+    var form = this;
+    var data = new FormData(form);
+    data.append('art', 'newsletter');
+    var btn = form.querySelector('button');
+    btn.disabled = true;
+
+    fetch('senden.php', { method: 'POST', body: data })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); })
+      .then(function (res) {
+        if (res && res.ok) {
+          form.classList.add('hidden');
+          document.getElementById('nl-danke').classList.remove('hidden');
+        } else {
+          btn.disabled = false;
+          alert((res && res.fehler) || 'Anmeldung fehlgeschlagen. Bitte später erneut versuchen.');
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        alert('Anmeldung fehlgeschlagen. Bitte später erneut versuchen.');
+      });
   });
 </script>
 </body>
