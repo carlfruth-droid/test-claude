@@ -1,2 +1,8 @@
 # Zugangsdaten für das Deployment — niemals committen
 .env
+
+# Finanzzentrale: Daten und Schlüssel liegen nur auf dem Server
+finanzzentrale-daten/
+.finanzzentrale-daten/
+website/projekte/finanzen/daten/*
+!website/projekte/finanzen/daten/.htaccess

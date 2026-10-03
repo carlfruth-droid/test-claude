@@ -984,6 +984,42 @@ if (isset($_GET['debug']) && $eingeloggt) {
     });
 }
 
+// KI-Selbsttest: mit ?kicheck=1 (nur angemeldet) wird die Claude-Anbindung
+// (Etikett-Erkennung + Internet-Recherche) direkt geprüft und der echte
+// Fehler angezeigt – z. B. ungültiger Schlüssel oder aufgebrauchtes Guthaben.
+if (isset($_GET['kicheck']) && $eingeloggt) {
+    header('Content-Type: text/html; charset=utf-8');
+    $zeilen = [];
+    $keyDatei = __DIR__ . '/daten/apikey.php';
+    $zeilen[] = ['Schlüsseldatei (daten/apikey.php)', is_file($keyDatei) ? '✅ vorhanden' : '❌ fehlt'];
+    if (is_file($keyDatei)) {
+        $k = (string)(require $keyDatei);
+        $zeilen[] = ['Schlüssel', $k === '' ? '❌ leer' : '✅ hinterlegt (' . mb_substr($k, 0, 12) . '…, ' . strlen($k) . ' Zeichen)'];
+    }
+    $zeilen[] = ['PHP-curl', function_exists('curl_init') ? '✅ verfügbar' : '❌ fehlt'];
+    @set_time_limit(60);
+    $j = claudeApi([
+        'model'      => 'claude-haiku-4-5',
+        'max_tokens' => 20,
+        'messages'   => [['role' => 'user', 'content' => 'Antworte nur mit: OK']],
+    ], 30);
+    if ($j !== null) {
+        $zeilen[] = ['Testaufruf an die Claude-API', '✅ erfolgreich – Antwort: „' . trim((string)($j['content'][0]['text'] ?? '')) . '“'];
+        $zeilen[] = ['Fazit', 'Die KI-Anbindung funktioniert. Wenn eine Erkennung trotzdem nichts liefert, lag es am Foto bzw. an der Anfrage selbst.'];
+    } else {
+        $zeilen[] = ['Testaufruf an die Claude-API', '❌ fehlgeschlagen'];
+        $zeilen[] = ['Fehler', kiFehler()];
+    }
+    echo '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>KI-Selbsttest</title></head>'
+        . '<body style="font-family:system-ui,sans-serif; max-width:40rem; margin:2rem auto; padding:0 1rem; line-height:1.6;">'
+        . '<h1 style="font-size:1.4rem;">🔎 KI-Selbsttest</h1><dl>';
+    foreach ($zeilen as [$t, $w]) {
+        echo '<dt style="font-weight:600; margin-top:0.8rem;">' . htmlspecialchars($t, ENT_QUOTES, 'UTF-8') . '</dt><dd style="margin:0;">' . htmlspecialchars($w, ENT_QUOTES, 'UTF-8') . '</dd>';
+    }
+    echo '</dl><p style="margin-top:1.5rem;"><a href="?">← zurück zur App</a></p></body></html>';
+    exit;
+}
+
 // Blind-QR als PNG zum Herunterladen: QR-Code mit der Kennung in der Mitte.
 // Damit kann man selbst beliebig viele Etiketten (z. B. für 100 Becher) erzeugen.
 if (isset($_GET['blindpng'])) {
@@ -1682,7 +1718,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $rechAuto = getraenkRecherchieren($neueId);
                 $meldung = $rechAuto['ok']
                     ? '„' . $nName . '“ erkannt und angelegt – Internet-Check fertig.' . ($rechAuto['vorschlag'] ? ' Unten wartet ein Stammdaten-Vorschlag.' : '')
-                    : '„' . $nName . '“ erkannt und angelegt – der Internet-Check lieferte gerade nichts, du kannst ihn unten jederzeit starten.';
+                    : '„' . $nName . '“ erkannt und angelegt – der Internet-Check lieferte gerade nichts' . (kiFehler() !== '' ? ' (' . kiFehler() . ')' : '') . ', du kannst ihn unten jederzeit starten.';
                 zurueck('?ergebnis=' . rawurlencode($neueId) . '&ok=' . rawurlencode($meldung) . '#recherche');
             }
             zurueck('?bewerten=' . rawurlencode($neueId) . $vkAnhang . '&ok=' . rawurlencode('„' . $nName . '“ erkannt und angelegt – los geht’s! (Preis & Co. später unter „Stammdaten“ ergänzbar)'));
@@ -1690,7 +1726,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Nichts erkannt: kurzes Formular zum Eintragen zeigen (Haken-Wunsch mitnehmen)
         $_SESSION['neu'] = ['praefix' => $praefix, 'foto' => $fotoName, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? ''), 'vk' => $vk, 'kat' => $kat, 'direkt' => $direktVerkosten];
-        zurueck('?neu=2' . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
+        // War es ein technischer Fehler (und nicht bloß ein unleserliches Etikett)? Dann den Grund zeigen.
+        $kiHinweis = kiFehler() !== '' ? '&fehler=' . rawurlencode('Etikett-Erkennung nicht möglich: ' . kiFehler()) : '';
+        zurueck('?neu=2' . $kiHinweis . ($gpsHinweis !== '' ? '&ok=' . rawurlencode($gpsHinweis) : ''));
     }
 
     if ($aktion === 'schnell_foto_mehr') {
@@ -1794,7 +1832,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fotoName = in_array($gewaehlt, $fotos, true) ? $gewaehlt : $fotos[0];
         $erkannt = etikettErkennen($fotoName);
         if ($erkannt['name'] === '' && $erkannt['weingut'] === '') {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Auf dem Foto war kein Etikett zu erkennen – am besten ein neues Foto direkt vom Etikett hochladen und nochmal versuchen.'));
+            $grund = kiFehler() !== '' ? kiFehler() : 'Auf dem Foto war kein Etikett zu erkennen – am besten ein neues Foto direkt vom Etikett hochladen und nochmal versuchen.';
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode($grund));
         }
         $_SESSION['erkannt'] = ['cid' => $cid, 'name' => $erkannt['name'], 'weingut' => $erkannt['weingut'], 'rebsorte' => ($erkannt['rebsorte'] ?? '')];
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Etikett erkannt – die Vorschläge stehen unten in den Bearbeiten-Feldern. Prüfen und speichern!'));
@@ -2759,7 +2798,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $ergebnis = getraenkRecherchieren($cid);
         if (!$ergebnis['ok']) {
-            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.') . '#recherche');
+            $grund = kiFehler() !== '' ? kiFehler() : 'Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.';
+            zurueck('?ergebnis=' . rawurlencode($cid) . '&fehler=' . rawurlencode($grund) . '#recherche');
         }
         // Zurück direkt zur (offenen) Recherche-Karte – nicht irgendwo anders hin
         zurueck('?ergebnis=' . rawurlencode($cid) . '&ok=' . rawurlencode('Recherche abgeschlossen – Ergebnis steht im Recherche-Bereich.' . ($ergebnis['vorschlag'] ? ' Dort wartet ein Stammdaten-Vorschlag auf deine Bestätigung.' : '')) . '#recherche');
@@ -2779,7 +2819,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . '{"adresse":"...","telefon":"...","email":"...","website":"..."}';
         $text = claudeWebsuche($auftrag);
         if ($text === '') {
-            zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode('Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.'));
+            $grund = kiFehler() !== '' ? kiFehler() : 'Die Recherche hat nichts Verwertbares ergeben – ggf. Name prüfen und nochmal versuchen.';
+            zurueck('?weingut=' . rawurlencode($id) . '&fehler=' . rawurlencode($grund));
         }
         // Struktur-Zeile am Ende herauslösen → Vorschlag für die Kontakt-Stammdaten
         $vorschlag = [];
@@ -4102,20 +4143,82 @@ function uploadText(int $hochgeladen, int $abgelehnt): string
 }
 
 /**
+ * Letzten KI-Fehler merken/abfragen – damit die Oberfläche sagen kann, WARUM
+ * eine Erkennung oder Recherche nichts geliefert hat (z. B. Schlüssel ungültig,
+ * Guthaben aufgebraucht), statt still so zu tun, als gäbe es kein Ergebnis.
+ */
+function kiFehler(?string $neu = null): string
+{
+    static $fehler = '';
+    if ($neu !== null) {
+        $fehler = $neu;
+    }
+    return $fehler;
+}
+
+/**
+ * Gemeinsamer Claude-API-Aufruf für Etikett-Erkennung und Websuche.
+ * Liefert die dekodierte Antwort oder null – der Grund steht dann in kiFehler().
+ */
+function claudeApi(array $body, int $timeout): ?array
+{
+    kiFehler('');
+    $keyDatei = __DIR__ . '/daten/apikey.php';
+    if (!is_file($keyDatei)) {
+        kiFehler('Auf dem Server ist kein KI-Schlüssel hinterlegt (daten/apikey.php fehlt).');
+        return null;
+    }
+    $key = (string)(require $keyDatei);
+    if ($key === '') {
+        kiFehler('Der hinterlegte KI-Schlüssel ist leer.');
+        return null;
+    }
+    if (!function_exists('curl_init')) {
+        kiFehler('Auf dem Server fehlt die PHP-curl-Erweiterung.');
+        return null;
+    }
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => json_encode($body),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_HTTPHEADER     => [
+            'content-type: application/json',
+            'x-api-key: ' . $key,
+            'anthropic-version: 2023-06-01',
+        ],
+    ]);
+    $antwort = curl_exec($ch);
+    $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlFehler = curl_error($ch);
+    curl_close($ch);
+    if (!is_string($antwort)) {
+        kiFehler('Der KI-Dienst war nicht erreichbar' . ($curlFehler !== '' ? ' (' . $curlFehler . ')' : '') . ' – später nochmal versuchen.');
+        return null;
+    }
+    $j = json_decode($antwort, true);
+    if (!is_array($j)) {
+        kiFehler('Unlesbare Antwort vom KI-Dienst (HTTP ' . $http . ').');
+        return null;
+    }
+    if ($http >= 400 || ($j['type'] ?? '') === 'error') {
+        // Die Original-Meldung der API ist hier Gold wert: „invalid x-api-key“,
+        // „credit balance is too low“ usw. sagen genau, was zu tun ist.
+        $meldung = (string)($j['error']['message'] ?? 'unbekannter Fehler');
+        kiFehler('Der KI-Dienst meldet einen Fehler (HTTP ' . $http . '): ' . mb_substr($meldung, 0, 300));
+        return null;
+    }
+    return $j;
+}
+
+/**
  * Etikett per KI lesen (Claude API). Liefert ['name'=>..,'weingut'=>..] –
  * leere Strings, wenn kein API-Schlüssel hinterlegt ist oder nichts erkannt wurde.
  */
 function etikettErkennen(string $fotoName): array
 {
     $leer = ['name' => '', 'weingut' => '', 'rebsorte' => '', 'typ' => ''];
-    $keyDatei = __DIR__ . '/daten/apikey.php';
-    if (!is_file($keyDatei)) {
-        return $leer;
-    }
-    $key = (string)(require $keyDatei);
-    if ($key === '' || !function_exists('curl_init')) {
-        return $leer;
-    }
     // Für die Erkennung ein eigenes, hochauflösendes Bild verwenden – NICHT die
     // 640-px-Anzeigevorschau. Dicht bedruckte Etiketten (z. B. Bier) werden auf
     // dem kleinen Bild oft falsch gelesen.
@@ -4133,7 +4236,7 @@ function etikettErkennen(string $fotoName): array
     if ($tempBild) {
         @unlink($erkennBild); // Erkennungsbild war nur zum Vorlesen da
     }
-    $body = json_encode([
+    $j = claudeApi([
         'model'      => 'claude-haiku-4-5',
         'max_tokens' => 200,
         'messages'   => [[
@@ -4143,25 +4246,10 @@ function etikettErkennen(string $fotoName): array
                 ['type' => 'text', 'text' => 'Prüfe zuerst: Ist auf dem Foto deutlich eine Getränkeflasche/-dose mit lesbarem Etikett das Hauptmotiv? Wenn NEIN (z. B. Gruppenfoto, Landschaft, Gebäude, Essen), antworte NUR mit {"weingut":"","name":"","rebsorte":"","typ":""}. Wenn JA: Lies GENAU den tatsächlich abgebildeten Text – erfinde nichts. Der Erzeuger/die Marke ist meist der größte, auffälligste Schriftzug (z. B. bei Bier die Brauerei wie „Augustiner“, „Paulaner“). Wenn du dir bei einem Feld nicht sicher bist, lass es leer statt zu raten. Antworte NUR mit JSON in genau dieser Form: {"weingut":"...","name":"...","rebsorte":"...","typ":"..."} – weingut ist der Erzeuger (Champagnerhaus, Weingut, Brauerei oder Brennerei), name die Bezeichnung des Getränks (mit Cuvée/Sorte und Jahrgang, falls lesbar, aber ohne Erzeugername), rebsorte die Rebsorte(n) bzw. beim Bier der Bierstil bzw. bei Spirituosen die Art (nur wenn lesbar), typ deine beste Einschätzung aus genau diesen Werten: champagner, rotwein, weisswein, rose (Roséwein), bier, spirituose (Whisky, Gin, Rum, Cognac, Likör …) oder sonstiges (andere Delikatessen).'],
             ],
         ]],
-    ]);
-    $ch = curl_init('https://api.anthropic.com/v1/messages');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $body,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 30,
-        CURLOPT_HTTPHEADER     => [
-            'content-type: application/json',
-            'x-api-key: ' . $key,
-            'anthropic-version: 2023-06-01',
-        ],
-    ]);
-    $antwort = curl_exec($ch);
-    curl_close($ch);
-    if (!is_string($antwort)) {
+    ], 30);
+    if ($j === null) {
         return $leer;
     }
-    $j = json_decode($antwort, true);
     $text = (string)($j['content'][0]['text'] ?? '');
     if (preg_match('/\{.*\}/s', $text, $m)) {
         $e = json_decode($m[0], true);
@@ -4183,16 +4271,8 @@ function etikettErkennen(string $fotoName): array
  */
 function weingutKontaktErmitteln(string $name): string
 {
-    $keyDatei = __DIR__ . '/daten/apikey.php';
-    if (!is_file($keyDatei)) {
-        return '';
-    }
-    $key = (string)(require $keyDatei);
-    if ($key === '' || !function_exists('curl_init')) {
-        return '';
-    }
     @set_time_limit(120);
-    $body = json_encode([
+    $j = claudeApi([
         'model'      => 'claude-haiku-4-5',
         'max_tokens' => 700,
         'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 3]],
@@ -4202,25 +4282,10 @@ function weingutKontaktErmitteln(string $name): string
                 . 'Antworte NUR mit einem kurzen Textblock in diesem Format (Zeilen ohne gesicherte Angabe einfach weglassen, keine Einleitung, keine Erklärungen):' . "\n"
                 . 'Adresse: …' . "\n" . 'Telefon: …' . "\n" . 'E-Mail: …' . "\n" . 'Website: …' . "\n" . 'Besuch/Verkostung: …',
         ]],
-    ]);
-    $ch = curl_init('https://api.anthropic.com/v1/messages');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $body,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 90,
-        CURLOPT_HTTPHEADER     => [
-            'content-type: application/json',
-            'x-api-key: ' . $key,
-            'anthropic-version: 2023-06-01',
-        ],
-    ]);
-    $antwort = curl_exec($ch);
-    curl_close($ch);
-    if (!is_string($antwort)) {
+    ], 90);
+    if ($j === null) {
         return '';
     }
-    $j = json_decode($antwort, true);
     // Bei Websuchen zerfällt die Antwort in mehrere Textblöcke (Zitate) –
     // alles hinter dem letzten Suchergebnis zusammensetzen.
     $bloecke = (array)($j['content'] ?? []);
@@ -4457,12 +4522,7 @@ function weingutKandidatenOSM(float $lat, float $lon): array
 /** Per KI-Websuche ermitteln, welcher Erzeuger an einem Standort sitzt; '' wenn unklar. */
 function weingutNameErmitteln(string $standort, float $lat, float $lon, array $kandidaten = []): string
 {
-    $keyDatei = __DIR__ . '/daten/apikey.php';
-    if ($standort === '' || !is_file($keyDatei)) {
-        return '';
-    }
-    $key = (string)(require $keyDatei);
-    if ($key === '' || !function_exists('curl_init')) {
+    if ($standort === '') {
         return '';
     }
     @set_time_limit(120);
@@ -4474,7 +4534,7 @@ function weingutNameErmitteln(string $standort, float $lat, float $lon, array $k
         );
         $hinweise = ' Laut OpenStreetMap gibt es in der Nähe: ' . implode(', ', $teile) . '.';
     }
-    $body = json_encode([
+    $j = claudeApi([
         'model'      => 'claude-haiku-4-5',
         'max_tokens' => 400,
         'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 3]],
@@ -4485,25 +4545,10 @@ function weingutNameErmitteln(string $standort, float $lat, float $lon, array $k
                 . 'In so einem kleinen Umkreis gibt es in der Regel genau einen Erzeuger – suche im Web nach der Adresse und nenne den wahrscheinlichsten, auch wenn du nicht hundertprozentig sicher bist. '
                 . 'Antworte NUR mit JSON in genau dieser Form: {"weingut":"..."} – leer nur dann, wenn wirklich nichts dafür spricht, dass dort ein Erzeuger sitzt.',
         ]],
-    ]);
-    $ch = curl_init('https://api.anthropic.com/v1/messages');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $body,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 90,
-        CURLOPT_HTTPHEADER     => [
-            'content-type: application/json',
-            'x-api-key: ' . $key,
-            'anthropic-version: 2023-06-01',
-        ],
-    ]);
-    $antwort = curl_exec($ch);
-    curl_close($ch);
-    if (!is_string($antwort)) {
+    ], 90);
+    if ($j === null) {
         return '';
     }
-    $j = json_decode($antwort, true);
     $bloecke = (array)($j['content'] ?? []);
     $letzteSuche = -1;
     foreach ($bloecke as $i => $block) {
@@ -4618,39 +4663,16 @@ function getraenkRecherchieren(string $cid): array
 
 function claudeWebsuche(string $auftrag, int $maxTokens = 800): string
 {
-    $keyDatei = __DIR__ . '/daten/apikey.php';
-    if (!is_file($keyDatei)) {
-        return '';
-    }
-    $key = (string)(require $keyDatei);
-    if ($key === '' || !function_exists('curl_init')) {
-        return '';
-    }
     @set_time_limit(120);
-    $body = json_encode([
+    $j = claudeApi([
         'model'      => 'claude-haiku-4-5',
         'max_tokens' => $maxTokens,
         'tools'      => [['type' => 'web_search_20250305', 'name' => 'web_search', 'max_uses' => 4]],
         'messages'   => [['role' => 'user', 'content' => $auftrag]],
-    ]);
-    $ch = curl_init('https://api.anthropic.com/v1/messages');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $body,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 90,
-        CURLOPT_HTTPHEADER     => [
-            'content-type: application/json',
-            'x-api-key: ' . $key,
-            'anthropic-version: 2023-06-01',
-        ],
-    ]);
-    $antwort = curl_exec($ch);
-    curl_close($ch);
-    if (!is_string($antwort)) {
+    ], 90);
+    if ($j === null) {
         return '';
     }
-    $j = json_decode($antwort, true);
     $bloecke = (array)($j['content'] ?? []);
     $letzteSuche = -1;
     foreach ($bloecke as $i => $block) {

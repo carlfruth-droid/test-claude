@@ -1,0 +1,623 @@
+<?php
+declare(strict_types=1);
+
+/*
+ * Yahoo Finance: Suche, Kurse, Kursverlauf, Kennzahlen, Aktionäre.
+ * Die Schnittstelle ist inoffiziell – deshalb alles mit Zwischenspeicher und
+ * Ausweichwegen, damit die Seite bei Störungen mit dem letzten Stand weiterläuft.
+ */
+
+const FZ_YAHOO_MODULE = 'price,summaryDetail,financialData,defaultKeyStatistics,assetProfile,majorHoldersBreakdown,'
+    . 'institutionOwnership,fundOwnership,insiderHolders,insiderTransactions,recommendationTrend,calendarEvents,earnings,upgradeDowngradeHistory';
+
+function yahooCookieDatei(): string
+{
+    return fzPfad('yahoo-cookies.txt');
+}
+
+/**
+ * Sitzungsschlüssel („Crumb“), den Yahoo für Kennzahlen verlangt. Wird 6 Std.
+ * aufgehoben. Von Servern in der EU schaltet Yahoo teils eine Zustimmungsseite
+ * davor – die wird dann automatisch bestätigt.
+ */
+function yahooCrumb(bool $erneuern = false): string
+{
+    $datei = fzPfad('yahoo-crumb.json');
+    $c = jsonLesen($datei);
+    if (!$erneuern && (string)($c['crumb'] ?? '') !== '' && time() - (int)($c['zeit'] ?? 0) < 6 * 3600) {
+        return (string)$c['crumb'];
+    }
+    if (!$erneuern && (int)($c['fehlschlag'] ?? 0) > time() - 300) {
+        return ''; // nach einem Fehlschlag 5 Minuten Ruhe
+    }
+    $jar = yahooCookieDatei();
+    @unlink($jar);
+    http('https://fc.yahoo.com/', ['ua' => 'browser', 'cookies_speichern' => $jar, 'zeit' => 15]);
+    $crumb = yahooCrumbAbholen($jar);
+    $weg = 'standard';
+    if ($crumb === '' && yahooEuZustimmung($jar)) {
+        $crumb = yahooCrumbAbholen($jar);
+        $weg = 'eu-zustimmung';
+    }
+    jsonSchreiben($datei, $crumb !== ''
+        ? ['crumb' => $crumb, 'zeit' => time(), 'weg' => $weg]
+        : ['crumb' => '', 'zeit' => 0, 'fehlschlag' => time()]);
+    return $crumb;
+}
+
+function yahooCrumbAbholen(string $jar): string
+{
+    foreach (['query1', 'query2'] as $host) {
+        $r = http('https://' . $host . '.finance.yahoo.com/v1/test/getcrumb', ['ua' => 'browser', 'cookies' => $jar, 'zeit' => 15]);
+        $t = trim($r['body']);
+        if ($r['code'] === 200 && $t !== '' && strlen($t) < 40 && !preg_match('/[<\s]/', $t)) {
+            return $t;
+        }
+    }
+    return '';
+}
+
+function yahooEuZustimmung(string $jar): bool
+{
+    $r = http('https://finance.yahoo.com/', ['ua' => 'browser', 'cookies_speichern' => $jar, 'zeit' => 20]);
+    if (!preg_match('~(guce|consent)\.yahoo\.com~', $r['url'] . ' ' . substr($r['body'], 0, 4000))) {
+        return false;
+    }
+    if (!preg_match('/name="csrfToken"\s+value="([^"]+)"/', $r['body'], $csrf)
+        || !preg_match('/name="sessionId"\s+value="([^"]+)"/', $r['body'], $sid)) {
+        return false;
+    }
+    $post = 'agree=agree&agree=agree&consentUUID=default'
+        . '&sessionId=' . rawurlencode($sid[1]) . '&csrfToken=' . rawurlencode($csrf[1])
+        . '&originalDoneUrl=' . rawurlencode('https://finance.yahoo.com/') . '&namespace=yahoo';
+    http('https://consent.yahoo.com/v2/collectConsent?sessionId=' . rawurlencode($sid[1]), [
+        'ua' => 'browser', 'cookies_speichern' => $jar, 'post' => $post, 'zeit' => 20,
+        'kopf' => ['Content-Type: application/x-www-form-urlencoded'],
+    ]);
+    http('https://guce.yahoo.com/copyConsent?sessionId=' . rawurlencode($sid[1]), ['ua' => 'browser', 'cookies_speichern' => $jar, 'zeit' => 20]);
+    return true;
+}
+
+function mitCrumb(string $url, string $crumb): string
+{
+    return $url . (str_contains($url, '?') ? '&' : '?') . 'crumb=' . rawurlencode($crumb);
+}
+
+/** Abruf, der den Crumb braucht – bei „ungültig“ einmal mit frischem Crumb wiederholen. */
+function yahooCrumbJson(string $url): ?array
+{
+    $crumb = yahooCrumb();
+    if ($crumb === '') {
+        return null;
+    }
+    $r = http(mitCrumb($url, $crumb), ['ua' => 'browser', 'cookies' => yahooCookieDatei()]);
+    if ($r['code'] === 401 || $r['code'] === 403) {
+        $crumb = yahooCrumb(true);
+        if ($crumb === '') {
+            return null;
+        }
+        $r = http(mitCrumb($url, $crumb), ['ua' => 'browser', 'cookies' => yahooCookieDatei()]);
+    }
+    return httpJson($r);
+}
+
+// ---------------------------------------------------------------------------
+// Suche
+// ---------------------------------------------------------------------------
+
+/** Viele Suchen auf einmal in den Zwischenspeicher laden (z. B. alle ISINs eines Depot-Imports). */
+function yahooSucheVorladen(array $begriffe, array $typen): void
+{
+    $offen = [];
+    foreach (array_unique($begriffe) as $q) {
+        $c = cacheLesen('suche:' . implode(',', $typen) . ':' . mb_strtolower($q), 86400);
+        if ($c === null || !$c['frisch']) {
+            $offen[] = $q;
+        }
+    }
+    foreach (array_chunk($offen, 8) as $teil) {
+        $anfragen = [];
+        foreach ($teil as $q) {
+            $anfragen[$q] = ['url' => 'https://query2.finance.yahoo.com/v1/finance/search?q=' . rawurlencode($q)
+                . '&quotesCount=12&newsCount=0&listsCount=0&lang=de-DE&region=DE', 'ua' => 'browser', 'zeit' => 12];
+        }
+        foreach (httpViele($anfragen) as $q => $r) {
+            $j = httpJson($r);
+            if ($j === null) {
+                continue;
+            }
+            $liste = [];
+            foreach (($j['quotes'] ?? []) as $x) {
+                if (in_array((string)($x['quoteType'] ?? ''), $typen, true) && !empty($x['symbol'])) {
+                    $liste[] = ['symbol' => (string)$x['symbol'], 'name' => (string)($x['longname'] ?? $x['shortname'] ?? $x['symbol']),
+                        'boerse' => (string)($x['exchDisp'] ?? $x['exchange'] ?? ''), 'branche' => (string)($x['industryDisp'] ?? $x['industry'] ?? ''),
+                        'typ' => (string)($x['quoteType'] ?? '')];
+                }
+            }
+            cacheSchreiben('suche:' . implode(',', $typen) . ':' . mb_strtolower((string)$q), $liste);
+        }
+    }
+}
+
+/** Suche nach Aktien (Standard) oder weiteren Arten wie ETF/Fonds (für Depot-Positionen). */
+function yahooSuche(string $q, array $typen = ['EQUITY']): array
+{
+    $q = trim($q);
+    if ($q === '') {
+        return [];
+    }
+    $liste = gecacht('suche:' . implode(',', $typen) . ':' . mb_strtolower($q), 86400, function () use ($q, $typen): ?array {
+        $j = httpJson(http('https://query2.finance.yahoo.com/v1/finance/search?q=' . rawurlencode($q)
+            . '&quotesCount=12&newsCount=0&listsCount=0&lang=de-DE&region=DE', ['ua' => 'browser', 'zeit' => 12]));
+        if ($j === null) {
+            return null;
+        }
+        $liste = [];
+        foreach (($j['quotes'] ?? []) as $x) {
+            if (!in_array((string)($x['quoteType'] ?? ''), $typen, true) || empty($x['symbol'])) {
+                continue;
+            }
+            $liste[] = [
+                'symbol'  => (string)$x['symbol'],
+                'name'    => (string)($x['longname'] ?? $x['shortname'] ?? $x['symbol']),
+                'boerse'  => (string)($x['exchDisp'] ?? $x['exchange'] ?? ''),
+                'branche' => (string)($x['industryDisp'] ?? $x['industry'] ?? ''),
+                'typ'     => (string)($x['quoteType'] ?? ''),
+            ];
+        }
+        return $liste;
+    });
+    return is_array($liste) ? $liste : [];
+}
+
+// ---------------------------------------------------------------------------
+// Kurse (viele Symbole auf einmal) und Verlauf
+// ---------------------------------------------------------------------------
+
+function kursAusV7(array $q): array
+{
+    $kurs = isset($q['regularMarketPrice']) ? (float)$q['regularMarketPrice'] : null;
+    $proz = isset($q['regularMarketChangePercent']) ? (float)$q['regularMarketChangePercent'] / 100 : null;
+    return [
+        'kurs' => $kurs,
+        'aend' => isset($q['regularMarketChange']) ? (float)$q['regularMarketChange'] : null,
+        'aend_proz' => $proz,
+        'waehrung' => (string)($q['currency'] ?? ''),
+        'zeit' => (int)($q['regularMarketTime'] ?? 0),
+        'status' => (string)($q['marketState'] ?? ''),
+        'name' => (string)($q['longName'] ?? $q['shortName'] ?? ''),
+        'boerse' => (string)($q['fullExchangeName'] ?? $q['exchange'] ?? ''),
+    ];
+}
+
+function kursAusSpark(array $sp): array
+{
+    // Zwei bekannte Antwortformen: flach je Symbol oder mit „response[0].meta“
+    $meta = $sp['response'][0]['meta'] ?? [];
+    $schluss = $sp['close'] ?? ($sp['response'][0]['indicators']['quote'][0]['close'] ?? []);
+    $kurs = null;
+    foreach (array_reverse(is_array($schluss) ? $schluss : []) as $v) {
+        if (is_numeric($v)) {
+            $kurs = (float)$v;
+            break;
+        }
+    }
+    $kurs ??= isset($meta['regularMarketPrice']) ? (float)$meta['regularMarketPrice'] : (isset($sp['fulldayPrice']) ? (float)$sp['fulldayPrice'] : null);
+    $vortag = $sp['chartPreviousClose'] ?? $sp['previousClose'] ?? $meta['chartPreviousClose'] ?? $meta['previousClose'] ?? null;
+    $vortag = is_numeric($vortag) ? (float)$vortag : null;
+    $zeiten = $sp['timestamp'] ?? ($sp['response'][0]['timestamp'] ?? []);
+    return [
+        'kurs' => $kurs,
+        'aend' => ($kurs !== null && $vortag) ? $kurs - $vortag : null,
+        'aend_proz' => ($kurs !== null && $vortag) ? ($kurs - $vortag) / $vortag : null,
+        'waehrung' => (string)($meta['currency'] ?? ''),
+        'zeit' => (int)(is_array($zeiten) && $zeiten !== [] ? end($zeiten) : 0),
+        'status' => '',
+        'name' => '',
+        'boerse' => '',
+    ];
+}
+
+/** Aktuelle Kurse: [symbol => ['kurs', 'aend', 'aend_proz', 'waehrung', 'zeit', …]] (4 Min. gespeichert) */
+function yahooKurse(array $symbole): array
+{
+    $symbole = array_values(array_unique(array_filter(array_map('strval', $symbole))));
+    $erg = [];
+    $fehlend = [];
+    foreach ($symbole as $s) {
+        $c = cacheLesen('kurs:' . $s, 240);
+        if ($c !== null && $c['frisch']) {
+            $erg[$s] = $c['wert'];
+        } else {
+            $fehlend[] = $s;
+        }
+    }
+    foreach (array_chunk($fehlend, 40) as $teil) {
+        $gefunden = [];
+        $j = yahooCrumbJson('https://query1.finance.yahoo.com/v7/finance/quote?symbols=' . rawurlencode(implode(',', $teil)));
+        foreach (($j['quoteResponse']['result'] ?? []) as $q) {
+            $s = (string)($q['symbol'] ?? '');
+            $k = kursAusV7($q);
+            if ($s !== '' && $k['kurs'] !== null) {
+                $erg[$s] = $k;
+                $gefunden[$s] = true;
+                cacheSchreiben('kurs:' . $s, $k);
+            }
+        }
+        $rest = array_values(array_filter($teil, static fn(string $s): bool => !isset($gefunden[$s])));
+        if ($rest !== []) {
+            // Ausweichweg ohne Crumb
+            $j2 = httpJson(http('https://query1.finance.yahoo.com/v8/finance/spark?symbols=' . rawurlencode(implode(',', $rest))
+                . '&range=1d&interval=1d', ['ua' => 'browser', 'zeit' => 15]));
+            $karte = [];
+            foreach (($j2['spark']['result'] ?? []) as $res) {
+                $karte[(string)($res['symbol'] ?? '')] = $res;
+            }
+            foreach ($rest as $s) {
+                $sp = $karte[$s] ?? ($j2[$s] ?? null);
+                if (is_array($sp)) {
+                    $k = kursAusSpark($sp);
+                    if ($k['kurs'] !== null) {
+                        $alt = cacheLesen('kurs:' . $s, PHP_INT_MAX);
+                        $k['waehrung'] = $k['waehrung'] !== '' ? $k['waehrung'] : (string)($alt['wert']['waehrung'] ?? '');
+                        $erg[$s] = $k;
+                        cacheSchreiben('kurs:' . $s, $k);
+                    }
+                }
+            }
+        }
+    }
+    foreach ($fehlend as $s) {
+        if (!isset($erg[$s])) {
+            $c = cacheLesen('kurs:' . $s, 0);
+            if ($c !== null) {
+                $erg[$s] = $c['wert'] + ['veraltet' => true];
+            }
+        }
+    }
+    return $erg;
+}
+
+function verlaufAuswerten(array $j): ?array
+{
+    $res = $j['chart']['result'][0] ?? null;
+    if (!is_array($res)) {
+        return null;
+    }
+    $zeiten = $res['timestamp'] ?? [];
+    $schluss = $res['indicators']['quote'][0]['close'] ?? [];
+    $punkte = [];
+    foreach ($zeiten as $i => $ts) {
+        $v = $schluss[$i] ?? null;
+        if (is_numeric($v)) {
+            $punkte[] = [(int)$ts, round((float)$v, 4)];
+        }
+    }
+    $div = [];
+    foreach (($res['events']['dividends'] ?? []) as $dv) {
+        if (isset($dv['date'], $dv['amount'])) {
+            $div[] = [(int)$dv['date'], (float)$dv['amount']];
+        }
+    }
+    usort($div, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+    $m = $res['meta'] ?? [];
+    return [
+        'punkte' => $punkte,
+        'div' => $div,
+        'meta' => [
+            'kurs' => isset($m['regularMarketPrice']) ? (float)$m['regularMarketPrice'] : null,
+            'vortag' => isset($m['chartPreviousClose']) ? (float)$m['chartPreviousClose'] : null,
+            'waehrung' => (string)($m['currency'] ?? ''),
+            'boerse' => (string)($m['fullExchangeName'] ?? $m['exchangeName'] ?? ''),
+            'name' => (string)($m['longName'] ?? $m['shortName'] ?? ''),
+            'hoch52' => isset($m['fiftyTwoWeekHigh']) ? (float)$m['fiftyTwoWeekHigh'] : null,
+            'tief52' => isset($m['fiftyTwoWeekLow']) ? (float)$m['fiftyTwoWeekLow'] : null,
+            'zeit' => (int)($m['regularMarketTime'] ?? 0),
+        ],
+    ];
+}
+
+function verlaufUrl(string $symbol, string $spanne): string
+{
+    $intervall = $spanne === '5y' ? '1wk' : '1d';
+    return 'https://query1.finance.yahoo.com/v8/finance/chart/' . rawurlencode($symbol)
+        . '?range=' . $spanne . '&interval=' . $intervall . '&events=div&includePrePost=false';
+}
+
+// ---------------------------------------------------------------------------
+// Alles für den Firmen-Steckbrief – parallel geladen, einzeln gespeichert
+// ---------------------------------------------------------------------------
+
+/**
+ * Lädt Kennzahlen (6 Std.), Kurs (4 Min.), 1-Jahres-Verlauf (1 Std.) und
+ * 5-Jahres-Verlauf (1 Tag) – nur das, was nicht mehr frisch ist, und parallel.
+ */
+function yahooBuendel(string $symbol): array
+{
+    $teile = [
+        'qs' => ['cache' => 'qs:' . $symbol, 'alter' => 6 * 3600],
+        'kurs' => ['cache' => 'kurs:' . $symbol, 'alter' => 240],
+        'v1' => ['cache' => 'verlauf:' . $symbol . ':1y', 'alter' => 3600],
+        'v5' => ['cache' => 'verlauf:' . $symbol . ':5y', 'alter' => 86400],
+    ];
+    $erg = [];
+    $alt = [];
+    $anfragen = [];
+    $crumb = null;
+    foreach ($teile as $k => $t) {
+        $c = cacheLesen($t['cache'], $t['alter']);
+        if ($c !== null && $c['frisch']) {
+            $erg[$k] = $c['wert'];
+            continue;
+        }
+        $alt[$k] = $c['wert'] ?? null;
+        if ($k === 'qs' || $k === 'kurs') {
+            $crumb ??= yahooCrumb();
+            if ($crumb === '') {
+                continue;
+            }
+            $url = $k === 'qs'
+                ? 'https://query1.finance.yahoo.com/v10/finance/quoteSummary/' . rawurlencode($symbol) . '?modules=' . FZ_YAHOO_MODULE
+                : 'https://query1.finance.yahoo.com/v7/finance/quote?symbols=' . rawurlencode($symbol);
+            $anfragen[$k] = ['url' => mitCrumb($url, $crumb), 'ua' => 'browser', 'cookies' => yahooCookieDatei(), 'zeit' => 20];
+        } else {
+            $anfragen[$k] = ['url' => verlaufUrl($symbol, $k === 'v5' ? '5y' : '1y'), 'ua' => 'browser', 'zeit' => 20];
+        }
+    }
+    $antworten = httpViele($anfragen);
+    // Crumb abgelaufen? Einmal erneuern und die betroffenen Teile wiederholen.
+    $nochmal = [];
+    foreach (['qs', 'kurs'] as $k) {
+        if (isset($antworten[$k]) && in_array($antworten[$k]['code'], [401, 403], true)) {
+            $nochmal[] = $k;
+        }
+    }
+    if ($nochmal !== []) {
+        $crumb = yahooCrumb(true);
+        if ($crumb !== '') {
+            foreach ($nochmal as $k) {
+                $url = preg_replace('/([?&])crumb=[^&]*/', '$1crumb=' . rawurlencode($crumb), $anfragen[$k]['url']);
+                $antworten[$k] = http((string)$url, ['ua' => 'browser', 'cookies' => yahooCookieDatei()]);
+            }
+        }
+    }
+    foreach ($antworten as $k => $r) {
+        $j = httpJson($r);
+        $wert = null;
+        if ($j !== null) {
+            if ($k === 'qs') {
+                $wert = $j['quoteSummary']['result'][0] ?? null;
+            } elseif ($k === 'kurs') {
+                $q = $j['quoteResponse']['result'][0] ?? null;
+                $wert = is_array($q) ? kursAusV7($q) : null;
+                if ($wert !== null && $wert['kurs'] === null) {
+                    $wert = null;
+                }
+            } else {
+                $wert = verlaufAuswerten($j);
+            }
+        }
+        if ($wert !== null) {
+            cacheSchreiben($teile[$k]['cache'], $wert);
+            $erg[$k] = $wert;
+        } elseif ($alt[$k] !== null) {
+            $erg[$k] = $alt[$k];
+        }
+    }
+    foreach ($alt as $k => $w) {
+        if (!isset($erg[$k]) && $w !== null) {
+            $erg[$k] = $w;
+        }
+    }
+    return $erg;
+}
+
+/** Nur die Kennzahlen (z. B. für Termin-Aktualisierung im Hintergrund). */
+function yahooKennzahlenRoh(string $symbol, int $maxAlter = 6 * 3600): ?array
+{
+    $wert = gecacht('qs:' . $symbol, $maxAlter, function () use ($symbol): ?array {
+        $j = yahooCrumbJson('https://query1.finance.yahoo.com/v10/finance/quoteSummary/' . rawurlencode($symbol) . '?modules=' . FZ_YAHOO_MODULE);
+        $r = $j['quoteSummary']['result'][0] ?? null;
+        return is_array($r) ? $r : null;
+    });
+    return is_array($wert) ? $wert : null;
+}
+
+// ---------------------------------------------------------------------------
+// Aufbereitung in ein einheitliches, deutsches Datenformat
+// ---------------------------------------------------------------------------
+
+function yRoh(array $r, string $modul, string $feld): ?float
+{
+    $v = $r[$modul][$feld] ?? null;
+    if (is_array($v)) {
+        $v = $v['raw'] ?? null;
+    }
+    return is_numeric($v) ? (float)$v : null;
+}
+
+function yText(array $r, string $modul, string $feld): string
+{
+    $v = $r[$modul][$feld] ?? '';
+    if (is_array($v)) {
+        $v = $v['fmt'] ?? ($v['raw'] ?? '');
+    }
+    return is_scalar($v) ? trim((string)$v) : '';
+}
+
+function yWert($v): ?float
+{
+    if (is_array($v)) {
+        $v = $v['raw'] ?? null;
+    }
+    return is_numeric($v) ? (float)$v : null;
+}
+
+/** Ein Firmenprofil aus Kennzahlen, Kurs und Verlauf zusammensetzen. */
+function firmaProfil(string $symbol): ?array
+{
+    $b = yahooBuendel($symbol);
+    $r = is_array($b['qs'] ?? null) ? $b['qs'] : [];
+    $kurs = is_array($b['kurs'] ?? null) ? $b['kurs'] : [];
+    $v1 = is_array($b['v1'] ?? null) ? $b['v1'] : null;
+    $v5 = is_array($b['v5'] ?? null) ? $b['v5'] : null;
+    if ($r === [] && $kurs === [] && $v1 === null) {
+        return null;
+    }
+    $meta = $v1['meta'] ?? [];
+    $p = [
+        'symbol' => $symbol,
+        'name' => yText($r, 'price', 'longName') ?: (yText($r, 'price', 'shortName') ?: ((string)($kurs['name'] ?? '') ?: ((string)($meta['name'] ?? '') ?: $symbol))),
+        'kurzname' => yText($r, 'price', 'shortName'),
+        'waehrung' => yText($r, 'price', 'currency') ?: ((string)($kurs['waehrung'] ?? '') ?: (string)($meta['waehrung'] ?? '')),
+        'boerse' => (string)($kurs['boerse'] ?? '') ?: (yText($r, 'price', 'exchangeName') ?: (string)($meta['boerse'] ?? '')),
+        'kurs' => $kurs['kurs'] ?? yRoh($r, 'price', 'regularMarketPrice') ?? ($meta['kurs'] ?? null),
+        'aend' => $kurs['aend'] ?? yRoh($r, 'price', 'regularMarketChange'),
+        'aend_proz' => $kurs['aend_proz'] ?? yRoh($r, 'price', 'regularMarketChangePercent'),
+        'kurszeit' => (int)($kurs['zeit'] ?? 0) ?: (int)($r['price']['regularMarketTime'] ?? 0),
+        'marktstatus' => (string)($kurs['status'] ?? '') ?: yText($r, 'price', 'marketState'),
+        'kennzahlen_da' => $r !== [],
+
+        'hoch52' => yRoh($r, 'summaryDetail', 'fiftyTwoWeekHigh') ?? ($meta['hoch52'] ?? null),
+        'tief52' => yRoh($r, 'summaryDetail', 'fiftyTwoWeekLow') ?? ($meta['tief52'] ?? null),
+        'boersenwert' => yRoh($r, 'summaryDetail', 'marketCap') ?? yRoh($r, 'price', 'marketCap'),
+        'kgv' => yRoh($r, 'summaryDetail', 'trailingPE'),
+        'kgv_erw' => yRoh($r, 'summaryDetail', 'forwardPE') ?? yRoh($r, 'defaultKeyStatistics', 'forwardPE'),
+        'kbv' => yRoh($r, 'defaultKeyStatistics', 'priceToBook'),
+        'kuv' => yRoh($r, 'summaryDetail', 'priceToSalesTrailing12Months'),
+        'peg' => yRoh($r, 'defaultKeyStatistics', 'pegRatio') ?? yRoh($r, 'defaultKeyStatistics', 'trailingPegRatio'),
+        'ev_ebitda' => yRoh($r, 'defaultKeyStatistics', 'enterpriseToEbitda'),
+        'bruttomarge' => yRoh($r, 'financialData', 'grossMargins'),
+        'opmarge' => yRoh($r, 'financialData', 'operatingMargins'),
+        'nettomarge' => yRoh($r, 'financialData', 'profitMargins'),
+        'ek_rendite' => yRoh($r, 'financialData', 'returnOnEquity'),
+        'gk_rendite' => yRoh($r, 'financialData', 'returnOnAssets'),
+        'umsatzwachstum' => yRoh($r, 'financialData', 'revenueGrowth'),
+        'gewinnwachstum' => yRoh($r, 'financialData', 'earningsGrowth') ?? yRoh($r, 'defaultKeyStatistics', 'earningsQuarterlyGrowth'),
+        'umsatz' => yRoh($r, 'financialData', 'totalRevenue'),
+        'eps' => yRoh($r, 'defaultKeyStatistics', 'trailingEps'),
+        'eps_erw' => yRoh($r, 'defaultKeyStatistics', 'forwardEps'),
+        'verschuldung' => yRoh($r, 'financialData', 'debtToEquity'),
+        'current_ratio' => yRoh($r, 'financialData', 'currentRatio'),
+        'cash' => yRoh($r, 'financialData', 'totalCash'),
+        'schulden' => yRoh($r, 'financialData', 'totalDebt'),
+        'fcf' => yRoh($r, 'financialData', 'freeCashflow'),
+        'bilanzwaehrung' => yText($r, 'financialData', 'financialCurrency') ?: (string)($r['earnings']['financialCurrency'] ?? ''),
+        'div_rendite' => yRoh($r, 'summaryDetail', 'dividendYield') ?? yRoh($r, 'summaryDetail', 'trailingAnnualDividendYield'),
+        'div_je_aktie' => yRoh($r, 'summaryDetail', 'dividendRate') ?? yRoh($r, 'summaryDetail', 'trailingAnnualDividendRate'),
+        'ausschuettung' => yRoh($r, 'summaryDetail', 'payoutRatio'),
+        'ex_div' => (int)(yRoh($r, 'summaryDetail', 'exDividendDate') ?? 0),
+        'beta' => yRoh($r, 'summaryDetail', 'beta') ?? yRoh($r, 'defaultKeyStatistics', 'beta'),
+        'aktien' => yRoh($r, 'defaultKeyStatistics', 'sharesOutstanding'),
+        'gd200' => yRoh($r, 'summaryDetail', 'twoHundredDayAverage'),
+        'gd50' => yRoh($r, 'summaryDetail', 'fiftyDayAverage'),
+
+        'kursziel' => yRoh($r, 'financialData', 'targetMeanPrice'),
+        'kursziel_hoch' => yRoh($r, 'financialData', 'targetHighPrice'),
+        'kursziel_tief' => yRoh($r, 'financialData', 'targetLowPrice'),
+        'analysten' => (int)(yRoh($r, 'financialData', 'numberOfAnalystOpinions') ?? 0),
+        'empfehlung' => (string)($r['financialData']['recommendationKey'] ?? ''),
+        'empfehlung_wert' => yRoh($r, 'financialData', 'recommendationMean'),
+
+        'sektor' => (string)($r['assetProfile']['sector'] ?? ''),
+        'branche' => (string)($r['assetProfile']['industry'] ?? ''),
+        'land' => (string)($r['assetProfile']['country'] ?? ''),
+        'stadt' => (string)($r['assetProfile']['city'] ?? ''),
+        'website' => (string)($r['assetProfile']['website'] ?? ''),
+        'mitarbeiter' => (int)($r['assetProfile']['fullTimeEmployees'] ?? 0),
+        'beschreibung' => (string)($r['assetProfile']['longBusinessSummary'] ?? ''),
+
+        'insider_anteil' => yRoh($r, 'majorHoldersBreakdown', 'insidersPercentHeld') ?? yRoh($r, 'defaultKeyStatistics', 'heldPercentInsiders'),
+        'institutionen_anteil' => yRoh($r, 'majorHoldersBreakdown', 'institutionsPercentHeld') ?? yRoh($r, 'defaultKeyStatistics', 'heldPercentInstitutions'),
+        'institutionen_anzahl' => (int)(yRoh($r, 'majorHoldersBreakdown', 'institutionsCount') ?? 0),
+    ];
+
+    $p['vorstand'] = [];
+    foreach (array_slice((array)($r['assetProfile']['companyOfficers'] ?? []), 0, 6) as $o) {
+        if (!empty($o['name'])) {
+            $p['vorstand'][] = ['name' => (string)$o['name'], 'rolle' => (string)($o['title'] ?? '')];
+        }
+    }
+    $p['institutionen'] = besitzerListe((array)($r['institutionOwnership']['ownershipList'] ?? []));
+    $p['fonds'] = besitzerListe((array)($r['fundOwnership']['ownershipList'] ?? []));
+    $p['insider'] = [];
+    foreach (array_slice((array)($r['insiderHolders']['holders'] ?? []), 0, 12) as $h) {
+        $p['insider'][] = [
+            'name' => (string)($h['name'] ?? ''), 'rolle' => (string)($h['relation'] ?? ''),
+            'aktien' => yWert($h['positionDirect'] ?? null), 'zeit' => (int)(yWert($h['latestTransDate'] ?? null) ?? 0),
+            'text' => (string)($h['transactionDescription'] ?? ''),
+        ];
+    }
+    $p['insider_geschaefte'] = [];
+    foreach (array_slice((array)($r['insiderTransactions']['transactions'] ?? []), 0, 15) as $t) {
+        $p['insider_geschaefte'][] = [
+            'name' => (string)($t['filerName'] ?? ''), 'rolle' => (string)($t['filerRelation'] ?? ''),
+            'text' => (string)($t['transactionText'] ?? ''), 'aktien' => yWert($t['shares'] ?? null),
+            'wert' => yWert($t['value'] ?? null), 'zeit' => (int)(yWert($t['startDate'] ?? null) ?? 0),
+        ];
+    }
+    $p['empfehlungen'] = null;
+    foreach ((array)($r['recommendationTrend']['trend'] ?? []) as $t) {
+        if (($t['period'] ?? '') === '0m') {
+            $p['empfehlungen'] = [
+                'stark_kaufen' => (int)($t['strongBuy'] ?? 0), 'kaufen' => (int)($t['buy'] ?? 0), 'halten' => (int)($t['hold'] ?? 0),
+                'verkaufen' => (int)($t['sell'] ?? 0), 'stark_verkaufen' => (int)($t['strongSell'] ?? 0),
+            ];
+        }
+    }
+    $p['analystenwechsel'] = [];
+    foreach (array_slice((array)($r['upgradeDowngradeHistory']['history'] ?? []), 0, 8) as $h) {
+        $p['analystenwechsel'][] = [
+            'zeit' => (int)($h['epochGradeDate'] ?? 0), 'firma' => (string)($h['firm'] ?? ''),
+            'von' => (string)($h['fromGrade'] ?? ''), 'nach' => (string)($h['toGrade'] ?? ''), 'aktion' => (string)($h['action'] ?? ''),
+            'ziel' => isset($h['currentPriceTarget']) && is_numeric($h['currentPriceTarget']) ? (float)$h['currentPriceTarget'] : null,
+        ];
+    }
+    $p['jahre'] = [];
+    foreach ((array)($r['earnings']['financialsChart']['yearly'] ?? []) as $j) {
+        $p['jahre'][] = ['jahr' => (string)($j['date'] ?? ''), 'umsatz' => yWert($j['revenue'] ?? null), 'gewinn' => yWert($j['earnings'] ?? null)];
+    }
+    $p['termine'] = termineAus($r);
+    $p['verlauf_1j'] = $v1['punkte'] ?? [];
+    $p['verlauf_5j'] = $v5['punkte'] ?? [];
+    $p['dividenden'] = $v5['div'] ?? ($v1['div'] ?? []);
+    return $p;
+}
+
+function besitzerListe(array $liste): array
+{
+    $erg = [];
+    foreach (array_slice($liste, 0, 10) as $x) {
+        if (empty($x['organization'])) {
+            continue;
+        }
+        $erg[] = [
+            'name' => (string)$x['organization'], 'anteil' => yWert($x['pctHeld'] ?? null),
+            'aktien' => yWert($x['position'] ?? null), 'wert' => yWert($x['value'] ?? null),
+            'zeit' => (int)(yWert($x['reportDate'] ?? null) ?? 0), 'aenderung' => yWert($x['pctChange'] ?? null),
+        ];
+    }
+    return $erg;
+}
+
+/** Anstehende Termine: Quartalszahlen und Dividende (Tag als JJJJ-MM-TT). */
+function termineAus(array $r): array
+{
+    $t = [];
+    foreach ((array)($r['calendarEvents']['earnings']['earningsDate'] ?? []) as $e) {
+        $ts = (int)(yWert($e) ?? 0);
+        if ($ts > 0) {
+            $t['zahlen'] = date('Y-m-d', $ts);
+            break;
+        }
+    }
+    $ex = (int)(yWert($r['calendarEvents']['exDividendDate'] ?? null) ?? yRoh($r, 'summaryDetail', 'exDividendDate') ?? 0);
+    if ($ex > 0) {
+        $t['exdiv'] = date('Y-m-d', $ex);
+    }
+    $zahltag = (int)(yWert($r['calendarEvents']['dividendDate'] ?? null) ?? 0);
+    if ($zahltag > 0) {
+        $t['divzahlung'] = date('Y-m-d', $zahltag);
+    }
+    return $t;
+}
