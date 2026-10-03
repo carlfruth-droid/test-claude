@@ -30,6 +30,20 @@ jobs:
             echo "Kein ANTHROPIC_API_KEY-Secret gesetzt – Erkennung bleibt aus."
           fi
 
+      - name: Finanzzentrale – Schlüssel bereitstellen
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          mkdir -p website/projekte/finanzen/daten
+          if [ -n "$KEY" ]; then
+            printf "<?php return '%s';" "$KEY" > website/projekte/finanzen/daten/apikey.php
+          fi
+          # Zugangsschlüssel für die zeitgesteuerte Alarm-Prüfung – aus dem FTP-Passwort
+          # abgeleitet, damit kein weiteres Secret angelegt werden muss
+          TOKEN=$(printf '%s' "finanzzentrale-cron:$FTP_PASSWORD" | sha256sum | cut -c1-40)
+          printf "<?php return '%s';" "$TOKEN" > website/projekte/finanzen/daten/crontoken.php
+
       - name: Upload per FTPS zu Hetzner
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
@@ -40,3 +54,13 @@ jobs:
           port: 21
           local-dir: ./website/
           server-dir: public_html/
+
+      - name: Finanzzentrale – Selbsttest vom Server
+        continue-on-error: true
+        env:
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          TOKEN=$(printf '%s' "finanzzentrale-cron:$FTP_PASSWORD" | sha256sum | cut -c1-40)
+          echo "::add-mask::$TOKEN"
+          sleep 3
+          curl -sS -m 120 "https://fruthzeug.de/projekte/finanzen/?cron=$TOKEN&diagnose=1" || echo "Selbsttest nicht erreichbar"

@@ -59,3 +59,23 @@ Inhalt von `website/` in das Verzeichnis `public_html` auf dem Server kopieren.
 ## Später mehr Platz nötig?
 
 Upgrade von S auf M geht jederzeit in konsoleH ohne Umzug oder Datenverlust.
+
+## Finanzzentrale (`website/projekte/finanzen/`)
+
+Private Seite zum Prüfen börsennotierter Firmen, mit Depot-Übersicht und Kursalarmen.
+Erreichbar unter <https://fruthzeug.de/projekte/finanzen/>.
+
+- **Einrichtung:** Beim ersten Aufruf legst du das Passwort fest. Das geht nur auf einem Gerät,
+  auf dem du in TasteLog als Administrator angemeldet bist. Auf demselben Weg lässt sich das
+  Passwort zurücksetzen („Passwort vergessen?“).
+- **Daten:** Liegen außerhalb des Web-Verzeichnisses (`finanzzentrale-daten/` neben `public_html`),
+  mit täglicher Sicherung der letzten 30 Tage. Export und Wiederherstellung unter *Einstellungen*.
+- **Schlüssel:** Die KI-Einschätzung nutzt das Secret `ANTHROPIC_API_KEY`. Das Token für die
+  automatische Alarm-Prüfung wird beim Deployment aus `FTP_PASSWORD` abgeleitet, ein eigenes
+  Secret ist nicht nötig.
+- **Alarm-Prüfung:** `.github/workflows/finanzen-alarme.yml` ruft die Seite werktags etwa alle
+  30 Minuten auf. GitHub führt zeitgesteuerte Workflows nur auf dem Standard-Branch aus.
+- **Depots:** Trade Republic per CSV-Transaktionsexport aus der App, eToro über die offizielle API
+  (Schlüssel mit Leserecht, Umgebung „Real“).
+- **Selbsttest:** Nach jedem Deployment prüft der Schritt „Finanzzentrale – Selbsttest vom Server“,
+  ob alle Datenquellen vom Hetzner-Server aus erreichbar sind (ohne persönliche Daten im Log).
