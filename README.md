@@ -68,8 +68,10 @@ Erreichbar unter <https://fruthzeug.de/projekte/finanzen/>.
 - **Einrichtung:** Beim ersten Aufruf legst du das Passwort fest. Das geht nur auf einem Gerät,
   auf dem du in TasteLog als Administrator angemeldet bist. Auf demselben Weg lässt sich das
   Passwort zurücksetzen („Passwort vergessen?“).
-- **Daten:** Liegen außerhalb des Web-Verzeichnisses (`finanzzentrale-daten/` neben `public_html`),
-  mit täglicher Sicherung der letzten 30 Tage. Export und Wiederherstellung unter *Einstellungen*.
+- **Daten:** Liegen nie im App-Ordner, weil das Deployment ihn verwaltet und löschen kann. Wenn möglich
+  liegen sie außerhalb des Web-Verzeichnisses, sonst (bei Hetzner) in `public_html/.finanzzentrale-daten/`.
+  Diesen Ordner legt die App selbst an und sperrt ihn, das Deployment rührt ihn nicht an.
+  Tägliche Sicherung der letzten 30 Tage; Export und Wiederherstellung unter *Einstellungen*.
 - **Schlüssel:** Die KI-Einschätzung nutzt das Secret `ANTHROPIC_API_KEY`. Das Token für die
   automatische Alarm-Prüfung wird beim Deployment aus `FTP_PASSWORD` abgeleitet, ein eigenes
   Secret ist nicht nötig.

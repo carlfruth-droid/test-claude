@@ -63,7 +63,7 @@ function diagnose(): array
     $qs = yahooKennzahlenRoh('SAP.DE', 0);
     return [
         'php' => PHP_VERSION,
-        'speicherort' => fzDatenExtern() ? 'außerhalb des Web-Verzeichnisses' : 'App-Ordner daten/',
+        'speicherort' => ['extern' => 'außerhalb des Web-Verzeichnisses', 'eigen' => 'eigener gesperrter Ordner (vom Deployment unberührt)', 'app' => 'App-Ordner daten/'][fzDatenOrt()],
         'speicher_beschreibbar' => @is_writable(fzDatenDir()),
         'yahoo_crumb' => $crumb !== '' ? 'ok (' . $weg . ')' : 'FEHLT',
         'yahoo_suche' => $suche !== [] ? 'ok' : 'FEHLER',

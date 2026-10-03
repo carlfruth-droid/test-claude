@@ -1563,7 +1563,9 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
 <?= akk('Sicherheit', 'schloss', (string)ob_get_clean(), ['id' => 'e-sicherheit']) ?>
 
 <?php ob_start(); ?>
-<p><?= fzDatenExtern() ? ico('haken') . ' Deine Daten liegen <strong>außerhalb des Web-Verzeichnisses</strong> – per Internet nicht abrufbar und vor versehentlichem Löschen beim Deployment geschützt.' : ico('info') . ' Deine Daten liegen im geschützten App-Ordner (per .htaccess gesperrt).' ?></p>
+<p><?= ['extern' => ico('haken') . ' Deine Daten liegen <strong>außerhalb des Web-Verzeichnisses</strong> – per Internet nicht abrufbar und vor versehentlichem Löschen beim Deployment geschützt.',
+    'eigen' => ico('haken') . ' Deine Daten liegen in einem <strong>eigenen, gesperrten Ordner</strong> – per Internet nicht abrufbar, und das Deployment fasst ihn nie an.',
+    'app' => ico('warnung') . ' Deine Daten liegen im App-Ordner (per .htaccess gesperrt). Bitte regelmäßig exportieren.'][fzDatenOrt()] ?></p>
 <p>Automatische Tagessicherungen: <strong><?= $sicherungen ?></strong> (die letzten 30 Tage werden aufgehoben).</p>
 <div class="knopf-reihe"><a class="knopf zweit" href="<?= e(url(['export' => '1'])) ?>"><?= ico('runter') ?> Alle Daten exportieren</a></div>
 <details class="unterbereich"><summary><?= ico('hoch') ?> Daten aus einem Export wiederherstellen</summary>

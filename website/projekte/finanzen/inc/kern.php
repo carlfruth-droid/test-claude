@@ -25,10 +25,12 @@ const FZ_STANDARD_MODELL = 'claude-opus-5-5';
 // ---------------------------------------------------------------------------
 
 /**
- * Ordner für alle Daten. Bevorzugt AUSSERHALB des Web-Verzeichnisses (neben
- * public_html): Dort sind die Daten per URL nicht erreichbar, und ein
- * Deployment kann sie nicht versehentlich löschen. Lässt der Hoster das nicht
- * zu, dient der per .htaccess gesperrte Ordner daten/ als Ausweichort.
+ * Ordner für alle Daten – nie im App-Ordner selbst: Den verwaltet das
+ * Deployment, und ein Upload von einem Stand ohne die Finanzzentrale würde ihn
+ * samt Inhalt löschen. Bevorzugt AUSSERHALB des Web-Verzeichnisses (neben
+ * public_html); erlaubt der Hoster das nicht, ein selbst angelegter, per
+ * .htaccess gesperrter Ordner im Web-Verzeichnis, den das Deployment nicht kennt.
+ * daten/ bleibt nur der letzte Ausweg.
  */
 function fzDatenDir(): string
 {
@@ -36,25 +38,53 @@ function fzDatenDir(): string
     if ($dir !== null) {
         return $dir;
     }
-    $extern = dirname(FZ_APP, 3) . '/finanzzentrale-daten';
-    foreach ([$extern, FZ_APP . '/daten'] as $kandidat) {
+    $kandidaten = [dirname(FZ_APP, 3) . '/finanzzentrale-daten', dirname(FZ_APP, 2) . '/.finanzzentrale-daten', FZ_APP . '/daten'];
+    foreach ($kandidaten as $kandidat) {
         if ((@is_dir($kandidat) || @mkdir($kandidat, 0700, true)) && @is_writable($kandidat)) {
             $dir = $kandidat;
             break;
         }
     }
     $dir ??= FZ_APP . '/daten';
+    if (!is_file($dir . '/.htaccess')) {
+        @file_put_contents($dir . '/.htaccess', "# Finanzdaten sind nicht öffentlich abrufbar.\nRequire all denied\n");
+    }
     foreach (['cache', 'sicherungen', 'sitzungen'] as $unter) {
         if (!@is_dir($dir . '/' . $unter)) {
             @mkdir($dir . '/' . $unter, 0700, true);
         }
     }
+    datenUmziehen($dir);
     return $dir;
+}
+
+/** Daten aus dem früheren Ablageort daten/ einmalig übernehmen. */
+function datenUmziehen(string $dir): void
+{
+    $alt = FZ_APP . '/daten';
+    if ($dir === $alt || is_file($dir . '/finanzen.json') || !is_file($alt . '/finanzen.json')) {
+        return;
+    }
+    foreach (['finanzen.json', 'zugang.json', 'broker-zugang.json'] as $datei) {
+        if (is_file($alt . '/' . $datei)) {
+            @copy($alt . '/' . $datei, $dir . '/' . $datei);
+        }
+    }
+}
+
+/** 'extern' (neben public_html), 'eigen' (eigener Ordner im Web-Verzeichnis) oder 'app' (daten/). */
+function fzDatenOrt(): string
+{
+    $dir = fzDatenDir();
+    if ($dir === FZ_APP . '/daten') {
+        return 'app';
+    }
+    return $dir === dirname(FZ_APP, 2) . '/.finanzzentrale-daten' ? 'eigen' : 'extern';
 }
 
 function fzDatenExtern(): bool
 {
-    return !str_starts_with(fzDatenDir(), FZ_APP);
+    return fzDatenOrt() !== 'app';
 }
 
 function fzPfad(string $name): string
