@@ -454,7 +454,7 @@ function yWert($v): ?float
 }
 
 /** Ein Firmenprofil aus Kennzahlen, Kurs und Verlauf zusammensetzen. */
-function firmaProfil(string $symbol): ?array
+function firmaProfil(string $symbol, bool $heimErgaenzen = true): ?array
 {
     $b = yahooBuendel($symbol);
     $r = is_array($b['qs'] ?? null) ? $b['qs'] : [];
@@ -581,6 +581,102 @@ function firmaProfil(string $symbol): ?array
     $p['verlauf_1j'] = $v1['punkte'] ?? [];
     $p['verlauf_5j'] = $v5['punkte'] ?? [];
     $p['dividenden'] = $v5['div'] ?? ($v1['div'] ?? []);
+    $p['daten_von'] = '';
+    // Deutsche Zweitnotierung einer ausländischen Firma (z. B. Xetra-Kürzel von Apple oder Vulcan)?
+    $endung = str_contains($symbol, '.') ? substr($symbol, (int)strrpos($symbol, '.')) : '';
+    $zweit = in_array($endung, ['.DE', '.F', '.SG', '.MU', '.BE', '.DU', '.HM', '.HA'], true) && $p['land'] !== 'Germany';
+    if ($heimErgaenzen && $zweit && ($p['branche'] === '' || $p['umsatz'] === null || $p['kursziel'] === null)) {
+        $p = heimatErgaenzen($p);
+    }
+    return $p;
+}
+
+/** Ländercode der ISIN → Endung der Heimatbörse bei Yahoo. */
+const FZ_HEIMATBOERSE = [
+    'DE' => '.DE', 'US' => '', 'AU' => '.AX', 'GB' => '.L', 'FR' => '.PA', 'NL' => '.AS', 'CH' => '.SW', 'DK' => '.CO',
+    'SE' => '.ST', 'NO' => '.OL', 'FI' => '.HE', 'IT' => '.MI', 'ES' => '.MC', 'AT' => '.VI', 'BE' => '.BR', 'PT' => '.LS',
+    'IE' => '.IR', 'JP' => '.T', 'HK' => '.HK', 'CA' => '.TO', 'PL' => '.WA', 'NZ' => '.NZ', 'SG' => '.SI', 'KR' => '.KS',
+];
+
+/**
+ * Zweitnotierungen (z. B. Xetra-Kürzel ausländischer Firmen) haben bei Yahoo
+ * kaum Kennzahlen. Fehlendes wird von der Heimatbörse ergänzt; Beträge in
+ * deren Währung werden in die Kurswährung umgerechnet.
+ */
+function heimatErgaenzen(array $p): array
+{
+    $symbol = (string)$p['symbol'];
+    $heim = gecacht('heimat:' . $symbol, 30 * 86400, function () use ($symbol, $p): ?string {
+        $isin = '';
+        foreach (datenLaden()['firmen'] as $s => $f) {
+            if ((string)$s === $symbol && $f['isin'] !== '') {
+                $isin = $f['isin'];
+            }
+        }
+        $treffer = yahooSuche($isin !== '' ? $isin : nameKurz((string)$p['name']));
+        $endung = $isin !== '' ? (FZ_HEIMATBOERSE[substr($isin, 0, 2)] ?? null) : null;
+        $deutsch = ['.DE', '.F', '.SG', '.MU', '.BE', '.DU', '.HM', '.HA'];
+        $kandidat = '';
+        $kandidatOtc = false;
+        foreach ($treffer as $t) {
+            $s = $t['symbol'];
+            $endungVon = str_contains($s, '.') ? substr($s, (int)strrpos($s, '.')) : '';
+            if ($s === $symbol || ($isin === '' && !namenAehnlich($t['name'], (string)$p['name']))) {
+                continue;
+            }
+            if ($endung !== null && $endungVon === $endung) {
+                return $s; // passende Heimatbörse
+            }
+            $usFreiverkehr = $endungVon === '' && (bool)preg_match('/^[A-Z]{4}[FY]$/', $s); // z. B. VULNF, NVOEY
+            if (!in_array($endungVon, $deutsch, true) && !preg_match('/^[A-Z]{2}[A-Z0-9]{9}\d\./', $s)
+                && ($kandidat === '' || ($kandidatOtc && !$usFreiverkehr))) {
+                $kandidat = $s;
+                $kandidatOtc = $usFreiverkehr;
+            }
+        }
+        return $kandidat;
+    });
+    if (!is_string($heim) || $heim === '' || $heim === $symbol) {
+        return $p;
+    }
+    $h = firmaProfil($heim, false);
+    if ($h === null || ($h['branche'] === '' && $h['umsatz'] === null)) {
+        return $p;
+    }
+    $faktor = 1.0;
+    if ($h['waehrung'] !== '' && $p['waehrung'] !== '' && $h['waehrung'] !== $p['waehrung']) {
+        $fx = wechselkurse([$h['waehrung'], $p['waehrung']]);
+        $nachEuro = inEuro(1.0, $h['waehrung'], $fx);
+        $einEuro = inEuro(1.0, $p['waehrung'], $fx);
+        if ($nachEuro === null || !$einEuro) {
+            return $p;
+        }
+        $faktor = $nachEuro / $einEuro;
+    }
+    $betraege = ['kursziel', 'kursziel_hoch', 'kursziel_tief', 'boersenwert', 'div_je_aktie', 'gd200', 'gd50'];
+    foreach ($h as $k => $v) {
+        if (in_array($k, ['symbol', 'name', 'kurzname', 'waehrung', 'boerse', 'kurs', 'aend', 'aend_proz', 'kurszeit', 'marktstatus',
+            'hoch52', 'tief52', 'verlauf_1j', 'verlauf_5j', 'dividenden', 'daten_von', 'kennzahlen_da'], true)) {
+            continue;
+        }
+        $leer = $p[$k] === null || $p[$k] === '' || $p[$k] === [] || $p[$k] === 0;
+        if (!$leer) {
+            continue;
+        }
+        $p[$k] = in_array($k, $betraege, true) && $v !== null ? (float)$v * $faktor : $v;
+    }
+    foreach ($p['analystenwechsel'] as &$a) {
+        if ($a['ziel'] !== null && $p['analystenwechsel'] === $h['analystenwechsel']) {
+            $a['ziel'] *= $faktor;
+        }
+    }
+    unset($a);
+    if ($p['bilanzwaehrung'] === '') {
+        $p['bilanzwaehrung'] = $h['bilanzwaehrung'] !== '' ? $h['bilanzwaehrung'] : $h['waehrung'];
+    }
+    // Kennzahlen mit Kurs-Bezug, die sich aus den Heimat-Werten ergeben
+    $p['kennzahlen_da'] = true;
+    $p['daten_von'] = $heim;
     return $p;
 }
 
