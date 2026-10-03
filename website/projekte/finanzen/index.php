@@ -403,7 +403,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                     weiter(url(['seite' => 'depot']));
                 }
                 $ergebnis['datei'] = (string)$datei['name'];
-                $ergebnis['positionen'] = array_values(array_filter(trPositionen($ergebnis['buchungen']), static fn(array $p): bool => $p['stueck'] > 1e-9));
+                $ergebnis['positionen'] = array_values(array_filter(trPositionenAus($ergebnis), static fn(array $p): bool => $p['stueck'] > 1e-9));
                 jsonSchreiben(fzPfad('tr-vorschau.json'), $ergebnis);
                 weiter(url(['seite' => 'depot', 'vorschau' => '1']));
                 break;

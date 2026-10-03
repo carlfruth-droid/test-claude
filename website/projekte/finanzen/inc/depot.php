@@ -258,6 +258,10 @@ function trCsvLesen(string $inhalt): array
     if (count($zeilen) < 2) {
         return ['ok' => false, 'fehler' => 'Die Datei enthält keine lesbaren Zeilen.'];
     }
+    $kopfNamen = array_map('spaltenName', array_map('strval', $zeilen[0]));
+    if (in_array('accounttype', $kopfNamen, true) && in_array('assetclass', $kopfNamen, true) && in_array('transactionid', $kopfNamen, true)) {
+        return trNativLesen($zeilen);
+    }
     // Kopfzeile suchen (manche Exporte haben Vorspann-Zeilen)
     $kopfIndex = -1;
     $spalten = [];
@@ -320,6 +324,166 @@ function trCsvLesen(string $inhalt): array
     return ['ok' => true, 'fehler' => '', 'spalten' => $erkannt, 'buchungen' => $buchungen, 'zeilen' => count($buchungen), 'zaehler' => $zaehler];
 }
 
+/**
+ * Offizieller Trade-Republic-Transaktionsexport (seit 2026): Spalten u. a.
+ * category, type, asset_class, name, symbol (= ISIN), shares (mit Vorzeichen),
+ * price, amount, fee, tax. Jede Bestandsänderung – Kauf, Verkauf, Split,
+ * Fusion, Spin-off, Ausbuchung – steht als Stück-Differenz darin.
+ */
+function trNativLesen(array $zeilen): array
+{
+    $kopf = array_map(static fn($k): string => spaltenName((string)$k), $zeilen[0]);
+    $buchungen = [];
+    foreach (array_slice($zeilen, 1) as $z) {
+        if (count($z) < count($kopf)) {
+            $z = array_pad($z, count($kopf), '');
+        }
+        $r = array_combine($kopf, array_slice($z, 0, count($kopf)));
+        $datum = datumLesen((string)($r['date'] ?? $r['datetime'] ?? ''));
+        if ($datum === '') {
+            continue;
+        }
+        $isin = strtoupper(trim((string)($r['symbol'] ?? '')));
+        $buchungen[] = [
+            'zeit' => (string)($r['datetime'] ?? $datum), 'datum' => $datum,
+            'kategorie' => strtoupper((string)($r['category'] ?? '')), 'art' => strtoupper((string)($r['type'] ?? '')),
+            'klasse' => strtoupper((string)($r['assetclass'] ?? '')), 'name' => mb_substr(trim((string)($r['name'] ?? '')), 0, 80),
+            'isin' => istIsin($isin) ? $isin : '', 'stueck' => zahlLesen((string)($r['shares'] ?? '')),
+            'kurs' => zahlLesen((string)($r['price'] ?? '')), 'betrag' => zahlLesen((string)($r['amount'] ?? '')),
+            'gebuehr' => (float)zahlLesen((string)($r['fee'] ?? '')), 'steuer' => (float)zahlLesen((string)($r['tax'] ?? '')),
+            'beschreibung' => mb_substr((string)($r['description'] ?? ''), 0, 80),
+        ];
+    }
+    if ($buchungen === []) {
+        return ['ok' => false, 'fehler' => 'In der Datei wurden keine Buchungen gefunden.'];
+    }
+    usort($buchungen, static fn(array $a, array $b): int => strcmp($a['zeit'], $b['zeit']));
+
+    $pos = [];
+    $leer = static fn(array $b): array => ['isin' => $b['isin'], 'name' => $b['name'], 'klasse' => $b['klasse'],
+        'stueck' => 0.0, 'einstand' => 0.0, 'realisiert' => 0.0, 'dividenden' => 0.0, 'gebuehren' => 0.0];
+    $zaehler = [];
+    $summen = ['dividenden' => 0.0, 'zinsen' => 0.0, 'einzahlungen' => 0.0, 'auszahlungen' => 0.0, 'konto' => 0.0];
+    // Kapitalmaßnahmen am selben Tag gehören zusammen (z. B. Fusion: alte Aktie raus, neue rein)
+    $massnahmen = [];
+    foreach ($buchungen as $b) {
+        $summen['konto'] += (float)$b['betrag'] + $b['gebuehr'] + $b['steuer'];
+        $i = $b['isin'];
+        if ($i !== '') {
+            $pos[$i] ??= $leer($b);
+            if ($b['name'] !== '') {
+                $pos[$i]['name'] = $b['name'];
+            }
+            if ($b['klasse'] !== '') {
+                $pos[$i]['klasse'] = $b['klasse'];
+            }
+        }
+        $st = (float)$b['stueck'];
+        if ($b['kategorie'] === 'TRADING' && $i !== '' && $st != 0.0) {
+            $p = &$pos[$i];
+            $p['gebuehren'] += abs($b['gebuehr']);
+            if ($st > 0) {
+                $p['einstand'] += ($b['betrag'] !== null ? abs((float)$b['betrag']) : $st * (float)$b['kurs']) + abs($b['gebuehr']);
+                $p['stueck'] += $st;
+                $zaehler['kauf'] = ($zaehler['kauf'] ?? 0) + 1;
+            } else {
+                $anteil = min(-$st, max($p['stueck'], 0.0));
+                $schnitt = $p['stueck'] > 1e-9 ? $p['einstand'] / $p['stueck'] : 0.0;
+                $erloes = ($b['betrag'] !== null ? (float)$b['betrag'] : -$st * (float)$b['kurs']) - abs($b['gebuehr']);
+                $p['realisiert'] += $erloes - $schnitt * $anteil;
+                $p['einstand'] -= $schnitt * $anteil;
+                $p['stueck'] += $st;
+                $zaehler['verkauf'] = ($zaehler['verkauf'] ?? 0) + 1;
+            }
+            unset($p);
+        } elseif ($b['kategorie'] === 'CORPORATE_ACTION' && $i !== '' && $st != 0.0) {
+            $massnahmen[$b['datum'] . '|' . $b['art']][] = $b;
+            $zaehler['massnahme'] = ($zaehler['massnahme'] ?? 0) + 1;
+        } elseif ($b['kategorie'] === 'CASH') {
+            $betrag = (float)$b['betrag'];
+            if (in_array($b['art'], ['DIVIDEND', 'DIVIDEND_EQUIVALENT_PAYMENT', 'EARNINGS'], true) && $i !== '') {
+                $pos[$i]['dividenden'] += $betrag + $b['steuer'];
+                $summen['dividenden'] += $betrag + $b['steuer'];
+                $zaehler['dividende'] = ($zaehler['dividende'] ?? 0) + 1;
+            } elseif (in_array($b['art'], ['TILG', 'COMPENSATION', 'EXCHANGE', 'LIQUIDATION_PROCEEDS'], true) && $i !== '') {
+                $pos[$i]['realisiert'] += $betrag; // Auszahlung aus Fälligkeit, Abfindung, Umtausch
+            } elseif ($b['art'] === 'INTEREST_PAYMENT') {
+                $summen['zinsen'] += $betrag;
+                $zaehler['zins'] = ($zaehler['zins'] ?? 0) + 1;
+            } elseif ($betrag > 0 && in_array($b['art'], ['CUSTOMER_INBOUND', 'CUSTOMER_INPAYMENT', 'TRANSFER_INBOUND'], true)) {
+                $summen['einzahlungen'] += $betrag;
+                $zaehler['einzahlung'] = ($zaehler['einzahlung'] ?? 0) + 1;
+            } elseif ($betrag < 0 && str_contains($b['art'], 'OUTBOUND')) {
+                $summen['auszahlungen'] += -$betrag;
+                $zaehler['auszahlung'] = ($zaehler['auszahlung'] ?? 0) + 1;
+            } else {
+                $zaehler['sonst'] = ($zaehler['sonst'] ?? 0) + 1;
+            }
+        } else {
+            $zaehler['sonst'] = ($zaehler['sonst'] ?? 0) + 1;
+        }
+    }
+    // Kapitalmaßnahmen: Einstand der ausgebuchten Stücke geht auf die eingebuchten über
+    foreach ($massnahmen as $gruppe) {
+        $wegKosten = 0.0;
+        $rein = [];
+        foreach ($gruppe as $b) {
+            $p = &$pos[$b['isin']];
+            $st = (float)$b['stueck'];
+            if ($st < 0) {
+                $anteil = min(-$st, max($p['stueck'], 0.0));
+                $schnitt = $p['stueck'] > 1e-9 ? $p['einstand'] / $p['stueck'] : 0.0;
+                $wegKosten += $schnitt * $anteil;
+                $p['einstand'] -= $schnitt * $anteil;
+                $p['stueck'] += $st;
+            } else {
+                $p['stueck'] += $st;
+                $rein[] = $b['isin'];
+            }
+            unset($p);
+        }
+        $rein = array_values(array_unique($rein));
+        if ($rein !== []) {
+            foreach ($rein as $ziel) {
+                $pos[$ziel]['einstand'] += $wegKosten / count($rein);
+            }
+        } elseif ($gruppe !== []) {
+            // Wertlos, ausgebucht, fällig: der Einstand ist verloren (Erlöse kamen ggf. als Zahlung)
+            $pos[$gruppe[0]['isin']]['realisiert'] -= $wegKosten;
+        }
+    }
+    $positionen = [];
+    foreach ($pos as $isin => $p) {
+        if (abs($p['stueck']) < 1e-6) {
+            $p['stueck'] = 0.0;
+            $p['einstand'] = 0.0;
+        }
+        $positionen[$isin] = [
+            'isin' => $isin, 'ticker' => '', 'name' => $p['name'] !== '' ? $p['name'] : $isin,
+            'klasse' => $p['klasse'], 'stueck' => max(0.0, $p['stueck']), 'einstand' => max(0.0, $p['einstand']),
+            'realisiert' => $p['realisiert'], 'dividenden' => $p['dividenden'], 'gebuehren' => $p['gebuehren'],
+        ];
+    }
+    $anzeige = array_map(static fn(array $b): array => [
+        'datum' => $b['datum'], 'typ' => strtolower($b['art']), 'roh_typ' => $b['art'], 'isin' => $b['isin'], 'name' => $b['name'],
+        'symbol' => '', 'stueck' => $b['stueck'], 'kurs' => $b['kurs'], 'betrag' => $b['betrag'], 'waehrung' => 'EUR',
+        'gebuehr' => abs($b['gebuehr']), 'steuer' => abs($b['steuer']),
+    ], $buchungen);
+    return [
+        'ok' => true, 'fehler' => '', 'format' => 'traderepublic',
+        'spalten' => ['Format' => 'Trade-Republic-Transaktionsexport'],
+        'buchungen' => $anzeige, 'zeilen' => count($buchungen), 'zaehler' => $zaehler,
+        'fertige_positionen' => $positionen, 'summen' => $summen,
+    ];
+}
+
+/** Positionen eines gelesenen Exports – fertig berechnet oder aus den Buchungen. */
+function trPositionenAus(array $ergebnis): array
+{
+    return isset($ergebnis['fertige_positionen']) && is_array($ergebnis['fertige_positionen'])
+        ? $ergebnis['fertige_positionen'] : trPositionen($ergebnis['buchungen']);
+}
+
 /** Aus den Buchungen die heutigen Bestände je Wertpapier berechnen. */
 function trPositionen(array $buchungen): array
 {
@@ -352,16 +516,26 @@ function trPositionen(array $buchungen): array
 /** Import übernehmen: Positionen mit Börsenkürzeln versehen und speichern. */
 function trImportSpeichern(array $ergebnis, string $dateiname): array
 {
-    $positionen = trPositionen($ergebnis['buchungen']);
-    if (function_exists('set_time_limit')) { @set_time_limit(180); }
+    $positionen = trPositionenAus($ergebnis);
+    if (function_exists('set_time_limit')) { @set_time_limit(240); }
+    $klassen = ['STOCK' => 'aktie', 'FUND' => 'etf', 'CRYPTO' => 'krypto', 'DERIVATIVE' => 'derivat', 'BOND' => 'anleihe', 'SYNTHETIC' => 'sonst'];
+    $isins = [];
+    foreach ($positionen as $p) {
+        if ($p['stueck'] > 1e-9 && $p['isin'] !== '' && !in_array($klassen[(string)($p['klasse'] ?? '')] ?? '', ['derivat', 'sonst'], true)) {
+            $isins[] = $p['isin'];
+        }
+    }
+    yahooSucheVorladen($isins, ['EQUITY', 'ETF', 'MUTUALFUND']);
     foreach ($positionen as $k => $p) {
-        if ($p['stueck'] <= 1e-9) {
-            $positionen[$k] += ['symbol' => '', 'art' => ''];
-            continue; // komplett verkauft – kein Kurs nötig
+        $klasse = $klassen[(string)($p['klasse'] ?? '')] ?? '';
+        if ($p['stueck'] <= 1e-9 || $klasse === 'derivat' || $klasse === 'sonst') {
+            // komplett verkauft oder ohne Börsenkurs bei Yahoo (Optionsscheine, Zertifikate, Bezugsrechte)
+            $positionen[$k] += ['symbol' => '', 'art' => $klasse];
+            continue;
         }
         $info = $p['isin'] !== '' ? symbolZuIsin($p['isin'], $p['name']) : ['symbol' => $p['ticker'], 'art' => '', 'name' => $p['name']];
         $positionen[$k]['symbol'] = $info['symbol'];
-        $positionen[$k]['art'] = $info['art'];
+        $positionen[$k]['art'] = $info['art'] !== '' ? $info['art'] : $klasse;
         if ($p['name'] === $k && $info['name'] !== '') {
             $positionen[$k]['name'] = $info['name'];
         }
@@ -375,7 +549,7 @@ function trImportSpeichern(array $ergebnis, string $dateiname): array
         'von' => $daten[0] ?? '', 'bis' => $daten[count($daten) - 1] ?? '',
         'zaehler' => $ergebnis['zaehler'], 'spalten' => $ergebnis['spalten'],
         'positionen' => $positionen,
-        'summen' => [
+        'summen' => $ergebnis['summen'] ?? [
             'dividenden' => $summe('dividende', 'betrag'), 'zinsen' => $summe('zins', 'betrag'),
             'einzahlungen' => $summe('einzahlung', 'betrag'), 'auszahlungen' => $summe('auszahlung', 'betrag'),
         ],

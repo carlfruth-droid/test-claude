@@ -416,7 +416,7 @@ function seiteUebersicht(array $d, array $kurse, ?array $depot): string
           $zeilen .= firmaZeile($f, $kurse[$f['symbol']] ?? null);
       }
       echo akk($titel, ['depot' => 'depot', 'kandidat' => 'ziel', 'beobachten' => 'puls', 'geprueft' => 'liste', 'verworfen' => 'x'][$status],
-          '<div class="zeilen">' . $zeilen . '</div>', ['offen' => $status !== 'verworfen', 'meta' => (string)count($liste), 'id' => 'start-' . $status]);
+          '<div class="zeilen">' . $zeilen . '</div>', ['offen' => $status !== 'verworfen' && count($liste) <= 12, 'meta' => (string)count($liste), 'id' => 'start-' . $status]);
   endforeach; ?>
 <?php endif; ?>
 <?php
@@ -1399,7 +1399,7 @@ endforeach; ?>
 <?php endif; ?>
 <p>eToro hat eine offizielle Schnittstelle. Du brauchst zwei Schlüssel, die du selbst erzeugst:</p>
 <ol class="schritte">
-  <li>Bei eToro anmelden → <strong>Einstellungen</strong> → <strong>Trading</strong> → <strong>API Key Management</strong>.</li>
+  <li>eToro <strong>im Browser</strong> öffnen (etoro.com – in der Handy-App gibt es das nicht, notfalls Safari auf „Desktop-Website“ stellen) → <strong>Einstellungen</strong> → <strong>Trading</strong> → ganz unten <strong>API Key Management</strong>.</li>
   <li><strong>Create New Key</strong>: Umgebung <strong>Real</strong>, Berechtigung nur <strong>Read</strong> (Lesen) – dann kann niemand über den Schlüssel handeln.</li>
   <li>Mit der SMS bestätigen und beide Schlüssel (<em>Public API Key</em> und <em>User Key</em>) hier eintragen.</li>
 </ol>

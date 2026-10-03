@@ -105,6 +105,40 @@ function yahooCrumbJson(string $url): ?array
 // Suche
 // ---------------------------------------------------------------------------
 
+/** Viele Suchen auf einmal in den Zwischenspeicher laden (z. B. alle ISINs eines Depot-Imports). */
+function yahooSucheVorladen(array $begriffe, array $typen): void
+{
+    $offen = [];
+    foreach (array_unique($begriffe) as $q) {
+        $c = cacheLesen('suche:' . implode(',', $typen) . ':' . mb_strtolower($q), 86400);
+        if ($c === null || !$c['frisch']) {
+            $offen[] = $q;
+        }
+    }
+    foreach (array_chunk($offen, 8) as $teil) {
+        $anfragen = [];
+        foreach ($teil as $q) {
+            $anfragen[$q] = ['url' => 'https://query2.finance.yahoo.com/v1/finance/search?q=' . rawurlencode($q)
+                . '&quotesCount=12&newsCount=0&listsCount=0&lang=de-DE&region=DE', 'ua' => 'browser', 'zeit' => 12];
+        }
+        foreach (httpViele($anfragen) as $q => $r) {
+            $j = httpJson($r);
+            if ($j === null) {
+                continue;
+            }
+            $liste = [];
+            foreach (($j['quotes'] ?? []) as $x) {
+                if (in_array((string)($x['quoteType'] ?? ''), $typen, true) && !empty($x['symbol'])) {
+                    $liste[] = ['symbol' => (string)$x['symbol'], 'name' => (string)($x['longname'] ?? $x['shortname'] ?? $x['symbol']),
+                        'boerse' => (string)($x['exchDisp'] ?? $x['exchange'] ?? ''), 'branche' => (string)($x['industryDisp'] ?? $x['industry'] ?? ''),
+                        'typ' => (string)($x['quoteType'] ?? '')];
+                }
+            }
+            cacheSchreiben('suche:' . implode(',', $typen) . ':' . mb_strtolower((string)$q), $liste);
+        }
+    }
+}
+
 /** Suche nach Aktien (Standard) oder weiteren Arten wie ETF/Fonds (für Depot-Positionen). */
 function yahooSuche(string $q, array $typen = ['EQUITY']): array
 {
