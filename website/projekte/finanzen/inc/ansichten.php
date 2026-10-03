@@ -749,6 +749,9 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
         ['Nächste Zahlen', e(isset($termine['zahlen']) ? datum($termine['zahlen']) : '–'), isset($termine['zahlen']) ? e(tageBis($termine['zahlen']) >= 0 ? 'in ' . tageBis($termine['zahlen']) . ' Tagen' : 'vorbei') : '', ''],
         ['Branche', e($p['branche'] !== '' ? $p['branche'] : '–'), e(trim($p['land'] . ($p['mitarbeiter'] > 0 ? ' · ' . number_format($p['mitarbeiter'], 0, ',', '.') . ' Mitarbeiter' : ''), ' ·')), ''],
     ]) . spanneHtml($p['tief52'], $p['hoch52'], $p['kurs'], $w);
+    if ($p['daten_von'] !== '') {
+        $blick .= '<p class="klein leise">Kennzahlen, Analysten und Aktionäre stammen von der Heimatbörse (' . e($p['daten_von']) . '); Beträge sind in ' . e($w) . ' umgerechnet.</p>';
+    }
     if (!$p['kennzahlen_da']) {
         $blick = '<div class="warnbox">Die Kennzahlen sind gerade nicht abrufbar – angezeigt wird, was vorliegt.</div>' . $blick;
     }
