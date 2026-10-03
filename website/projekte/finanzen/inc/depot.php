@@ -729,6 +729,409 @@ function etoroZuYahoo(string $kuerzel): string
 }
 
 // ---------------------------------------------------------------------------
+// eToro: Kontoauszug als Excel-Datei (ohne Schnittstelle)
+// ---------------------------------------------------------------------------
+
+const FZ_KRYPTO = ['BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'TRX', 'ADA', 'BCH', 'XLM', 'LINK', 'DOGE', 'DOT', 'AVAX', 'LTC', 'SHIB', 'POL',
+    'MATIC', 'UNI', 'ATOM', 'ETC', 'HBAR', 'NEAR', 'APT', 'ALGO', 'XTZ', 'EOS', 'AAVE', 'FIL', 'ICP', 'SAND', 'MANA', 'ARB', 'OP', 'SUI', 'TON', 'PEPE'];
+
+/** Spalten eines Blatts über die Kopfzeile finden: [feld => Spaltenbuchstabe] und Index der ersten Datenzeile. */
+function blattSpalten(array $zeilen, array $felder, array $pflicht): ?array
+{
+    foreach (array_slice($zeilen, 0, 30, true) as $i => $z) {
+        $namen = array_map('spaltenName', $z);
+        $spalten = [];
+        foreach ($felder as $feld => $aliase) {
+            foreach ($aliase as $a) {
+                $col = array_search(spaltenName($a), $namen, true);
+                if ($col !== false) {
+                    $spalten[$feld] = (string)$col;
+                    break;
+                }
+            }
+        }
+        if (count(array_intersect_key(array_flip($pflicht), $spalten)) === count($pflicht)) {
+            return ['spalten' => $spalten, 'ab' => $i + 1];
+        }
+    }
+    return null;
+}
+
+/** Zeilen eines Blatts als [feld => wert] ab der Kopfzeile. */
+function blattZeilen(array $zeilen, array $kopf): array
+{
+    $erg = [];
+    foreach (array_slice($zeilen, $kopf['ab']) as $z) {
+        $r = [];
+        foreach ($kopf['spalten'] as $feld => $col) {
+            $r[$feld] = (string)($z[$col] ?? '');
+        }
+        if (implode('', $r) !== '') {
+            $erg[] = $r;
+        }
+    }
+    return $erg;
+}
+
+/** Excel-Seriennummer, „02/10/2026 13:45:00“ oder „02.10.2026“ → Unix-Zeit (UTC); 0 wenn unlesbar. */
+function excelZeit(string $s): int
+{
+    $s = trim($s);
+    if (is_numeric($s) && (float)$s > 20000 && (float)$s < 80000) {
+        return (int)round(((float)$s - 25569) * 86400);
+    }
+    if (preg_match('/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/', $s, $m)) {
+        return gmmktime((int)($m[4] ?? 0), (int)($m[5] ?? 0), (int)($m[6] ?? 0), (int)$m[2], (int)$m[1], (int)$m[3]) ?: 0;
+    }
+    $t = strtotime($s . ' UTC');
+    return $t !== false ? $t : 0;
+}
+
+function zahlAusZelle(string $s): ?float
+{
+    $s = trim($s);
+    if (is_numeric($s)) {
+        return (float)$s;
+    }
+    return preg_match('/\d/', $s) ? zahlLesen($s) : null;
+}
+
+/** Hebel aus „X2“, „2“ oder „x 2“. */
+function hebelLesen(string $s): float
+{
+    return preg_match('/(\d+(?:[.,]\d+)?)/', $s, $m) ? max(1.0, (float)str_replace(',', '.', $m[1])) : 1.0;
+}
+
+/** eToro-Währung („GBX“) in Yahoo-Schreibweise („GBp“). */
+function etoroWaehrung(string $w): string
+{
+    $w = strtoupper(trim($w));
+    return ['GBX' => 'GBp', 'ZAC' => 'ZAc', 'ILA' => 'ILA', '' => 'USD'][$w] ?? $w;
+}
+
+/**
+ * eToro-Kontoauszug (Excel) auswerten. Grundlage sind alle eröffneten Positionen
+ * ohne die geschlossenen (Kontoaktivität + Geschlossene Positionen). Ein Blatt
+ * „Bestände“ (falls vorhanden) liefert Hebel, Richtung, Einstiegskurs und ISIN.
+ */
+function etoroAuszugLesen(array $blaetter): array
+{
+    $felder = [
+        'aktivitaet' => [
+            'datum' => ['Datum', 'Date'], 'art' => ['Art', 'Type'], 'details' => ['Details'], 'betrag' => ['Betrag', 'Amount'],
+            'einheiten' => ['Einheiten', 'Units'], 'kontostand' => ['Kontostand', 'Balance'], 'id' => ['Positions-ID', 'Position ID'],
+            'typ' => ['Anlagentyp', 'Asset type'],
+        ],
+        'geschlossen' => [
+            'instrument' => ['Instrument / Aktion', 'Action', 'Instrument'], 'id' => ['Positions-ID', 'Position ID'],
+            'richtung' => ['Long / Short', 'Long/Short'], 'schluss' => ['Schließungsdatum', 'Close Date'], 'hebel' => ['Hebel', 'Leverage'],
+            'typ' => ['Art', 'Type'], 'isin' => ['ISIN'], 'kopiert' => ['Kopiert von', 'Copied From'],
+        ],
+        'bestaende' => [
+            'stichtag' => ['Stichtag', 'Date'], 'instrument' => ['Instrument'], 'id' => ['Positions-ID', 'Position ID'],
+            'richtung' => ['Long / Short', 'Long/Short'], 'hebel' => ['Hebel', 'Leverage'], 'kurs_auf' => ['Eröffnungskurs', 'Open Rate'],
+            'einheiten' => ['Einheiten', 'Units'], 'kurs' => ['Kurs am Stichtag', 'Current Rate'], 'wert_usd' => ['Wert (USD)', 'Value (USD)'],
+            'art' => ['Art', 'Type'], 'isin' => ['ISIN'],
+        ],
+        'uebersicht' => ['kennzahl' => ['Kennzahl', 'Details'], 'usd' => ['Betrag (USD)', 'USD'], 'eur' => ['Betrag (EUR)', 'EUR']],
+        'dividenden' => [
+            'instrument' => ['Instrument', 'Instrument Name'], 'id' => ['Positions-ID', 'Position ID'], 'isin' => ['ISIN'],
+            'netto' => ['Nettodividende (USD)', 'Net Dividend Received (USD)'],
+        ],
+    ];
+    $pflicht = [
+        'aktivitaet' => ['datum', 'art', 'details', 'betrag', 'einheiten', 'id', 'kontostand'],
+        'geschlossen' => ['id', 'schluss'],
+        'bestaende' => ['stichtag', 'id', 'einheiten', 'kurs_auf'],
+        'uebersicht' => ['kennzahl', 'usd'],
+        'dividenden' => ['id', 'isin', 'instrument', 'netto'],
+    ];
+    $daten = [];
+    foreach ($blaetter as $zeilen) {
+        foreach ($felder as $teil => $f) {
+            if (isset($daten[$teil])) {
+                continue;
+            }
+            $kopf = blattSpalten($zeilen, $f, $pflicht[$teil]);
+            if ($kopf !== null) {
+                $daten[$teil] = blattZeilen($zeilen, $kopf);
+                break;
+            }
+        }
+    }
+    if (!isset($daten['aktivitaet'], $daten['geschlossen'])) {
+        return ['ok' => false, 'fehler' => 'In der Datei fehlen die Blätter „Kontoaktivität“ und „Geschlossene Positionen“ (bzw. „Account Activity“ und „Closed Positions“). Bitte den eToro-Kontoauszug als Excel-Datei hochladen.'];
+    }
+
+    // Geschlossene Positionen und Namen/ISIN je eToro-Kürzel
+    $geschlossen = [];
+    $instrumente = [];
+    foreach ($daten['geschlossen'] as $r) {
+        if ($r['id'] !== '') {
+            $geschlossen[$r['id']] = true;
+        }
+        if (preg_match('/^(.*\S)\s*\(([^()]+)\)\s*$/u', $r['instrument'], $m)) {
+            $instrumente[strtoupper($m[2])] ??= ['name' => $m[1], 'isin' => istIsin(strtoupper($r['isin'] ?? '')) ? strtoupper($r['isin']) : ''];
+        }
+    }
+
+    // Kontoaktivität: Eröffnungen, Splits, Kontostand, Summen
+    $eroeffnet = [];
+    $splits = [];
+    $kontostand = null;
+    $letzte = 0;
+    $erste = PHP_INT_MAX;
+    $summen = ['dividenden' => 0.0, 'einzahlungen' => 0.0, 'auszahlungen' => 0.0, 'zinsen' => 0.0, 'gebuehren' => 0.0];
+    foreach ($daten['aktivitaet'] as $r) {
+        $zeit = excelZeit($r['datum']);
+        if ($zeit <= 0) {
+            continue;
+        }
+        $art = mb_strtolower($r['art']);
+        $betrag = zahlAusZelle($r['betrag']) ?? 0.0;
+        if ($zeit >= $letzte) {
+            $letzte = $zeit;
+            $kontostand = zahlAusZelle($r['kontostand']) ?? $kontostand;
+        }
+        $erste = min($erste, $zeit);
+        if (in_array($art, ['position eröffnen', 'open position'], true) && $r['id'] !== '') {
+            [$kuerzel, $waehrung] = array_pad(explode('/', $r['details'], 2), 2, 'USD');
+            $eroeffnet[$r['id']] = [
+                'zeit' => $zeit, 'kuerzel' => strtoupper(trim($kuerzel)), 'waehrung' => etoroWaehrung($waehrung),
+                'betrag' => $betrag, 'einheiten' => zahlAusZelle($r['einheiten']) ?? 0.0,
+                'typ' => mb_strtolower($r['typ']),
+            ];
+        } elseif (str_contains($art, 'split') && preg_match('/(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/', $r['details'], $m) && (float)$m[2] > 0) {
+            $splits[$r['id']][] = ['zeit' => $zeit, 'faktor' => (float)$m[1] / (float)$m[2]];
+        } elseif (str_starts_with($art, 'dividend')) {
+            $summen['dividenden'] += $betrag;
+        } elseif (in_array($art, ['einzahlung', 'deposit'], true)) {
+            $summen['einzahlungen'] += $betrag;
+        } elseif (in_array($art, ['auszahlung', 'withdraw request', 'withdrawal'], true)) {
+            $summen['auszahlungen'] += abs($betrag);
+        } elseif (str_contains($art, 'zins') || str_contains($art, 'interest')) {
+            $summen['zinsen'] += $betrag;
+        } elseif (str_contains($art, 'gebühr') || str_contains($art, 'fee') || $art === 'sdrt') {
+            $summen['gebuehren'] += $betrag;
+        }
+    }
+
+    // Letzter Stichtag im Blatt „Bestände“
+    $bestand = [];
+    $stichtag = 0;
+    foreach ($daten['bestaende'] ?? [] as $r) {
+        $stichtag = max($stichtag, excelZeit($r['stichtag']));
+    }
+    foreach ($daten['bestaende'] ?? [] as $r) {
+        if ($stichtag > 0 && excelZeit($r['stichtag']) === $stichtag && $r['id'] !== '') {
+            $bestand[$r['id']] = $r;
+        }
+    }
+    foreach ($bestand as $id => $b) {
+        if (isset($eroeffnet[$id])) {
+            $isin = strtoupper(trim($b['isin']));
+            $instrumente[$eroeffnet[$id]['kuerzel']] = ['name' => $b['instrument'], 'isin' => istIsin($isin) ? $isin : '']
+                + ($instrumente[$eroeffnet[$id]['kuerzel']] ?? []);
+            if (stripos($b['art'], 'crypto') !== false) {
+                $instrumente[$eroeffnet[$id]['kuerzel']]['krypto'] = true;
+            }
+        }
+    }
+
+    // Dividenden nennen Name und ISIN je Position – hilft bei nach dem Stichtag gekauften Titeln
+    foreach ($daten['dividenden'] ?? [] as $r) {
+        $isin = strtoupper(trim($r['isin']));
+        $k = $eroeffnet[$r['id']]['kuerzel'] ?? '';
+        if ($k !== '' && istIsin($isin) && empty($instrumente[$k]['isin'])) {
+            $instrumente[$k] = ['name' => $r['instrument'], 'isin' => $isin] + ($instrumente[$k] ?? []);
+        }
+    }
+
+    // Offene Positionen
+    $positionen = [];
+    foreach ($eroeffnet as $id => $o) {
+        if (isset($geschlossen[$id])) {
+            continue;
+        }
+        $b = $bestand[$id] ?? null;
+        $info = $instrumente[$o['kuerzel']] ?? ['name' => '', 'isin' => ''];
+        $ab = $b !== null ? $stichtag : $o['zeit'];
+        $faktor = 1.0;
+        foreach ($splits[$id] ?? [] as $s) {
+            if ($s['zeit'] > $ab) {
+                $faktor *= $s['faktor'];
+            }
+        }
+        $krypto = !empty($info['krypto']) || in_array($o['kuerzel'], FZ_KRYPTO, true);
+        $cfd = $o['typ'] === 'cfd';
+        $p = [
+            'id' => (string)$id, 'kuerzel' => $o['kuerzel'], 'waehrung' => $o['waehrung'],
+            'name' => $info['name'] !== '' ? $info['name'] : $o['kuerzel'], 'isin' => $info['isin'],
+            'art' => $krypto ? 'krypto' : ($cfd ? 'cfd' : (str_contains($o['typ'], 'etf') ? 'etf' : 'aktie')),
+            'cfd' => $cfd, 'betrag' => $o['betrag'], 'zeit' => $o['zeit'],
+            'stueck' => ($b !== null ? (zahlAusZelle($b['einheiten']) ?? $o['einheiten']) : $o['einheiten']) * $faktor,
+            'hebel' => null, 'richtung' => 1, 'kurs_einstand' => null, 'wert_usd' => null,
+        ];
+        if ($b !== null) {
+            $p['hebel'] = hebelLesen($b['hebel']);
+            $p['richtung'] = stripos($b['richtung'], 'short') !== false ? -1 : 1;
+            $auf = zahlAusZelle($b['kurs_auf']);
+            $p['kurs_einstand'] = $auf !== null ? $auf / $faktor : null;
+            $kurs = zahlAusZelle($b['kurs']);
+            $wert = zahlAusZelle($b['wert_usd']);
+            $einh = zahlAusZelle($b['einheiten']);
+            if ($kurs !== null && $wert !== null && $einh && $kurs > 0 && $auf !== null) {
+                // Wert in USD am Stichtag: Einsatz + Gewinn/Verlust (bei Hebel und Short nicht das Volumen)
+                $usdJe = abs($wert) / ($einh * $kurs);
+                $p['wert_usd'] = $p['hebel'] <= 1 && $p['richtung'] > 0 ? abs($wert)
+                    : $o['betrag'] + $p['richtung'] * $einh * ($kurs - $auf) * $usdJe;
+            }
+        } elseif (!$cfd) {
+            $p['hebel'] = 1.0;
+        }
+        $positionen[] = $p;
+    }
+    if ($positionen === [] && $eroeffnet === []) {
+        return ['ok' => false, 'fehler' => 'Im Kontoauszug wurden keine eröffneten Positionen gefunden.'];
+    }
+
+    $uebersicht = [];
+    foreach ($daten['uebersicht'] ?? [] as $r) {
+        $uebersicht[spaltenName($r['kennzahl'])] = ['usd' => zahlAusZelle($r['usd']), 'eur' => zahlAusZelle($r['eur'] ?? '')];
+    }
+    $eigenkapital = $uebersicht['unealisierteseigenkapitalende']['usd'] ?? ($uebersicht['unrealisierteseigenkapitalende']['usd'] ?? null);
+    $zaehler = ['aktie' => 0, 'etf' => 0, 'krypto' => 0, 'cfd' => 0];
+    foreach ($positionen as $p) {
+        $zaehler[$p['art']] = ($zaehler[$p['art']] ?? 0) + 1;
+    }
+    return [
+        'ok' => true, 'von' => $erste === PHP_INT_MAX ? 0 : $erste, 'bis' => $letzte, 'stichtag' => $stichtag,
+        'cash' => $kontostand, 'eigenkapital' => $eigenkapital, 'summen' => $summen,
+        'eroeffnet' => count($eroeffnet), 'geschlossen' => count($geschlossen), 'zaehler' => $zaehler,
+        'eingesetzt' => array_sum(array_column($positionen, 'betrag')), 'positionen' => $positionen,
+    ];
+}
+
+/** Nächster üblicher eToro-Hebel zum Verhältnis Volumen/Einsatz. */
+function hebelSchaetzen(float $verhaeltnis): float
+{
+    $best = 1.0;
+    foreach ([1, 2, 3, 5, 10, 20] as $h) {
+        if (abs(log(max($verhaeltnis, 0.01) / $h)) < abs(log(max($verhaeltnis, 0.01) / $best))) {
+            $best = (float)$h;
+        }
+    }
+    return $best;
+}
+
+/** Eurobetrag in eine andere Währung (Gegenstück zu inEuro). */
+function ausEuro(?float $eur, string $waehrung, array $fx): ?float
+{
+    $eins = inEuro(1.0, $waehrung, $fx);
+    return $eur !== null && $eins ? $eur / $eins : null;
+}
+
+/** Kontoauszug übernehmen: Yahoo-Kürzel zuordnen, fehlende Hebel schätzen, Positionen je Instrument zusammenfassen. */
+function etoroAuszugSpeichern(array $ergebnis, string $dateiname): array
+{
+    if (function_exists('set_time_limit')) { @set_time_limit(240); }
+    $positionen = $ergebnis['positionen'];
+    $isins = array_values(array_unique(array_filter(array_map(
+        static fn(array $p): string => $p['art'] !== 'krypto' ? $p['isin'] : '', $positionen))));
+    yahooSucheVorladen($isins, ['EQUITY', 'ETF', 'MUTUALFUND']);
+
+    // Kürzel je Instrument: Krypto → BTC-USD, sonst über die ISIN, ersatzweise das eToro-Kürzel
+    $symbole = [];
+    $ohneIsin = [];
+    foreach ($positionen as $p) {
+        $k = $p['kuerzel'];
+        if (isset($symbole[$k])) {
+            continue;
+        }
+        if ($p['art'] === 'krypto') {
+            $symbole[$k] = ['symbol' => $k . '-USD', 'name' => ''];
+        } elseif ($p['isin'] !== '') {
+            $info = symbolZuIsin($p['isin'], $p['name']);
+            $symbole[$k] = ['symbol' => $info['symbol'], 'name' => $info['name']];
+        } else {
+            $s = etoroZuYahoo($k);
+            if (!str_contains($s, '.') && isset(['CHF' => 1, 'GBp' => 1, 'HKD' => 1][$p['waehrung']])) {
+                $s .= ['CHF' => '.SW', 'GBp' => '.L', 'HKD' => '.HK'][$p['waehrung']];
+            }
+            $symbole[$k] = ['symbol' => $s, 'name' => ''];
+            $ohneIsin[$k] = $p['waehrung'];
+        }
+    }
+    $alle = array_values(array_unique(array_filter(array_column($symbole, 'symbol'))));
+    $kurse = $alle !== [] ? yahooKurse($alle) : [];
+    // Ohne ISIN nur verknüpfen, wenn Yahoo das Kürzel in derselben Währung kennt (sonst droht eine falsche Firma)
+    foreach ($ohneIsin as $k => $w) {
+        $s = $symbole[$k]['symbol'];
+        if ($s === '' || !isset($kurse[$s]) || waehrungBasis((string)($kurse[$s]['waehrung'] ?? '')) !== waehrungBasis($w)) {
+            $symbole[$k]['symbol'] = '';
+        }
+    }
+    $waehrungen = array_merge(['USD'], array_column($positionen, 'waehrung'),
+        array_map(static fn(array $k): string => (string)($k['waehrung'] ?? ''), $kurse));
+    $fx = wechselkurse($waehrungen);
+
+    $gruppen = [];
+    foreach ($positionen as $p) {
+        $symbol = $symbole[$p['kuerzel']]['symbol'];
+        $k = $symbol !== '' ? ($kurse[$symbol] ?? null) : null;
+        $kursInst = $k !== null && $k['kurs'] !== null ? ausEuro(inEuro((float)$k['kurs'], (string)$k['waehrung'], $fx), $p['waehrung'], $fx) : null;
+        $einsatzInst = ausEuro(inEuro($p['betrag'], 'USD', $fx), $p['waehrung'], $fx);
+        $geschaetzt = false;
+        if ($p['hebel'] === null) {
+            // Nach dem Stichtag eröffnete CFDs: Hebel aus Volumen zu Einsatz schätzen
+            $p['hebel'] = $kursInst && $einsatzInst ? hebelSchaetzen($p['stueck'] * $kursInst / $einsatzInst) : 1.0;
+            $geschaetzt = true;
+        }
+        if ($p['kurs_einstand'] === null) {
+            $p['kurs_einstand'] = $einsatzInst && $p['stueck'] > 0 ? $einsatzInst * $p['hebel'] / $p['stueck'] : null;
+        }
+        if ($p['wert_usd'] === null) {
+            $p['wert_usd'] = $p['betrag'];
+        }
+        if ($p['name'] === $p['kuerzel']) {
+            $p['name'] = $symbole[$p['kuerzel']]['name'] !== '' ? $symbole[$p['kuerzel']]['name'] : ((string)($k['name'] ?? '') !== '' ? (string)$k['name'] : $p['name']);
+        }
+        $schluessel = ($symbol !== '' ? $symbol : 'eToro:' . $p['kuerzel']) . '|' . $p['art'] . '|' . $p['hebel'] . '|' . $p['richtung'];
+        $g = $gruppen[$schluessel] ?? [
+            'name' => $p['name'],
+            'isin' => $p['isin'], 'symbol' => $symbol, 'kuerzel' => $p['kuerzel'], 'art' => $p['art'], 'cfd' => $p['cfd'],
+            'hebel' => $p['hebel'], 'richtung' => $p['richtung'], 'waehrung' => $p['waehrung'],
+            'stueck' => 0.0, 'einstand_usd' => 0.0, 'wert_usd' => 0.0, 'kurs_summe' => 0.0, 'anzahl' => 0, 'geschaetzt' => false,
+        ];
+        $g['stueck'] += $p['stueck'];
+        $g['einstand_usd'] += $p['betrag'];
+        $g['wert_usd'] += (float)$p['wert_usd'];
+        $g['kurs_summe'] += $p['stueck'] * (float)$p['kurs_einstand'];
+        $g['anzahl']++;
+        $g['geschaetzt'] = $g['geschaetzt'] || $geschaetzt;
+        $gruppen[$schluessel] = $g;
+    }
+    foreach ($gruppen as &$g) {
+        $g['kurs_einstand'] = $g['stueck'] > 0 ? $g['kurs_summe'] / $g['stueck'] : null;
+        unset($g['kurs_summe']);
+    }
+    unset($g);
+    uasort($gruppen, static fn(array $a, array $b): int => $b['einstand_usd'] <=> $a['einstand_usd']);
+
+    $auszug = [
+        'zeit' => time(), 'datei' => mb_substr($dateiname, 0, 120), 'von' => $ergebnis['von'], 'bis' => $ergebnis['bis'],
+        'stichtag' => $ergebnis['stichtag'], 'cash_usd' => $ergebnis['cash'], 'eigenkapital_usd' => $ergebnis['eigenkapital'],
+        'summen' => $ergebnis['summen'], 'eingesetzt_usd' => $ergebnis['eingesetzt'], 'anzahl' => count($positionen),
+        'positionen' => array_values($gruppen),
+    ];
+    datenAendern(function (array &$d) use ($auszug): void {
+        $d['broker']['etoro_auszug'] = $auszug;
+        depotFirmenAbgleichen($d);
+    });
+    return $auszug;
+}
+
+// ---------------------------------------------------------------------------
 // Alles zusammen: Depot-Übersicht in Euro
 // ---------------------------------------------------------------------------
 
@@ -747,6 +1150,11 @@ function depotFirmenAbgleichen(array &$d): void
     foreach ((array)($d['broker']['etoro']['positionen'] ?? []) as $p) {
         if ($p['stueck'] > 1e-9 && ($p['art'] ?? '') === 'aktie' && $p['symbol'] !== '') {
             $gehalten[$p['symbol']] ??= ['name' => $p['name'], 'isin' => ''];
+        }
+    }
+    foreach (etoroAuszugPositionen($d) as $p) {
+        if ($p['stueck'] > 1e-9 && $p['art'] === 'aktie' && $p['symbol'] !== '' && $p['richtung'] > 0) {
+            $gehalten[$p['symbol']] ??= ['name' => $p['name'], 'isin' => (string)$p['isin']];
         }
     }
     foreach ($gehalten as $s => $info) {
@@ -787,9 +1195,11 @@ function depotUebersicht(array $d): array
                 'art' => (string)($p['art'] ?? ''), 'stueck' => (float)$p['stueck'], 'einstand' => (float)$p['einstand']];
         }
     }
-    $symbole = array_values(array_filter(array_column($roh, 'symbol')));
+    $auszug = etoroAuszugPositionen($d);
+    $symbole = array_values(array_filter(array_merge(array_column($roh, 'symbol'), array_column($auszug, 'symbol'))));
     $kurse = $symbole !== [] ? yahooKurse($symbole) : [];
-    $waehrungen = array_map(static fn(array $k): string => (string)($k['waehrung'] ?? ''), $kurse);
+    $waehrungen = array_merge(array_map(static fn(array $k): string => (string)($k['waehrung'] ?? ''), $kurse),
+        array_column($auszug, 'waehrung'), $auszug !== [] ? ['USD'] : []);
     $etoroWaehrung = (string)($d['broker']['etoro']['waehrung'] ?? '');
     if ($etoroWaehrung !== '') {
         $waehrungen[] = $etoroWaehrung;
@@ -821,6 +1231,32 @@ function depotUebersicht(array $d): array
             'hebel' => (float)($p['hebel'] ?? 1), 'herkunft' => (array)($p['herkunft'] ?? []), 'kuerzel' => (string)($p['kuerzel'] ?? ''),
         ];
     }
+    foreach ($auszug as $p) {
+        // Wert = Einsatz + Gewinn/Verlust seit Eröffnung; ohne Hebel einfach Stück × Kurs
+        $k = $p['symbol'] !== '' ? ($kurse[$p['symbol']] ?? null) : null;
+        $kursEur = ($k['kurs'] ?? null) !== null ? inEuro((float)$k['kurs'], (string)$k['waehrung'], $fx) : null;
+        $einsatz = (float)inEuro((float)$p['einstand_usd'], 'USD', $fx);
+        $aufEur = $p['kurs_einstand'] !== null ? inEuro((float)$p['kurs_einstand'], (string)$p['waehrung'], $fx) : null;
+        $einfach = $p['hebel'] <= 1 && $p['richtung'] > 0;
+        if ($kursEur !== null && ($einfach || $aufEur !== null)) {
+            $wert = $einfach ? $p['stueck'] * $kursEur : $einsatz + $p['richtung'] * $p['stueck'] * ($kursEur - $aufEur);
+            $heute = ($k['aend'] ?? null) !== null ? $p['richtung'] * (float)inEuro((float)$k['aend'] * $p['stueck'], (string)$k['waehrung'], $fx) : null;
+            $live = true;
+        } else {
+            $wert = inEuro((float)$p['wert_usd'], 'USD', $fx);
+            $heute = null;
+            $live = false;
+        }
+        $positionen[] = [
+            'quelle' => 'etoro', 'symbol' => (string)$p['symbol'], 'isin' => (string)$p['isin'], 'name' => (string)$p['name'],
+            'art' => (string)$p['art'], 'stueck' => (float)$p['stueck'], 'einstand' => $einsatz, 'kurs' => $k['kurs'] ?? null,
+            'waehrung' => (string)($k['waehrung'] ?? $p['waehrung']), 'wert' => $wert, 'heute' => $heute,
+            'gv' => $wert !== null ? $wert - $einsatz : null, 'gv_proz' => $wert !== null && $einsatz > 0 ? ($wert - $einsatz) / $einsatz : null,
+            'aend_proz' => $live ? ($k['aend_proz'] ?? null) : null, 'hebel' => (float)$p['hebel'], 'kuerzel' => (string)$p['kuerzel'],
+            'short' => $p['richtung'] < 0, 'cfd' => !empty($p['cfd']), 'geschaetzt' => !empty($p['geschaetzt']), 'stand_auszug' => !$live,
+            'herkunft' => [],
+        ];
+    }
     usort($positionen, static fn(array $a, array $b): int => ($b['wert'] ?? 0) <=> ($a['wert'] ?? 0));
 
     $leer = ['wert' => 0.0, 'einstand' => 0.0, 'gv' => 0.0, 'heute' => 0.0, 'anzahl' => 0, 'ohne_kurs' => 0];
@@ -843,7 +1279,20 @@ function depotUebersicht(array $d): array
         unset($s);
     }
     $etoroCash = isset($d['broker']['etoro']['konto']['cash']) ? inEuro((float)$d['broker']['etoro']['konto']['cash'], $etoroWaehrung, $fx) : null;
+    if ($etoroCash === null && $auszug !== [] && isset($d['broker']['etoro_auszug']['cash_usd'])) {
+        $etoroCash = inEuro((float)$d['broker']['etoro_auszug']['cash_usd'], 'USD', $fx);
+    }
     return ['positionen' => $positionen, 'quellen' => $quellen, 'gesamt' => $gesamt, 'etoro_cash' => $etoroCash, 'fx' => $fx];
 }
 
-const FZ_QUELLEN = ['traderepublic' => 'Trade Republic', 'etoro' => 'eToro', 'manuell' => 'Manuell erfasst'];
+/** Positionen aus dem eToro-Kontoauszug – nur solange keine Schnittstelle verbunden ist (sonst doppelt). */
+function etoroAuszugPositionen(array $d): array
+{
+    if (!empty($d['broker']['etoro']['positionen'])) {
+        return [];
+    }
+    return array_values(array_filter((array)($d['broker']['etoro_auszug']['positionen'] ?? []),
+        static fn(array $p): bool => (float)($p['stueck'] ?? 0) > 1e-9));
+}
+
+const FZ_QUELLEN =['traderepublic' => 'Trade Republic', 'etoro' => 'eToro', 'manuell' => 'Manuell erfasst'];

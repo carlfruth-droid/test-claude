@@ -16,6 +16,7 @@ require FZ_APP . '/inc/yahoo.php';
 require FZ_APP . '/inc/quellen.php';
 require FZ_APP . '/inc/ki.php';
 require FZ_APP . '/inc/alarme.php';
+require FZ_APP . '/inc/xlsx.php';
 require FZ_APP . '/inc/depot.php';
 require FZ_APP . '/inc/ansichten.php';
 
@@ -432,12 +433,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                 weiter(url(['seite' => 'depot']));
                 break;
 
+            case 'etoro_vorschau':
+                $datei = $_FILES['datei'] ?? null;
+                if (!is_array($datei) || ($datei['error'] ?? 1) !== UPLOAD_ERR_OK || (int)$datei['size'] > 30 * 1024 * 1024) {
+                    meldung('Die Datei kam nicht an (höchstens 30 MB).', 'fehler');
+                    weiter(url(['seite' => 'depot']) . '#d-etoro-import');
+                }
+                if (function_exists('set_time_limit')) { @set_time_limit(120); }
+                $blaetter = xlsxLesen((string)$datei['tmp_name']);
+                if ($blaetter === []) {
+                    meldung('Das ist keine lesbare Excel-Datei (.xlsx). Bitte den eToro-Kontoauszug im Format Excel herunterladen.', 'fehler');
+                    weiter(url(['seite' => 'depot']) . '#d-etoro-import');
+                }
+                $ergebnis = etoroAuszugLesen($blaetter);
+                if (!$ergebnis['ok']) {
+                    meldung($ergebnis['fehler'], 'fehler');
+                    weiter(url(['seite' => 'depot']) . '#d-etoro-import');
+                }
+                $ergebnis['datei'] = (string)$datei['name'];
+                jsonSchreiben(fzPfad('etoro-vorschau.json'), $ergebnis);
+                weiter(url(['seite' => 'depot', 'vorschau' => 'etoro']));
+                break;
+            case 'etoro_uebernehmen':
+                $ergebnis = jsonLesen(fzPfad('etoro-vorschau.json'));
+                if (empty($ergebnis['ok'])) {
+                    meldung('Keine Vorschau vorhanden – bitte die Datei erneut hochladen.', 'fehler');
+                    weiter(url(['seite' => 'depot']));
+                }
+                $auszug = etoroAuszugSpeichern($ergebnis, (string)($ergebnis['datei'] ?? ''));
+                @unlink(fzPfad('etoro-vorschau.json'));
+                meldung('eToro importiert: ' . $auszug['anzahl'] . ' offene Positionen in ' . count($auszug['positionen']) . ' Titeln.');
+                weiter(url(['seite' => 'depot']));
+                break;
+            case 'etoro_verwerfen':
+                @unlink(fzPfad('etoro-vorschau.json'));
+                weiter(url(['seite' => 'depot']));
+                break;
+            case 'etoro_auszug_loeschen':
+                datenAendern(function (array &$d): void {
+                    unset($d['broker']['etoro_auszug']);
+                    depotFirmenAbgleichen($d);
+                });
+                meldung('Importierte eToro-Daten gelöscht.');
+                weiter(url(['seite' => 'depot']));
+                break;
+
             case 'etoro_schluessel':
                 $api = trim((string)($_POST['api'] ?? ''));
                 $user = trim((string)($_POST['user'] ?? ''));
                 if ($api === '' || $user === '') {
                     meldung('Bitte beide Schlüssel eintragen.', 'fehler');
-                    weiter(url(['seite' => 'depot']) . '#d-etoro');
+                    weiter(url(['seite' => 'depot']) . '#d-etoro-import');
                 }
                 brokerZugangSpeichern(['etoro_api' => $api, 'etoro_user' => $user] + brokerZugang());
                 $fehler = etoroAktualisieren();
@@ -691,11 +737,15 @@ switch ($seite) {
             $d = datenLaden();
         }
         $vorschau = null;
-        if (isset($_GET['vorschau'])) {
+        $etVorschau = null;
+        if (($_GET['vorschau'] ?? '') === 'etoro') {
+            $v = jsonLesen(fzPfad('etoro-vorschau.json'));
+            $etVorschau = !empty($v['ok']) ? $v : null;
+        } elseif (isset($_GET['vorschau'])) {
             $v = jsonLesen(fzPfad('tr-vorschau.json'));
             $vorschau = !empty($v['ok']) ? $v : null;
         }
-        seite('Depot', seiteDepot($d, depotUebersicht($d), $etoroVerbunden, $vorschau), 'depot', $d);
+        seite('Depot', seiteDepot($d, depotUebersicht($d), $etoroVerbunden, $vorschau, $etVorschau), 'depot', $d);
         break;
 
     case 'alarme':

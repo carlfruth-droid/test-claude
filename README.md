@@ -77,7 +77,7 @@ Erreichbar unter <https://fruthzeug.de/projekte/finanzen/>.
   Secret ist nicht nötig.
 - **Alarm-Prüfung:** `.github/workflows/finanzen-alarme.yml` ruft die Seite werktags etwa alle
   30 Minuten auf. GitHub führt zeitgesteuerte Workflows nur auf dem Standard-Branch aus.
-- **Depots:** Trade Republic per CSV-Transaktionsexport aus der App, eToro über die offizielle API
+- **Depots:** Trade Republic per CSV-Transaktionsexport aus der App, eToro per Kontoauszug als Excel-Datei (offene Positionen, Kurse live) oder über die offizielle API
   (Schlüssel mit Leserecht, Umgebung „Real“).
 - **Selbsttest:** Nach jedem Deployment prüft der Schritt „Finanzzentrale – Selbsttest vom Server“,
   ob alle Datenquellen vom Hetzner-Server aus erreichbar sind (ohne persönliche Daten im Log).

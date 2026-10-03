@@ -1271,10 +1271,15 @@ function positionsTabelle(array $positionen, array $d): string
     foreach ($positionen as $pos) {
         $verlinkt = $pos['symbol'] !== '' && isset($d['firmen'][$pos['symbol']]);
         $name = e($pos['name']);
-        $art = ['etf' => 'ETF', 'fonds' => 'Fonds', 'krypto' => 'Krypto', 'devisen' => 'Devisen', 'rohstoff' => 'Rohstoff', 'index' => 'Index'][$pos['art']] ?? '';
+        $art = ['etf' => 'ETF', 'fonds' => 'Fonds', 'krypto' => 'Krypto', 'devisen' => 'Devisen', 'rohstoff' => 'Rohstoff', 'index' => 'Index', 'cfd' => 'CFD'][$pos['art']] ?? '';
+        if (!empty($pos['cfd']) && $pos['art'] !== 'cfd') {
+            $art .= ' (CFD)';
+        }
         $unter = zahl($pos['stueck'], $pos['stueck'] < 10 ? 4 : 2) . ' Stück'
             . ($art !== '' ? ' · ' . $art : '')
-            . (!empty($pos['hebel']) && $pos['hebel'] > 1 ? ' · Hebel ' . zahl($pos['hebel'], 0) : '')
+            . (!empty($pos['short']) ? ' · Short' : '')
+            . (!empty($pos['hebel']) && $pos['hebel'] > 1 ? ' · Hebel ' . zahl($pos['hebel'], 0) . (!empty($pos['geschaetzt']) ? ' (geschätzt)' : '') : '')
+            . (!empty($pos['stand_auszug']) ? ' · Wert laut Kontoauszug' : '')
             . (!empty($pos['herkunft']) ? ' · ' . implode(', ', array_unique($pos['herkunft'])) : '')
             . ' · Einstand ' . geld($pos['einstand']);
         $html .= '<li>' . ($verlinkt ? '<a href="' . e(firmaUrl($pos['symbol'])) . '">' : '<div>')
@@ -1287,11 +1292,12 @@ function positionsTabelle(array $positionen, array $d): string
     return $html . '</ul>';
 }
 
-function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorschau): string
+function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorschau, ?array $etVorschau = null): string
 {
     $g = $depot['gesamt'];
     $tr = $d['broker']['traderepublic'] ?? null;
     $et = $d['broker']['etoro'] ?? null;
+    $ea = $d['broker']['etoro_auszug'] ?? null;
     $jeQuelle = [];
     foreach ($depot['positionen'] as $pos) {
         $jeQuelle[$pos['quelle']][] = $pos;
@@ -1317,10 +1323,32 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
     <p class="klein leise">Ein neuer Import ersetzt den vorherigen vollständig. Wähle beim Export deshalb am besten den gesamten Zeitraum seit Kontoeröffnung.</p>
   </section>
 <?php endif; ?>
+<?php if ($etVorschau !== null): $ev = $etVorschau; ?>
+  <section class="karte vorschau">
+    <h2 class="karten-titel"><?= ico('hoch') ?> eToro-Kontoauszug prüfen</h2>
+    <p>„<?= e((string)$ev['datei']) ?>“ – Zeitraum <?= e(datum((int)$ev['von'])) ?> bis <strong><?= e(datum((int)$ev['bis'])) ?></strong>.</p>
+    <ul class="liste-schlicht">
+      <li><span>Eröffnete Positionen</span><b><?= (int)$ev['eroeffnet'] ?></b></li>
+      <li><span>Davon geschlossen</span><b><?= (int)$ev['geschlossen'] ?></b></li>
+      <li><span>Noch offen</span><b><?= count($ev['positionen']) ?></b></li>
+      <?php foreach (['aktie' => 'Aktien', 'etf' => 'ETFs', 'krypto' => 'Krypto', 'cfd' => 'CFDs auf Aktien/ETFs'] as $a => $t): if (!empty($ev['zaehler'][$a])): ?><li><span class="leise">· <?= e($t) ?></span><b><?= (int)$ev['zaehler'][$a] ?></b></li><?php endif; endforeach; ?>
+      <li><span>Eingesetzt in offenen Positionen</span><b><?= e(zahl((float)$ev['eingesetzt'], 2)) ?> $</b></li>
+      <?php if ($ev['cash'] !== null): ?><li><span>Kontostand (frei)</span><b><?= e(zahl((float)$ev['cash'], 2)) ?> $</b></li><?php endif; ?>
+      <?php if ($ev['eigenkapital'] !== null): ?><li><span>Eigenkapital laut eToro</span><b><?= e(zahl((float)$ev['eigenkapital'], 2)) ?> $</b></li><?php endif; ?>
+      <li><span>Dividenden gesamt</span><b><?= e(zahl((float)$ev['summen']['dividenden'], 2)) ?> $</b></li>
+    </ul>
+    <?php if (!empty($ev['stichtag'])): ?><p class="klein leise">Hebel, Richtung und Einstiegskurs stammen aus dem Bestand vom <?= e(datum((int)$ev['stichtag'])) ?>; bei später eröffneten CFDs wird der Hebel geschätzt.</p><?php endif; ?>
+    <div class="knopf-reihe">
+      <form method="post" action="./?seite=depot" data-laden="Kurse werden zugeordnet …"><?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_uebernehmen"><button class="knopf" type="submit"><?= ico('haken') ?> Übernehmen</button></form>
+      <form method="post" action="./?seite=depot"><?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_verwerfen"><button class="knopf zweit" type="submit">Verwerfen</button></form>
+    </div>
+    <p class="klein leise">Das Übernehmen dauert etwa eine halbe Minute: Jeder Titel wird einem Börsenkürzel zugeordnet, damit die Kurse danach live mitlaufen. Ein neuer Import ersetzt den vorherigen.</p>
+  </section>
+<?php endif; ?>
 <section class="karte depot-summe">
   <span class="karten-titel"><?= ico('kuchen') ?> Gesamt</span>
   <?php if ($g['anzahl'] === 0): ?>
-    <?= leer('Noch keine Positionen. Importiere unten deinen Trade-Republic-Export oder verbinde eToro.') ?>
+    <?= leer('Noch keine Positionen. Importiere unten deinen Trade-Republic-Export oder den eToro-Kontoauszug.') ?>
   <?php else: ?>
     <span class="depot-wert"><?= e(geld($g['wert'] + (float)($depot['etoro_cash'] ?? 0))) ?></span>
     <?php echo kacheln([
@@ -1361,7 +1389,10 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
         continue;
     }
     $s = $depot['quellen'][$q];
-    $stand = $q === 'traderepublic' ? 'Import vom ' . datum((int)($tr['zeit'] ?? 0)) : ($q === 'etoro' ? 'Stand ' . vorZeit((int)($et['zeit'] ?? 0)) : '');
+    $stand = $q === 'traderepublic' ? 'Import vom ' . datum((int)($tr['zeit'] ?? 0))
+        : ($q === 'etoro' ? (!empty($et['positionen']) ? 'Stand ' . vorZeit((int)($et['zeit'] ?? 0))
+            : 'Bestand laut Kontoauszug bis ' . datum((int)($ea['bis'] ?? 0)) . ' · bewertet mit aktuellen Kursen'
+              . (!empty($depot['etoro_cash']) ? ' · dazu ' . geld((float)$depot['etoro_cash']) . ' freies Guthaben' : '')) : '');
     echo akk($titel, 'depot', ($stand !== '' ? '<p class="klein leise">' . e($stand) . '</p>' : '') . positionsTabelle($jeQuelle[$q], $d),
         ['offen' => true, 'id' => 'd-' . $q, 'meta' => e(geld($s['wert']))]);
 endforeach; ?>
@@ -1391,6 +1422,25 @@ endforeach; ?>
 <?= akk('Trade Republic', 'hoch', $trHtml, ['id' => 'd-tr-import', 'offen' => $tr === null, 'meta' => $tr !== null ? e(datum((int)$tr['zeit'])) : 'CSV-Import']) ?>
 
 <?php ob_start(); ?>
+<?php if ($ea !== null): ?>
+  <p class="erfolg"><?= ico('haken') ?> Kontoauszug importiert am <?= e(datumZeit((int)$ea['zeit'])) ?>: <?= (int)$ea['anzahl'] ?> offene Positionen, Stand <?= e(datum((int)$ea['bis'])) ?><?= ($ea['summen']['dividenden'] ?? 0) > 0 ? ', Dividenden gesamt ' . e(zahl((float)$ea['summen']['dividenden'], 2)) . ' $' : '' ?>.</p>
+<?php endif; ?>
+<p>Lade deinen eToro-Kontoauszug als Excel-Datei hoch. Daraus ergeben sich deine offenen Positionen; die Kurse laufen danach live mit. Käufe und Verkäufe nach dem Auszug siehst du erst mit dem nächsten Import.</p>
+<ol class="schritte">
+  <li>eToro öffnen → <strong>Portfolio</strong> bzw. Menü → <strong>Einstellungen</strong> → <strong>Kontoauszug</strong> (Account Statement).</li>
+  <li>Zeitraum <strong>seit Kontoeröffnung</strong> wählen und als <strong>Excel (XLSX)</strong> herunterladen.</li>
+  <li>Hier hochladen – du siehst vor dem Übernehmen eine Vorschau.</li>
+</ol>
+<form method="post" action="./?seite=depot" enctype="multipart/form-data" class="formular" data-laden="Kontoauszug wird gelesen …">
+  <?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_vorschau">
+  <label class="feld datei"><span>Kontoauszug von eToro (.xlsx)</span><input type="file" name="datei" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label>
+  <button class="knopf" type="submit"><?= ico('hoch') ?> Hochladen und prüfen</button>
+</form>
+<?php if ($ea !== null): ?>
+  <form method="post" action="./?seite=depot" data-bestaetigen="Importierte eToro-Daten aus der Finanzzentrale löschen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_auszug_loeschen"><button class="knopf-text gefahr" type="submit"><?= ico('muell') ?> Importierte eToro-Daten löschen</button></form>
+<?php endif; ?>
+<details class="unterbereich">
+<summary>Alternative: eToro-Schnittstelle (API-Schlüssel)</summary>
 <?php if ($et !== null && !empty($et['fehler'])): ?>
   <div class="fehlerbox"><?= e($et['fehler']) ?></div>
 <?php elseif ($et !== null && !empty($et['zeit'])): ?>
@@ -1415,9 +1465,11 @@ endforeach; ?>
 <?php if ($etoroVerbunden): ?>
   <form method="post" action="./?seite=depot" data-bestaetigen="eToro-Verbindung trennen und die Schlüssel löschen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_trennen"><button class="knopf-text gefahr" type="submit"><?= ico('x') ?> Verbindung trennen</button></form>
 <?php endif; ?>
-<p class="klein leise">Die Schlüssel liegen nur auf deinem Server, nicht im Programmcode.</p>
+<p class="klein leise">Die Schlüssel liegen nur auf deinem Server, nicht im Programmcode. Nicht in jedem Land bietet eToro die Schlüssel an.</p>
+</details>
 <?php $etHtml = (string)ob_get_clean(); ?>
-<?= akk('eToro', 'link', $etHtml, ['id' => 'd-etoro', 'offen' => !$etoroVerbunden, 'meta' => $etoroVerbunden ? 'verbunden' : 'API-Schlüssel']) ?>
+<?= akk('eToro', 'link', $etHtml, ['id' => 'd-etoro-import', 'offen' => !$etoroVerbunden && $ea === null,
+    'meta' => $etoroVerbunden ? 'verbunden' : ($ea !== null ? e(datum((int)$ea['bis'])) : 'Kontoauszug')]) ?>
 <?php
     return (string)ob_get_clean();
 }

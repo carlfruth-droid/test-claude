@@ -103,6 +103,12 @@
     $$('form[data-bestaetigen]', wurzel).forEach(function (f) {
       f.addEventListener('submit', function (e) { if (!window.confirm(f.getAttribute('data-bestaetigen'))) { e.preventDefault(); } });
     });
+    $$('form[data-laden]', wurzel).forEach(function (f) {
+      f.addEventListener('submit', function () {
+        var k = f.querySelector('button[type=submit]');
+        if (k) { setTimeout(function () { k.disabled = true; k.textContent = f.getAttribute('data-laden'); }, 0); }
+      });
+    });
     $$('[data-auto-absenden]', wurzel).forEach(function (el) {
       el.addEventListener('change', function () { el.form.submit(); });
     });
