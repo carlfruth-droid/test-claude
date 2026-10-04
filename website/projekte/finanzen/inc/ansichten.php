@@ -1430,7 +1430,7 @@ endforeach; ?>
 </ol>
 <form method="post" action="./?seite=depot" enctype="multipart/form-data" class="formular">
   <?= csrfFeld() ?><input type="hidden" name="aktion" value="tr_vorschau">
-  <label class="feld datei"><span>CSV-Datei von Trade Republic</span><input type="file" name="datei" accept=".csv,text/csv,text/plain" required></label>
+  <label class="feld datei"><span>CSV-Datei von Trade Republic</span><input type="file" name="datei" required></label>
   <button class="knopf" type="submit"><?= ico('hoch') ?> Hochladen und prüfen</button>
 </form>
 <p class="klein leise">Die Datei wird nur auf deinem Server ausgewertet. Dein Trade-Republic-Zugang wird nie benötigt.</p>
