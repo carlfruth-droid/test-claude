@@ -1725,10 +1725,11 @@ function seiteVerlauf(array $d): string
 <section class="karte" data-verlauf data-beginn="<?= e(verlaufBeginn($d)) ?>">
   <span class="karten-titel"><?= ico('kurve') ?> Wert der Auswahl</span>
   <div class="chart verlauf-chart" data-verlauf-chart></div>
-  <div class="chips schnitte"><button type="button" class="chip" data-verlauf-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-verlauf-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button></div>
+  <div class="chips schnitte"><button type="button" class="chip" data-verlauf-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-verlauf-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button><button type="button" class="chip" data-verlauf-schnitt="einsatz"><i style="background:#64748b"></i>Eingesetzt</button></div>
   <div class="raster" data-verlauf-kennzahlen></div>
   <p class="klein leise" data-verlauf-stand></p>
-  <p class="klein leise">Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl berücksichtigt, wann Geld hinzukam (Modified Dietz). Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
+  <div data-verlauf-geschaefte></div>
+  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl berücksichtigt, wann Geld hinzukam (Modified Dietz). Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
 </section>
 <section class="karte">
   <span class="karten-titel"><?= ico('liste') ?> Titel auswählen</span>

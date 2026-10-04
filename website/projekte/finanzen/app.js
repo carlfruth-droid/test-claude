@@ -359,7 +359,8 @@
     return erg;
   }
 
-  function linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz) {
+  function linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marker) {
+    marker = marker || [];
     zusatz = (zusatz || []).filter(function (z) { return z.punkte.some(function (p) { return p[1] !== null; }); });
     chart.innerHTML = '';
     if (!punkte || punkte.length < 2) { chart.innerHTML = '<p class="leer">Kein Kursverlauf verfügbar.</p>'; if (aendEl) { aendEl.textContent = ''; } return; }
@@ -369,7 +370,8 @@
     zusatz.forEach(function (z) { z.punkte.forEach(function (p) { if (p[1] !== null) { alleWerte.push(p[1]); } }); });
     var min = Math.min.apply(null, alleWerte), max = Math.max.apply(null, alleWerte);
     if (max === min) { max += 1; min -= 1; }
-    var puffer = (max - min) * 0.08; min -= puffer; max += puffer;
+    var puffer = (max - min) * 0.08, nieNegativ = min >= 0; min -= puffer; max += puffer;
+    if (nieNegativ && min < 0) { min = 0; }
     var x = function (i) { return links + i / (punkte.length - 1) * (B - links - rechtsRand); };
     var y = function (v) { return oben + (1 - (v - min) / (max - min)) * (H - oben - unten); };
     var erster = werte[0], letzter = werte[werte.length - 1];
@@ -397,7 +399,7 @@
       svg.appendChild(linie);
       var t = document.createElementNS(ns, 'text');
       t.setAttribute('x', B - rechtsRand + 8); t.setAttribute('y', yy + 4); t.setAttribute('class', 'achse');
-      t.textContent = wert.toLocaleString('de-DE', { maximumFractionDigits: wert >= 100 ? 0 : 2 });
+      t.textContent = wert.toLocaleString('de-DE', { maximumFractionDigits: Math.abs(wert) >= 100 ? 0 : 2 });
       svg.appendChild(t);
     }
     var d = '';
@@ -428,6 +430,25 @@
       t2.textContent = datumFmt(punkte[i][0]);
       svg.appendChild(t2);
     });
+    // Kauf ▲ / Verkauf ▼ am ersten Rasterpunkt ab dem Geschäftstag
+    var jePunkt = {};
+    marker.forEach(function (m) {
+      var i = 0;
+      while (i < punkte.length - 1 && punkte[i][0] < m.t) { i++; }
+      (jePunkt[i] = jePunkt[i] || []).push(m);
+    });
+    Object.keys(jePunkt).forEach(function (i) {
+      var liste = jePunkt[i], kauf = liste.some(function (m) { return m.typ === 'kauf'; }), verkauf = liste.some(function (m) { return m.typ === 'verkauf'; });
+      [kauf ? 'kauf' : null, verkauf ? 'verkauf' : null].filter(Boolean).forEach(function (typ) {
+        var mx = x(+i), my = y(punkte[i][1]);
+        var p = document.createElementNS(ns, 'path');
+        p.setAttribute('d', typ === 'kauf'
+          ? 'M' + mx + ' ' + (my + 6) + 'l-5 9h10z'
+          : 'M' + mx + ' ' + (my - 6) + 'l-5 -9h10z');
+        p.setAttribute('class', 'marke ' + typ);
+        svg.appendChild(p);
+      });
+    });
     var senkrecht = document.createElementNS(ns, 'line');
     senkrecht.setAttribute('class', 'gitter');
     senkrecht.setAttribute('y1', oben); senkrecht.setAttribute('y2', H - unten);
@@ -451,7 +472,8 @@
       punkt.setAttribute('cx', xx); punkt.setAttribute('cy', yy2); punkt.style.display = '';
       tip.hidden = false;
       tip.innerHTML = '<b>' + fmt(punkte[i][1]) + '</b>' + datumFmt(punkte[i][0])
-        + zusatz.map(function (z) { var v = z.punkte[i] && z.punkte[i][1]; return v === null || v === undefined ? '' : '<small style="color:' + z.farbe + '">' + z.name + ': ' + fmt(v) + '</small>'; }).join('');
+        + zusatz.map(function (z) { var v = z.punkte[i] && z.punkte[i][1]; return v === null || v === undefined ? '' : '<small style="color:' + z.farbe + '">' + z.name + ': ' + fmt(v) + '</small>'; }).join('')
+        + (jePunkt[i] || []).slice(0, 4).map(function (m) { return '<small class="' + (m.typ === 'kauf' ? 'plus' : 'minus') + '">' + m.text + '</small>'; }).join('');
       tip.style.left = Math.max(60, Math.min(r.width - 60, xx / B * r.width)) + 'px';
     };
     var weg = function () { senkrecht.style.display = 'none'; punkt.style.display = 'none'; tip.hidden = true; };
@@ -516,7 +538,7 @@
   if (vb) {
     var vZustand = { zeitraum: '1j', von: '', bis: '', quelle: 'alle', aus: {} };
     try { var gesp = JSON.parse(speicher.lesen('fz-verlauf') || 'null'); if (gesp) { vZustand = Object.assign(vZustand, gesp); } } catch (e) { /* egal */ }
-    var vDaten = null;
+    var vDaten = null, ladeNummer = 0;
     var heute = new Date();
     var iso = function (d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
     var euro = function (z) { return z.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: Math.abs(z) >= 1000 ? 0 : 2 }); };
@@ -568,6 +590,11 @@
     };
     var gewaehlt = function () { return sichtbar().filter(function (t) { return !vZustand.aus[t.id]; }); };
 
+    var nurDiesen = function (id) {
+      vZustand.aus = {};
+      vDaten.titel.forEach(function (x) { if (x.id !== id) { vZustand.aus[x.id] = 1; } });
+      speichern(); zeigen();
+    };
     var zeigen = function () {
       if (!vDaten) { return; }
       var alle = sichtbar(), auswahl = gewaehlt();
@@ -578,7 +605,44 @@
       var zusatz = [];
       if (vZustand.s30) { zusatz.push({ name: 'Ø 30 Tage', farbe: '#d97706', punkte: gleitend(alleP, 30).slice(s0) }); }
       if (vZustand.s100) { zusatz.push({ name: 'Ø 100 Tage', farbe: '#7c3aed', punkte: gleitend(alleP, 100).slice(s0) }); }
-      linienChart(diagramm, punkte, euro, tag, null, zusatz);
+      if (vZustand.einsatz !== false) {
+        // Wert am Anfang plus Käufe minus Verkäufe: zeigt, was davon eingezahlt und was Kursentwicklung ist
+        var eingesetzt = [], summeF = k.v0;
+        for (var ei = s0; ei < vDaten.punkte.length; ei++) {
+          if (ei > s0) { auswahl.forEach(function (t) { summeF += t.f[ei] || 0; }); }
+          eingesetzt.push([vDaten.punkte[ei], Math.round(summeF * 100) / 100]);
+        }
+        zusatz.push({ name: 'Eingesetzt', farbe: '#64748b', punkte: eingesetzt });
+      }
+      // Käufe und Verkäufe der Auswahl (bei bis zu 10 Titeln, sonst wird es unübersichtlich)
+      var geschaefte = [];
+      if (auswahl.length <= 10) {
+        auswahl.forEach(function (t) {
+          (t.k || []).forEach(function (g) {
+            if (g[3] === 'massnahme') { return; }
+            geschaefte.push({ t: g[0], typ: g[3], titel: t.name, stueck: g[1], betrag: g[2], quelle: g[4],
+              text: (g[3] === 'kauf' ? '▲ Kauf ' : '▼ Verkauf ') + (auswahl.length > 1 ? t.name + ' ' : '') + euro(Math.abs(g[2])) });
+          });
+        });
+      }
+      geschaefte.sort(function (a, b) { return a.t - b.t; });
+      linienChart(diagramm, punkte, euro, tag, null, zusatz, geschaefte);
+      var gl = $('[data-verlauf-geschaefte]');
+      if (gl) {
+        if (auswahl.length > 10) {
+          gl.innerHTML = '<p class="klein leise">Käufe und Verkäufe werden angezeigt, sobald höchstens 10 Titel ausgewählt sind.</p>';
+        } else if (!geschaefte.length) {
+          gl.innerHTML = '<p class="klein leise">Keine Käufe oder Verkäufe im Zeitraum.</p>';
+        } else {
+          var html = '<h4>Käufe und Verkäufe im Zeitraum (' + geschaefte.length + ')</h4><ul class="liste-schlicht geschaefte">';
+          geschaefte.slice().reverse().slice(0, 200).forEach(function (g) {
+            html += '<li><span><b class="' + (g.typ === 'kauf' ? 'plus' : 'minus') + '">' + (g.typ === 'kauf' ? '▲ Kauf' : '▼ Verkauf') + '</b> ' + tag(g.t)
+              + (auswahl.length > 1 ? ' · ' + g.titel.replace(/[<>&]/g, '') : '') + '<small class="leise" style="display:block">'
+              + Math.abs(g.stueck).toLocaleString('de-DE', { maximumFractionDigits: 4 }) + ' Stück · ' + (g.quelle === 'etoro' ? 'eToro' : 'Trade Republic') + '</small></span><b>' + euro(Math.abs(g.betrag)) + '</b></li>';
+          });
+          gl.innerHTML = html + '</ul>';
+        }
+      }
       var kachel = function (titel, wert, unter) { return '<div class="kachel"><span class="k-titel">' + titel + '</span><span class="k-wert">' + wert + '</span>' + (unter ? '<span class="k-unter">' + unter + '</span>' : '') + '</div>'; };
       kennz.innerHTML =
         kachel('Wert ' + tag(vDaten.punkte[s0]), euro(k.v0)) +
@@ -588,8 +652,9 @@
       stand.textContent = (auswahl.length === 1 ? auswahl[0].name + ' – ' : '') + auswahl.length + ' von ' + alle.length + ' Titeln ausgewählt · ' + tag(vDaten.punkte[s0]) + ' bis ' + tag(vDaten.punkte[vDaten.punkte.length - 1]);
       var q = (sucheFeld && sucheFeld.value || '').toLowerCase();
       liste.innerHTML = '';
-      alle.forEach(function (t) {
-        if (q && (t.name + ' ' + t.symbol).toLowerCase().indexOf(q) < 0) { return; }
+      var passt = function (t) { return !q || (t.name + ' ' + t.symbol).toLowerCase().indexOf(q) >= 0; };
+      var ueberschrift = function (text) { var li = document.createElement('li'); li.className = 'gruppe'; li.textContent = text; liste.appendChild(li); };
+      var zeile = function (t) {
         var e = auswerten([t]);
         var li = document.createElement('li');
         li.innerHTML = '<label><input type="checkbox"' + (vZustand.aus[t.id] ? '' : ' checked') + '><span><strong></strong><small></small></span></label>' +
@@ -598,13 +663,33 @@
         $('strong', li).textContent = t.name;
         $('small', li).textContent = t.symbol + ' · ' + t.quellen.map(function (x) { return x === 'etoro' ? 'eToro' : 'Trade Republic'; }).join(' + ') + (t.luecke ? ' · Kurse lückenhaft' : '');
         $('input', li).addEventListener('change', function (ev) { if (ev.target.checked) { delete vZustand.aus[t.id]; } else { vZustand.aus[t.id] = 1; } speichern(); zeigen(); });
-        $('button', li).addEventListener('click', function () {
-          vZustand.aus = {};
-          alle.forEach(function (x) { if (x.id !== t.id) { vZustand.aus[x.id] = 1; } });
-          speichern(); zeigen(); vb.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
+        $('button', li).addEventListener('click', function () { nurDiesen(t.id); vb.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
         liste.appendChild(li);
-      });
+      };
+      var letzter = vDaten.punkte.length - 1;
+      var aktuell = alle.filter(function (t) { return t.w[letzter] > 0.005 && passt(t); });
+      var verkauft = alle.filter(function (t) { return !(t.w[letzter] > 0.005) && passt(t); });
+      if (aktuell.length) { ueberschrift('Aktuell im Depot (' + aktuell.length + ')'); aktuell.forEach(zeile); }
+      if (verkauft.length) { ueberschrift('Im Zeitraum verkauft (' + verkauft.length + ')'); verkauft.forEach(zeile); }
+      // Ehemalige Titel außerhalb des Zeitraums: Tippen springt in die Haltedauer
+      var drin = {};
+      vDaten.titel.forEach(function (t) { drin[t.id] = 1; });
+      var frueher = (vDaten.katalog || []).filter(function (t) { return !drin[t.id] && passt(t) && (vZustand.quelle === 'alle' || t.quellen.indexOf(vZustand.quelle) >= 0); });
+      if (frueher.length) {
+        ueberschrift('Ehemalige Aktien außerhalb des Zeitraums (' + frueher.length + ')');
+        frueher.forEach(function (t) {
+          var li = document.createElement('li');
+          li.innerHTML = '<span><strong></strong><small></small></span><button type="button" class="knopf-text klein">anzeigen</button>';
+          $('strong', li).textContent = t.name;
+          $('small', li).textContent = t.symbol + ' · gehalten ' + tag(t.erster) + ' – ' + (t.aktuell ? 'heute' : tag(t.letzter));
+          $('button', li).addEventListener('click', function () {
+            var v = new Date((t.erster - 14 * 86400) * 1000), b = new Date(Math.min(Date.now(), (t.aktuell ? Date.now() / 1000 : t.letzter + 14 * 86400) * 1000));
+            vZustand.zeitraum = 'frei'; vZustand.von = iso(v) < beginn ? beginn : iso(v); vZustand.bis = iso(b); vZustand.nur = t.id;
+            speichern(); laden(); vb.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+          liste.appendChild(li);
+        });
+      }
       if (!liste.children.length) { liste.innerHTML = '<li class="leer">Keine Titel gefunden.</li>'; }
     };
 
@@ -615,13 +700,14 @@
       $$('[data-quelle]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-quelle') === vZustand.quelle); });
       diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Kurse werden geladen …</p>';
       kennz.innerHTML = ''; stand.textContent = ''; vDaten = null;
-      var versuche = 0;
+      var versuche = 0, nummer = ++ladeNummer;
       var schritt = function () {
         var daten = new FormData();
         daten.append('csrf', csrf); daten.append('von', g[0]); daten.append('bis', g[1]); daten.append('vorlauf', '100');
         fetch('?api=verlauf', { method: 'POST', body: daten, credentials: 'same-origin' })
           .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
           .then(function (j) {
+            if (nummer !== ladeNummer) { return; } // inzwischen anderer Zeitraum gewählt
             versuche = 0;
             if (!j.fertig) {
               var proz = j.gesamt ? Math.round((1 - j.offen / j.gesamt) * 100) : 0;
@@ -630,10 +716,12 @@
               return;
             }
             vDaten = j;
+            if (vZustand.nur) { var nur = vZustand.nur; delete vZustand.nur; if (j.titel.some(function (t) { return t.id === nur; })) { vZustand.aus = {}; j.titel.forEach(function (t) { if (t.id !== nur) { vZustand.aus[t.id] = 1; } }); speichern(); } }
             if (!j.titel.length) { diagramm.innerHTML = '<p class="leer">In diesem Zeitraum waren keine Titel im Depot.</p>'; kennz.innerHTML = ''; liste.innerHTML = ''; stand.textContent = ''; return; }
             zeigen();
           })
           .catch(function () {
+            if (nummer !== ladeNummer) { return; }
             if (++versuche < 4) { setTimeout(schritt, 3000); return; }
             diagramm.innerHTML = '<p class="leer">Der Verlauf konnte nicht geladen werden. Bitte die Seite neu laden.</p>';
           });
@@ -646,6 +734,7 @@
     });
     $$('[data-verlauf-schnitt]').forEach(function (k) {
       var n = k.getAttribute('data-verlauf-schnitt');
+      if (n === 'einsatz' && vZustand.einsatz === undefined) { vZustand.einsatz = true; }
       k.classList.toggle('aktiv', !!vZustand[n]);
       k.addEventListener('click', function () { vZustand[n] = !vZustand[n]; k.classList.toggle('aktiv', vZustand[n]); speichern(); zeigen(); });
     });

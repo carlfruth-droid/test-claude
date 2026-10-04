@@ -102,13 +102,13 @@ function historieSchluessel(string $symbol): string
 function historieGecacht(string $symbol, int $ab): ?array
 {
     $c = cacheLesen(historieSchluessel($symbol), 12 * 3600);
-    if ($c === null || !$c['frisch'] || !is_array($c['wert']) || (int)($c['wert']['ab'] ?? PHP_INT_MAX) > $ab) {
+    if ($c === null || !$c['frisch'] || !is_array($c['wert']) || (int)($c['wert']['v'] ?? 0) !== 2 || (int)($c['wert']['ab'] ?? PHP_INT_MAX) > $ab) {
         return null;
     }
     return $c['wert'];
 }
 
-/** Antwort von Yahoo auswerten; Schlusskurse ohne Split-Bereinigung (tatsächliche Kurse des Tages). */
+/** Antwort von Yahoo auswerten: Schlusskurse (von Yahoo split-bereinigt) und gemeldete Splits. */
 function historieAuswerten(array $j, int $ab): ?array
 {
     $res = $j['chart']['result'][0] ?? null;
@@ -123,23 +123,80 @@ function historieAuswerten(array $j, int $ab): ?array
             $splits[] = [(int)$sp['date'], (float)$sp['numerator'] / (float)$sp['denominator']];
         }
     }
+    usort($splits, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
     $t = [];
     $c = [];
     foreach ($zeiten as $i => $ts) {
         $v = $schluss[$i] ?? null;
-        if (!is_numeric($v) || (float)$v <= 0) {
-            continue;
+        if (is_numeric($v) && (float)$v > 0) {
+            $t[] = (int)$ts;
+            $c[] = round((float)$v, 6);
         }
-        $faktor = 1.0;
-        foreach ($splits as [$sd, $f]) {
-            if ((int)$ts < $sd) {
-                $faktor *= $f; // Yahoo rechnet Kurse vor einem Split herunter – hier zurück auf den echten Kurs
+    }
+    return ['v' => 2, 'ab' => $ab, 't' => $t, 'c' => $c, 'sp' => $splits, 'w' => (string)($res['meta']['currency'] ?? '')];
+}
+
+/** Produkt der Split-Faktoren nach dem Zeitpunkt (rechnet bereinigte Kurse auf den damaligen Kurs zurück). */
+function splitFaktor(array $splits, int $ts): float
+{
+    $f = 1.0;
+    foreach ($splits as [$sd, $sf]) {
+        if ($ts < $sd) {
+            $f *= $sf;
+        }
+    }
+    return $f;
+}
+
+/**
+ * Yahoo meldet gelegentlich falsche Splits (z. B. Naspers „5000:1“). Prüft die
+ * gemeldeten Splits gegen die eigenen Kauf-/Verkaufskurse und behält die
+ * Kombination, die am besten passt. $handel: [[Zeit, Kurs je Stück in EUR], …]
+ */
+function splitsPruefen(array $h, array $handel, callable $inEur): array
+{
+    $alle = (array)($h['sp'] ?? []);
+    if ($alle === []) {
+        return [];
+    }
+    // ohne eigene Kurse: nur offensichtlich unsinnige Faktoren verwerfen
+    $plausibel = array_values(array_filter($alle, static fn(array $s): bool => $s[1] >= 1 / 50 && $s[1] <= 50));
+    $proben = [];
+    $idx = 0;
+    foreach ($handel as [$ts, $preis]) {
+        $k = kursZum($h, $ts, $idx);
+        $kEur = $k !== null ? $inEur($k, $ts) : null;
+        if ($kEur && $preis > 0) {
+            $proben[] = [$ts, $preis, $kEur];
+        }
+    }
+    if ($proben === [] || count($alle) > 8) {
+        return $plausibel;
+    }
+    $bester = $plausibel;
+    $besteGuete = INF;
+    $n = count($alle);
+    for ($maske = 0; $maske < (1 << $n); $maske++) {
+        $auswahl = [];
+        for ($b = 0; $b < $n; $b++) {
+            if ($maske & (1 << $b)) {
+                $auswahl[] = $alle[$b];
             }
         }
-        $t[] = (int)$ts;
-        $c[] = round((float)$v * $faktor, 6);
+        $abw = [];
+        foreach ($proben as [$ts, $preis, $kEur]) {
+            $abw[] = abs(log($preis / ($kEur * splitFaktor($auswahl, $ts))));
+        }
+        sort($abw);
+        $guete = $abw[intdiv(count($abw), 2)] + count($auswahl) * 1e-6; // Median; bei Gleichstand weniger Splits
+        if ($auswahl == $plausibel) {
+            $guete -= 0.02; // die plausiblen Yahoo-Angaben leicht bevorzugen
+        }
+        if ($guete < $besteGuete) {
+            [$besteGuete, $bester] = [$guete, $auswahl];
+        }
     }
-    return ['ab' => $ab, 't' => $t, 'c' => $c, 'w' => (string)($res['meta']['currency'] ?? '')];
+    return $bester;
 }
 
 /**
@@ -164,7 +221,7 @@ function historienLaden(array $symbole, int $ab, float $budget): int
             $j = $r['code'] === 200 ? json_decode($r['body'], true) : null;
             $h = is_array($j) ? historieAuswerten($j, $ab) : null;
             if ($h === null && in_array($r['code'], [200, 404, 400], true)) {
-                $h = ['ab' => $ab, 't' => [], 'c' => [], 'w' => '']; // unbekannt – nicht bei jedem Aufruf erneut fragen
+                $h = ['v' => 2, 'ab' => $ab, 't' => [], 'c' => [], 'sp' => [], 'w' => '']; // unbekannt – nicht bei jedem Aufruf erneut fragen
             }
             if ($h !== null) {
                 cacheSchreiben(historieSchluessel((string)$s), $h);
@@ -267,9 +324,55 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
     }
 
     $ergebnis = [];
+    $sichtVon = $raster[$start];
     foreach ($titel as $s => $t) {
         $h = $verlaeufe[$s];
         $w = (string)$h['w'];
+        // Eigene Handelskurse (EUR je Stück) und Käufe/Verkäufe im sichtbaren Zeitraum
+        $handel = [];
+        $geschaefte = [];
+        foreach ($t['tr'] as $v) {
+            foreach ($v['e'] as $e) {
+                $et = strtotime($e[0] . ' 12:00:00');
+                $ist = ($e[3] ?? '') === 'm';
+                if (!$ist && (float)$e[1] != 0.0 && (float)$e[2] != 0.0) {
+                    $handel[] = [$et, abs((float)$e[2] / (float)$e[1])];
+                }
+                if ($et >= $sichtVon && $et <= $bisTs && ((float)$e[1] != 0.0 || (float)$e[2] != 0.0)) {
+                    $geschaefte[] = [$et, round((float)$e[1], 6), round((float)$e[2], 2), $ist ? 'massnahme' : ((float)$e[1] > 0 ? 'kauf' : 'verkauf'), 'tr'];
+                }
+            }
+        }
+        $fxPruef = [];
+        foreach ($t['et'] as $seg) {
+            $usdAuf = fxZum($fx, $fxPruef, 'USD', (int)$seg['auf']);
+            $fxPruef = [];
+            // nur offene Positionen: geschlossene führt eToro in Stück und Kurs nach späteren Splits
+            if ((int)$seg['zu'] === 0 && (float)$seg['einheiten'] > 0 && $seg['richtung'] > 0) {
+                $handel[] = [(int)$seg['auf'], (float)betragInEuro((float)$seg['betrag'] * max(1.0, (float)$seg['hebel']) / (float)$seg['einheiten'], 'USD', $usdAuf)];
+            }
+            if ((int)$seg['auf'] >= $sichtVon && (int)$seg['auf'] <= $bisTs) {
+                $geschaefte[] = [(int)$seg['auf'], round((float)$seg['einheiten'], 6), round((float)betragInEuro((float)$seg['betrag'], 'USD', $usdAuf), 2), 'kauf', 'etoro'];
+            }
+            if ((int)$seg['zu'] > 0 && (int)$seg['zu'] >= $sichtVon && (int)$seg['zu'] <= $bisTs) {
+                $usdZu = fxZum($fx, $fxPruef, 'USD', (int)$seg['zu']);
+                $fxPruef = [];
+                $geschaefte[] = [(int)$seg['zu'], -round((float)$seg['einheiten'], 6), -round((float)betragInEuro((float)$seg['betrag'] + (float)$seg['gewinn'], 'USD', $usdZu), 2), 'verkauf', 'etoro'];
+            }
+        }
+        usort($handel, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+        usort($geschaefte, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+        // Kurse auf den damaligen Stand zurückrechnen – nur mit geprüften Splits
+        $pruefIdx = [];
+        $splits = splitsPruefen($h, $handel, static function (float $k, int $ts) use ($fx, &$pruefIdx, $w): ?float {
+            $pruefIdx = [];
+            return betragInEuro($k, $w, fxZum($fx, $pruefIdx, $w, $ts));
+        });
+        if ($splits !== []) {
+            foreach ($h['t'] as $i => $ts) {
+                $h['c'][$i] *= splitFaktor($splits, $ts);
+            }
+        }
         $werte = [];
         $fluesse = [];
         $luecke = false;
@@ -334,12 +437,17 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
                     $luecke = true;
                     continue;
                 }
+                $segKurs = $kursEur;
+                if ($zu > 0 && $splits !== []) {
+                    // geschlossene eToro-Position: Stück und Einstieg stehen auf dem Stand bei Schließung
+                    $segKurs = $kursEur * splitFaktor($splits, $zu) / splitFaktor($splits, $ts);
+                }
                 if ($seg['hebel'] <= 1 && $seg['richtung'] > 0) {
-                    $wert += $einheiten * $kursEur;
+                    $wert += $einheiten * $segKurs;
                 } else {
                     // Einsatz plus Gewinn/Verlust seit Eröffnung (bei Hebel und Short)
                     $kostenEur = betragInEuro((float)$seg['kosten'], $seg['waehrung'], fxZum($fx, $fxIdx, $seg['waehrung'], $ts));
-                    $wert += (float)$einsatzEur + $seg['richtung'] * ($einheiten * $kursEur - (float)$kostenEur);
+                    $wert += (float)$einsatzEur + $seg['richtung'] * ($einheiten * $segKurs - (float)$kostenEur);
                 }
             }
             $werte[] = round($wert, 2);
@@ -353,10 +461,45 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
         $ergebnis[] = [
             'id' => $s, 'name' => $t['name'], 'symbol' => $s, 'art' => $t['art'], 'quellen' => array_keys($t['quellen']),
             'w' => $werte, 'f' => $fluesse, 'div' => round($div, 2), 'luecke' => $luecke,
+            'k' => array_slice($geschaefte, -300),
         ];
     }
     usort($ergebnis, static fn(array $a, array $b): int => end($b['w']) <=> end($a['w']));
-    return ['fertig' => true, 'von' => $von, 'bis' => date('Y-m-d', $bisTs), 'punkte' => $raster, 'start' => $start, 'titel' => $ergebnis];
+    return ['fertig' => true, 'von' => $von, 'bis' => date('Y-m-d', $bisTs), 'punkte' => $raster, 'start' => $start, 'titel' => $ergebnis,
+        'katalog' => titelKatalog($d)];
+}
+
+/** Alle Titel, die je im Depot waren, mit Haltedauer – auch außerhalb des gewählten Zeitraums. */
+function titelKatalog(array $d): array
+{
+    $liste = [];
+    foreach (verlaufTitel($d) as $id => $t) {
+        $erster = PHP_INT_MAX;
+        $letzter = 0;
+        $offen = false;
+        foreach ($t['tr'] as $v) {
+            $stueck = 0.0;
+            foreach ($v['e'] as $e) {
+                $et = (int)strtotime($e[0] . ' 12:00:00');
+                $erster = min($erster, $et);
+                $letzter = max($letzter, $et);
+                $stueck += (float)$e[1];
+            }
+            $offen = $offen || $stueck > 1e-6;
+        }
+        foreach ($t['et'] as $seg) {
+            $erster = min($erster, (int)$seg['auf']);
+            $letzter = max($letzter, (int)($seg['zu'] ?: $seg['auf']));
+            $offen = $offen || (int)$seg['zu'] === 0;
+        }
+        if ($erster === PHP_INT_MAX) {
+            continue;
+        }
+        $liste[] = ['id' => $id, 'name' => $t['name'], 'symbol' => $id, 'quellen' => array_keys($t['quellen']),
+            'erster' => $erster, 'letzter' => $letzter, 'aktuell' => $offen];
+    }
+    usort($liste, static fn(array $a, array $b): int => strcasecmp($a['name'], $b['name']));
+    return $liste;
 }
 
 /** Frühestes Datum mit Buchungen (für „Max“). */
