@@ -26,7 +26,7 @@ header('X-Frame-Options: DENY');
 header('Referrer-Policy: same-origin');
 header('Cache-Control: no-store');
 header("Content-Security-Policy: default-src 'self'; img-src 'self' data: https://commons.wikimedia.org https://upload.wikimedia.org; "
-    . "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    . "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://ntfy.sh; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
 
 // ---------------------------------------------------------------------------
 // Automatische Prüfung (GitHub Actions) und Selbsttest nach dem Deployment
@@ -55,6 +55,8 @@ if (isset($_GET['cron'])) {
         $erg['zuordnung_offen'] = depotZuordnen(60.0);
     }
     cacheAufraeumen();
+    // Push-Meldungen, die ntfy vom Webserver nicht angenommen hat, verschickt der Aufrufer (GitHub)
+    $erg['ntfy'] = ntfyWarteschlangeHolen();
     echo json_encode(['ok' => true] + $erg, JSON_UNESCAPED_UNICODE);
     exit;
 }

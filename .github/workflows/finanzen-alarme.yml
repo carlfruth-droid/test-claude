@@ -20,4 +20,18 @@ jobs:
           TOKEN=$(printf '%s' "finanzzentrale-cron:$FTP_PASSWORD" | sha256sum | cut -c1-40)
           echo "::add-mask::$TOKEN"
           curl -fsS -m 170 "https://fruthzeug.de/projekte/finanzen/?cron=$TOKEN" -o antwort.json
-          python3 -c "import json; d = json.load(open('antwort.json')); print('ok' if d.get('ok') else 'Fehler', '– geprüft:', d.get('geprueft'), '– ausgelöst:', d.get('ausgeloest'))"
+          python3 - <<'PY'
+          import json, urllib.request
+          d = json.load(open('antwort.json'))
+          print('ok' if d.get('ok') else 'Fehler', '– geprüft:', d.get('geprueft'), '– ausgelöst:', d.get('ausgeloest'))
+          # Push-Meldungen, die ntfy vom Webhosting nicht angenommen hat (Drosselung), von hier aus schicken
+          gesendet = 0
+          for p in d.get('ntfy') or []:
+              try:
+                  req = urllib.request.Request(p['server'].rstrip('/') + '/', data=json.dumps(p['nachricht']).encode(), headers={'Content-Type': 'application/json'})
+                  urllib.request.urlopen(req, timeout=15)
+                  gesendet += 1
+              except Exception as e:
+                  print('Push nicht zugestellt:', type(e).__name__)
+          print('Push nachgeschickt:', gesendet)
+          PY

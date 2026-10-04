@@ -180,14 +180,35 @@ function ntfySenden(string $thema, string $titel, string $text, string $link): a
     if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $name)) {
         return [false, 'ungültiges Thema'];
     }
-    $r = http($server . '/', [
-        'post' => (string)json_encode(['topic' => $name, 'title' => $titel, 'message' => $text, 'click' => $link, 'tags' => ['chart_with_upwards_trend']]),
-        'kopf' => ['Content-Type: application/json'], 'zeit' => 12,
-    ]);
+    $nachricht = ['topic' => $name, 'title' => $titel, 'message' => $text, 'click' => $link, 'tags' => ['chart_with_upwards_trend']];
+    $r = http($server . '/', ['post' => (string)json_encode($nachricht), 'kopf' => ['Content-Type: application/json'], 'zeit' => 12]);
     if ($r['code'] >= 200 && $r['code'] < 300) {
         return [true, 'von ntfy angenommen'];
     }
-    return [false, $r['code'] === 0 ? 'ntfy nicht erreichbar (' . ($r['fehler'] ?: 'Zeitüberschreitung') . ')' : 'ntfy meldet HTTP ' . $r['code']];
+    // ntfy.sh drosselt geteilte Webhosting-Adressen (HTTP 429) – dann schickt die
+    // automatische Prüfung (GitHub) die Meldung von dort aus nach
+    ntfyVormerken($server, $nachricht);
+    $grund = $r['code'] === 0 ? 'nicht erreichbar' : 'HTTP ' . $r['code'];
+    return [false, 'ntfy weist den Webserver ab (' . $grund . ') – wird über die automatische Prüfung innerhalb von etwa 30 Minuten nachgeschickt'];
+}
+
+function ntfyVormerken(string $server, array $nachricht): void
+{
+    datenAendern(function (array &$d) use ($server, $nachricht): void {
+        $liste = array_filter((array)($d['ntfy_warteschlange'] ?? []), static fn(array $x): bool => (int)$x['zeit'] > time() - 86400);
+        $liste[] = ['zeit' => time(), 'server' => $server, 'nachricht' => $nachricht];
+        $d['ntfy_warteschlange'] = array_slice(array_values($liste), -50);
+    });
+}
+
+/** Vorgemerkte Push-Meldungen abholen (und aus der Warteschlange nehmen). */
+function ntfyWarteschlangeHolen(): array
+{
+    return datenAendern(function (array &$d): array {
+        $liste = (array)($d['ntfy_warteschlange'] ?? []);
+        $d['ntfy_warteschlange'] = [];
+        return array_values(array_map(static fn(array $x): array => ['server' => $x['server'], 'nachricht' => $x['nachricht']], $liste));
+    });
 }
 
 /** Status der automatischen Prüfung für die Anzeige: ['ok' => bool, 'text' => …] */

@@ -106,6 +106,18 @@
   });
   window.addEventListener('pageshow', function (e) { if (e.persisted) { zeitenNachfuehren(); $$('details.akk[open]').forEach(function (akk) { if (veraltet(akk)) { nachladen(akk, true); } }); } });
 
+  // ---------- Push-Test direkt vom Gerät (ntfy drosselt das Webhosting) ----------
+  $$('[data-ntfy-test]').forEach(function (k) {
+    k.addEventListener('click', function () {
+      var ziel = $('[data-ntfy-ergebnis]');
+      k.disabled = true;
+      fetch('https://ntfy.sh/', { method: 'POST', body: JSON.stringify({ topic: k.getAttribute('data-thema'), title: '✅ Push-Test aus deiner Finanzzentrale', message: 'Wenn du das liest, kommen deine Push-Alarme an.', click: k.getAttribute('data-link'), tags: ['chart_with_upwards_trend'] }) })
+        .then(function (r) { ziel.textContent = r.ok ? 'Verschickt – kommt gleich in der ntfy-App an.' : 'ntfy meldet HTTP ' + r.status + '.'; ziel.className = 'klein ' + (r.ok ? 'plus' : 'minus'); })
+        .catch(function () { ziel.textContent = 'ntfy war nicht erreichbar.'; ziel.className = 'klein minus'; })
+        .then(function () { k.disabled = false; });
+    });
+  });
+
   // ---------- Depot: importierte Titel schrittweise zuordnen ----------
   var zuordnen = $('[data-zuordnen]');
   if (zuordnen) {

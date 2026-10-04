@@ -1624,6 +1624,7 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
   <div class="kopierfeld"><code id="ntfy-thema"><?= e($thema) ?></code><button class="knopf klein zweit" type="button" data-kopieren="#ntfy-thema">Kopieren</button></div>
   <p class="klein leise">Das Thema ist zufällig und nur dir bekannt – wer es nicht kennt, sieht deine Meldungen nicht. Wichtig: erst abonnieren, dann den Test senden. Zur Kontrolle kannst du die Meldungen auch im Browser sehen: <a href="https://ntfy.sh/<?= e(rawurlencode($thema)) ?>" target="_blank" rel="noopener noreferrer">ntfy.sh/<?= e($thema) ?></a>.</p>
   <label class="schalter"><input type="checkbox" name="push" value="1"<?= einstellung($d, 'ntfy_aus') !== '1' ? ' checked' : '' ?>><span>Push-Meldungen senden</span></label>
+  <p><button class="knopf klein zweit" type="button" data-ntfy-test data-thema="<?= e($thema) ?>" data-link="<?= e(fzBasisUrl()) ?>"><?= ico('glocke') ?> Push sofort testen (vom Handy aus)</button> <span class="klein" data-ntfy-ergebnis></span></p>
   <div class="knopf-reihe">
     <button class="knopf" type="submit"><?= ico('haken') ?> Speichern</button>
     <button class="knopf zweit" type="submit" name="test" value="1"><?= ico('glocke') ?> Speichern und Test senden</button>
