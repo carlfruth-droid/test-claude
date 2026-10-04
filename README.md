@@ -75,7 +75,7 @@ Erreichbar unter <https://fruthzeug.de/projekte/finanzen/>.
 - **Schlüssel:** Die KI-Einschätzung nutzt das Secret `ANTHROPIC_API_KEY`. Das Token für die
   automatische Alarm-Prüfung wird beim Deployment aus `FTP_PASSWORD` abgeleitet, ein eigenes
   Secret ist nicht nötig.
-- **Alarm-Prüfung:** `.github/workflows/finanzen-alarme.yml` ruft die Seite werktags etwa alle
+- **Alarm-Prüfung:** `.github/workflows/finanzen-alarme.yml` ruft die Seite täglich etwa alle
   30 Minuten auf. GitHub führt zeitgesteuerte Workflows nur auf dem Standard-Branch aus.
 - **Depots:** Trade Republic per CSV-Transaktionsexport aus der App, eToro per Kontoauszug als Excel-Datei (offene Positionen, Kurse live) oder über die offizielle API
   (Schlüssel mit Leserecht, Umgebung „Real“).
