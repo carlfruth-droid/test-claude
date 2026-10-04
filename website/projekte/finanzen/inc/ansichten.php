@@ -1430,6 +1430,7 @@ endforeach; ?>
 </ol>
 <form method="post" action="./?seite=depot" enctype="multipart/form-data" class="formular">
   <?= csrfFeld() ?><input type="hidden" name="aktion" value="tr_vorschau">
+  <p class="klein leise">Auf dem iPhone: Die Datei muss in der App <strong>Dateien</strong> liegen. In der Trade-Republic-App beim Export auf <strong>Teilen</strong> → <strong>In Dateien sichern</strong> tippen (z.&nbsp;B. in „Downloads“). Danach hier auf das Feld tippen → <strong>Durchsuchen</strong> → Datei wählen.</p>
   <label class="feld datei"><span>CSV-Datei von Trade Republic</span><input type="file" name="datei" required></label>
   <button class="knopf" type="submit"><?= ico('hoch') ?> Hochladen und prüfen</button>
 </form>
@@ -1452,7 +1453,8 @@ endforeach; ?>
 </ol>
 <form method="post" action="./?seite=depot" enctype="multipart/form-data" class="formular" data-laden="Kontoauszug wird gelesen …">
   <?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_vorschau">
-  <label class="feld datei"><span>Kontoauszug von eToro (.xlsx)</span><input type="file" name="datei" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label>
+  <p class="klein leise">Auf dem iPhone: Die Datei muss in der App <strong>Dateien</strong> liegen. In der eToro-App bzw. Safari beim Export auf <strong>Teilen</strong> → <strong>In Dateien sichern</strong> tippen (z.&nbsp;B. in „Downloads“). Danach hier auf das Feld tippen → <strong>Durchsuchen</strong> → Datei wählen.</p>
+  <label class="feld datei"><span>Kontoauszug von eToro (.xlsx)</span><input type="file" name="datei" required></label>
   <button class="knopf" type="submit"><?= ico('hoch') ?> Hochladen und prüfen</button>
 </form>
 <?php if ($ea !== null): ?>
@@ -1645,7 +1647,7 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
 <details class="unterbereich"><summary><?= ico('hoch') ?> Daten aus einem Export wiederherstellen</summary>
   <form method="post" action="./?seite=einstellungen" enctype="multipart/form-data" class="formular" data-bestaetigen="Alle aktuellen Daten durch den Export ersetzen?">
     <?= csrfFeld() ?><input type="hidden" name="aktion" value="import">
-    <label class="feld datei"><span>Export-Datei (.json)</span><input type="file" name="datei" accept=".json,application/json" required></label>
+    <label class="feld datei"><span>Export-Datei (.json)</span><input type="file" name="datei" required></label>
     <button class="knopf gefahr" type="submit">Wiederherstellen</button>
   </form>
 </details>
