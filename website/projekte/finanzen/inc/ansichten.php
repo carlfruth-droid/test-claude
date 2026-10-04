@@ -20,6 +20,7 @@ const FZ_ICONS = [
     'stift' => '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
     'stern' => '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
     'extern' => '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    'kurve' => '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
     'neu' => '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
     'haken' => '<polyline points="20 6 9 17 4 12"/>',
     'info' => '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
@@ -146,6 +147,7 @@ function seite(string $titel, string $inhalt, string $aktiv = '', ?array $d = nu
         ['', 'home', 'Übersicht', ''],
         ['firmen', 'liste', 'Meine Firmen', $firmenAnzahl > 0 ? (string)$firmenAnzahl : ''],
         ['depot', 'depot', 'Depot', ''],
+        ['verlauf', 'kurve', 'Depot-Verlauf', ''],
         ['suche', 'suche', 'Firma prüfen', ''],
         ['alarme', 'glocke', 'Alarme & Termine', $ungelesen > 0 ? (string)$ungelesen : ''],
         ['einstellungen', 'regler', 'Einstellungen', ''],
@@ -427,16 +429,24 @@ function seiteUebersicht(array $d, array $kurse, ?array $depot): string
 // Meine Firmen
 // ---------------------------------------------------------------------------
 
-function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung): string
+function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung, array $imDepot = [], array $woche = []): string
 {
+    $gesamtProz = static fn(array $f): ?float => isset($imDepot[$f['symbol']]) && $imDepot[$f['symbol']]['einstand'] > 0
+        ? $imDepot[$f['symbol']]['wert'] / $imDepot[$f['symbol']]['einstand'] - 1 : null;
     $liste = array_values(array_filter($d['firmen'], static fn(array $f): bool => $filter === '' || $f['status'] === $filter));
     $seitPruefung = static function (array $f) use ($kurse): ?float {
         $erste = $f['pruefungen'][0]['kurs'] ?? null;
         $jetzt = $kurse[$f['symbol']]['kurs'] ?? null;
         return $erste && $jetzt ? ($jetzt - $erste) / $erste : null;
     };
-    usort($liste, static function (array $a, array $b) use ($sortierung, $kurse, $seitPruefung): int {
+    usort($liste, static function (array $a, array $b) use ($sortierung, $kurse, $seitPruefung, $imDepot, $woche, $gesamtProz): int {
         switch ($sortierung) {
+            case 'depotwert':
+                return ($imDepot[$b['symbol']]['wert'] ?? -1) <=> ($imDepot[$a['symbol']]['wert'] ?? -1) ?: strcasecmp($a['name'], $b['name']);
+            case 'woche':
+                return ($woche[$b['symbol']] ?? -9) <=> ($woche[$a['symbol']] ?? -9);
+            case 'gesamt':
+                return ($gesamtProz($b) ?? -9) <=> ($gesamtProz($a) ?? -9) ?: strcasecmp($a['name'], $b['name']);
             case 'heute':
                 return ($kurse[$b['symbol']]['aend_proz'] ?? -9) <=> ($kurse[$a['symbol']]['aend_proz'] ?? -9);
             case 'pruefung':
@@ -463,7 +473,7 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung)
   <form method="get" action="./" class="sortieren">
     <input type="hidden" name="seite" value="firmen"><input type="hidden" name="status" value="<?= e($filter) ?>">
     <select name="sort" data-auto-absenden aria-label="Sortierung">
-      <?php foreach (['name' => 'Name', 'heute' => 'Heute', 'seit' => 'Seit erster Prüfung', 'pruefung' => 'Zuletzt geprüft', 'bewertung' => 'Meine Bewertung'] as $k => $t): ?>
+      <?php foreach (['name' => 'Name', 'depotwert' => 'Depotwert', 'heute' => '% heute', 'woche' => '% Woche', 'gesamt' => '% Ertrag insgesamt', 'seit' => 'Seit erster Prüfung', 'pruefung' => 'Zuletzt geprüft', 'bewertung' => 'Meine Bewertung'] as $k => $t): ?>
         <option value="<?= e($k) ?>"<?= $sortierung === $k ? ' selected' : '' ?>><?= e($t) ?></option>
       <?php endforeach; ?>
     </select>
@@ -473,11 +483,17 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung)
   <?php if ($liste === []): ?>
     <?= leer($d['firmen'] === [] ? 'Noch keine Firmen. Über <a href="' . e(url(['seite' => 'suche'])) . '">Firma prüfen</a> fügst du die erste hinzu.' : 'Keine Firma mit diesem Status.') ?>
   <?php else: foreach ($liste as $f):
-      $seit = $seitPruefung($f); ?>
+      $seit = $seitPruefung($f);
+      $dep = $imDepot[$f['symbol']] ?? null;
+      $wo = $woche[$f['symbol']] ?? null;
+      $ges = $gesamtProz($f); ?>
     <div class="filterbar">
       <?= firmaZeile($f, $kurse[$f['symbol']] ?? null, true) ?>
-      <?php if ($seit !== null || $f['bewertung'] > 0): ?>
+      <?php if ($seit !== null || $f['bewertung'] > 0 || $dep !== null || $wo !== null): ?>
         <div class="zeile-extra">
+          <?php if ($dep !== null): ?><span>Im Depot <b><?= e(geld($dep['wert'])) ?></b></span><?php endif; ?>
+          <?php if ($ges !== null): ?><span>Ertrag <b class="<?= klasse($ges) ?>"><?= proz($ges, 1, true) ?></b></span><?php endif; ?>
+          <?php if ($wo !== null): ?><span>Woche <b class="<?= klasse($wo) ?>"><?= proz($wo, 1, true) ?></b></span><?php endif; ?>
           <?php if ($seit !== null): ?><span>Seit erster Prüfung <b class="<?= klasse($seit) ?>"><?= proz($seit, 1, true) ?></b></span><?php endif; ?>
           <?php if ($f['bewertung'] > 0): ?><span class="sterne-klein" aria-label="<?= (int)$f['bewertung'] ?> von 5 Sternen"><?= str_repeat('★', (int)$f['bewertung']) . '<i>' . str_repeat('★', 5 - (int)$f['bewertung']) . '</i>' ?></span><?php endif; ?>
         </div>
@@ -1014,6 +1030,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     <span class="chart-aend"></span>
   </div>
   <div class="chart" data-chart></div>
+  <div class="chips schnitte"><button type="button" class="chip" data-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button></div>
   <script type="application/json" id="chart-daten"><?= $chartDaten ?></script>
 </section>
 
@@ -1315,6 +1332,7 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
     }
     ob_start(); ?>
 <h1 class="seitentitel">Depot</h1>
+<p><a class="knopf zweit" href="./?seite=verlauf"><?= ico('kurve') ?> Verlauf über einen Zeitraum</a></p>
 <?php if ($vorschau !== null): ?>
   <section class="karte vorschau">
     <h2 class="karten-titel"><?= ico('hoch') ?> Trade-Republic-Import prüfen</h2>
@@ -1604,13 +1622,24 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
     <li>In der App auf <strong>+</strong> tippen und dieses Thema abonnieren (Server: ntfy.sh):</li>
   </ol>
   <div class="kopierfeld"><code id="ntfy-thema"><?= e($thema) ?></code><button class="knopf klein zweit" type="button" data-kopieren="#ntfy-thema">Kopieren</button></div>
-  <p class="klein leise">Das Thema ist zufällig und nur dir bekannt – wer es nicht kennt, sieht deine Meldungen nicht.</p>
+  <p class="klein leise">Das Thema ist zufällig und nur dir bekannt – wer es nicht kennt, sieht deine Meldungen nicht. Wichtig: erst abonnieren, dann den Test senden. Zur Kontrolle kannst du die Meldungen auch im Browser sehen: <a href="https://ntfy.sh/<?= e(rawurlencode($thema)) ?>" target="_blank" rel="noopener noreferrer">ntfy.sh/<?= e($thema) ?></a>.</p>
   <label class="schalter"><input type="checkbox" name="push" value="1"<?= einstellung($d, 'ntfy_aus') !== '1' ? ' checked' : '' ?>><span>Push-Meldungen senden</span></label>
   <div class="knopf-reihe">
     <button class="knopf" type="submit"><?= ico('haken') ?> Speichern</button>
     <button class="knopf zweit" type="submit" name="test" value="1"><?= ico('glocke') ?> Speichern und Test senden</button>
   </div>
 </form>
+<?php $log = (array)($d['benachrichtigungen'] ?? []); if ($log !== []): ?>
+  <h4>Zuletzt verschickt</h4>
+  <ul class="liste-schlicht">
+    <?php foreach (array_slice($log, 0, 5) as $eintrag): ?>
+      <li><span><?= e(datumZeit((int)$eintrag['zeit'])) ?> · <?= e($eintrag['titel']) ?><small class="leise" style="display:block">
+        <?= e(implode(' · ', array_map(static fn(string $w, array $x): string => ($w === 'email' ? 'E-Mail' : 'Push') . ': ' . $x['text'], array_keys((array)$eintrag['wege']), (array)$eintrag['wege'])) ?: 'kein Weg eingerichtet') ?></small></span>
+        <b class="<?= in_array(true, array_column((array)$eintrag['wege'], 'ok'), true) ? 'plus' : 'minus' ?>"><?= in_array(true, array_column((array)$eintrag['wege'], 'ok'), true) ? 'ok' : 'Fehler' ?></b></li>
+    <?php endforeach; ?>
+  </ul>
+  <p class="klein leise">„An den Mailserver übergeben“ heißt: Der Server hat die E-Mail angenommen. Kommt sie trotzdem nicht an, liegt sie meist im Spam-Ordner.</p>
+<?php endif; ?>
 <?= akk('Benachrichtigungen', 'glocke', (string)ob_get_clean(), ['offen' => true, 'id' => 'e-benachrichtigung']) ?>
 
 <?php ob_start(); ?>
@@ -1665,6 +1694,48 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
 </ul>
 <p class="klein leise">Alle Angaben ohne Gewähr. Die Finanzzentrale ist ein privates Werkzeug und keine Anlageberatung.</p>
 <?= akk('Datenquellen', 'info', (string)ob_get_clean(), ['id' => 'e-quellen']) ?>
+<?php
+    return (string)ob_get_clean();
+}
+
+function seiteVerlauf(array $d): string
+{
+    $hinweise = verlaufHinweise($d);
+    $hatDaten = isset($d['broker']['traderepublic']['verlauf']) || !empty($d['broker']['etoro_auszug']['segmente']);
+    ob_start(); ?>
+<h1 class="seitentitel">Depot-Verlauf</h1>
+<?php foreach ($hinweise as $h): ?><div class="hinweis"><?= e($h) ?></div><?php endforeach; ?>
+<?php if (!$hatDaten): ?>
+  <?= leer('Noch keine Buchungen importiert. Lade unter „Depot“ deinen Trade-Republic-Export oder den eToro-Kontoauszug hoch.') ?>
+<?php else: ?>
+<section class="karte">
+  <div class="chips" role="group" aria-label="Zeitraum">
+    <?php foreach (['1t' => '1 T', '1w' => '1 W', '1m' => '1 M', '3m' => '3 M', '6m' => '6 M', 'ytd' => 'Seit 1.1.', '1j' => '1 J', '3j' => '3 J', '5j' => '5 J', 'max' => 'Max'] as $k => $t): ?><button type="button" class="chip" data-zeitraum="<?= e($k) ?>"><?= e($t) ?></button><?php endforeach; ?>
+  </div>
+  <form class="zeitraum-frei" data-verlauf-frei>
+    <label class="feld"><span>Von</span><input type="date" name="von" min="<?= e(verlaufBeginn($d)) ?>" max="<?= e(date('Y-m-d')) ?>"></label>
+    <label class="feld"><span>Bis</span><input type="date" name="bis" min="<?= e(verlaufBeginn($d)) ?>" max="<?= e(date('Y-m-d')) ?>"></label>
+    <button class="knopf zweit" type="submit">Anzeigen</button>
+  </form>
+  <div class="chips" role="group" aria-label="Depot">
+    <?php foreach (['alle' => 'Alle Depots', 'traderepublic' => 'Trade Republic', 'etoro' => 'eToro'] as $k => $t): ?><button type="button" class="chip" data-quelle="<?= e($k) ?>"><?= e($t) ?></button><?php endforeach; ?>
+  </div>
+</section>
+<section class="karte" data-verlauf data-beginn="<?= e(verlaufBeginn($d)) ?>">
+  <span class="karten-titel"><?= ico('kurve') ?> Wert der Auswahl</span>
+  <div class="chart verlauf-chart" data-verlauf-chart></div>
+  <div class="chips schnitte"><button type="button" class="chip" data-verlauf-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-verlauf-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button></div>
+  <div class="raster" data-verlauf-kennzahlen></div>
+  <p class="klein leise" data-verlauf-stand></p>
+  <p class="klein leise">Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl berücksichtigt, wann Geld hinzukam (Modified Dietz). Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
+</section>
+<section class="karte">
+  <span class="karten-titel"><?= ico('liste') ?> Titel auswählen</span>
+  <input type="search" placeholder="Titel suchen …" data-verlauf-suche aria-label="Titel suchen">
+  <div class="knopf-reihe"><button type="button" class="knopf-text" data-verlauf-alle="1">Alle auswählen</button><button type="button" class="knopf-text" data-verlauf-alle="0">Keine</button></div>
+  <ul class="positionen verlauf-liste" data-verlauf-liste></ul>
+</section>
+<?php endif; ?>
 <?php
     return (string)ob_get_clean();
 }

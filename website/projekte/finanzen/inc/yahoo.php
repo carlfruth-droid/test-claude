@@ -278,6 +278,47 @@ function yahooKurse(array $symbole): array
     return $erg;
 }
 
+/** Veränderung über 5 Handelstage je Symbol (Anteil, z. B. 0.021), eine Stunde zwischengespeichert. */
+function yahooWoche(array $symbole): array
+{
+    $symbole = array_values(array_unique(array_filter(array_map('strval', $symbole))));
+    $erg = [];
+    $fehlend = [];
+    foreach ($symbole as $s) {
+        $c = cacheLesen('woche:' . $s, 3600);
+        if ($c !== null && $c['frisch']) {
+            $erg[$s] = $c['wert'];
+        } else {
+            $fehlend[] = $s;
+        }
+    }
+    $anfragen = [];
+    foreach (array_chunk($fehlend, 20) as $i => $teil) {
+        $anfragen[$i] = ['url' => 'https://query1.finance.yahoo.com/v8/finance/spark?symbols=' . rawurlencode(implode(',', $teil))
+            . '&range=5d&interval=1d', 'ua' => 'browser', 'zeit' => 15];
+    }
+    foreach (httpViele($anfragen) as $r) {
+        $j = $r['code'] === 200 ? json_decode($r['body'], true) : null;
+        if (!is_array($j)) {
+            continue;
+        }
+        $karte = [];
+        foreach (($j['spark']['result'] ?? []) as $res) {
+            $karte[(string)($res['symbol'] ?? '')] = $res;
+        }
+        foreach ($karte + $j as $s => $sp) {
+            if (!is_array($sp) || !in_array((string)$s, $fehlend, true) || isset($erg[$s])) {
+                continue;
+            }
+            // Mit range=5d ist der „Vortag“ der Schluss vor fünf Handelstagen
+            $proz = kursAusSpark($sp)['aend_proz'];
+            $erg[(string)$s] = $proz;
+            cacheSchreiben('woche:' . $s, $proz);
+        }
+    }
+    return $erg;
+}
+
 function verlaufAuswerten(array $j): ?array
 {
     $res = $j['chart']['result'][0] ?? null;
