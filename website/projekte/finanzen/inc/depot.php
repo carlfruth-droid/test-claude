@@ -453,7 +453,7 @@ function trNativLesen(array $zeilen): array
         $rein = array_values(array_unique($rein));
         foreach ($raus as [$isin, $datum, $st, $kosten]) {
             // Umtausch: der Einstand wandert zum neuen Titel; wertlos ausgebucht: kein Geldfluss
-            $verlauf[$isin]['e'][] = [$datum, $st, $rein !== [] ? round(-$kosten, 2) : 0.0];
+            $verlauf[$isin]['e'][] = [$datum, $st, $rein !== [] ? round(-$kosten, 2) : 0.0, 'm'];
         }
         if ($rein !== []) {
             foreach ($rein as $ziel) {
@@ -461,7 +461,7 @@ function trNativLesen(array $zeilen): array
             }
             $reinZeilen = array_values(array_filter($gruppe, static fn(array $x): bool => (float)$x['stueck'] > 0));
             foreach ($reinZeilen as $b) {
-                $verlauf[$b['isin']]['e'][] = [$b['datum'], (float)$b['stueck'], round($wegKosten / count($reinZeilen), 2)];
+                $verlauf[$b['isin']]['e'][] = [$b['datum'], (float)$b['stueck'], round($wegKosten / count($reinZeilen), 2), 'm'];
             }
         } elseif ($gruppe !== []) {
             // Wertlos, ausgebucht, fällig: der Einstand ist verloren (Erlöse kamen ggf. als Zahlung)

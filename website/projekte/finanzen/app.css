@@ -484,3 +484,11 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .chips.schnitte i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 .chip.aktiv i { background: #fff !important; }
 .chart-tip small { display: block; }
+.chart .marke { stroke: #fff; stroke-width: 1; }
+.chart .marke.kauf { fill: #13814a; }
+.chart .marke.verkauf { fill: #c4302b; }
+.verlauf-liste li.gruppe { display: block; font-size: .8rem; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--leise); padding: 14px 0 4px; border-bottom: 0; }
+.verlauf-liste li > span:first-child { flex: 1; min-width: 0; }
+.verlauf-liste li > span:first-child strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verlauf-liste li > span:first-child small { display: block; color: var(--leise); }
+.geschaefte li { align-items: flex-start; }
