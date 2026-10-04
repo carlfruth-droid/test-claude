@@ -18,6 +18,7 @@ require FZ_APP . '/inc/ki.php';
 require FZ_APP . '/inc/alarme.php';
 require FZ_APP . '/inc/xlsx.php';
 require FZ_APP . '/inc/depot.php';
+require FZ_APP . '/inc/verlauf.php';
 require FZ_APP . '/inc/ansichten.php';
 
 header('X-Robots-Tag: noindex, nofollow');
@@ -78,7 +79,11 @@ function diagnose(): array
         'wikidata' => wikidataZuIsin('DE0007164600') !== '' ? 'ok' : 'FEHLER',
         'news' => googleNews('SAP', 'de') !== [] ? 'ok' : 'FEHLER',
         'ki_schluessel' => kiSchluessel() !== '' ? 'vorhanden' : 'fehlt',
-        'mail' => function_exists('mail') ? 'verfügbar' : 'fehlt',
+        'mail' => function_exists('mail') ? 'verfügbar' . (ini_get('sendmail_path') ? '' : ' (kein sendmail_path)') : 'fehlt',
+        'ntfy' => (static function (): string {
+            $r = http('https://ntfy.sh/fz-diagnose-' . bin2hex(random_bytes(6)), ['post' => 'Diagnose', 'zeit' => 10]);
+            return $r['code'] >= 200 && $r['code'] < 300 ? 'ok' : 'FEHLER (HTTP ' . $r['code'] . ($r['fehler'] ? ', ' . $r['fehler'] : '') . ')';
+        })(),
         'eingerichtet' => passwortGesetzt(),
         'php_grenzen' => [
             'max_execution_time' => (string)ini_get('max_execution_time'),
@@ -532,8 +537,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                     }
                 });
                 if (!empty($_POST['test'])) {
-                    $ok = benachrichtigen(datenLaden(), '✅ Test aus deiner Finanzzentrale', 'Wenn du das liest, kommen deine Alarme an. (Falls die E-Mail fehlt: bitte auch im Spam-Ordner nachsehen.)', fzBasisUrl());
-                    meldung($ok ? 'Gespeichert und Test verschickt.' : 'Gespeichert – der Test konnte aber nicht verschickt werden.', $ok ? 'ok' : 'fehler');
+                    $erg = benachrichtigenMitDetails(datenLaden(), '✅ Test aus deiner Finanzzentrale', 'Wenn du das liest, kommen deine Alarme an. (Falls die E-Mail fehlt: bitte auch im Spam-Ordner nachsehen.)', fzBasisUrl());
+                    $teile = [];
+                    foreach ($erg as $weg => $e) {
+                        $teile[] = ($weg === 'email' ? 'E-Mail' : 'Push') . ': ' . $e['text'];
+                    }
+                    $ok = in_array(true, array_column($erg, 'ok'), true);
+                    meldung($erg === [] ? 'Gespeichert – aber weder E-Mail noch Push ist eingerichtet.' : 'Test verschickt. ' . implode(' · ', $teile) . '.', $ok ? 'ok' : 'fehler');
                 } else {
                     meldung('Gespeichert.');
                 }
@@ -597,6 +607,21 @@ if (isset($_GET['api'])) {
         $treffer = array_slice(firmenSuchen((string)($_GET['q'] ?? '')), 0, 8);
         echo json_encode(array_map(static fn(array $t): array => ['name' => $t['name'], 'symbol' => $t['symbol'], 'boerse' => $t['boerse'],
             'url' => firmaUrl($t['symbol'], $t['isin'] ?? '')], $treffer), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($_GET['api'] === 'verlauf' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {
+        session_write_close();
+        if (function_exists('set_time_limit')) { @set_time_limit(60); }
+        $von = (string)($_POST['von'] ?? '');
+        $bis = (string)($_POST['bis'] ?? '');
+        $gueltig = static fn(string $t): bool => (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $t) && strtotime($t) !== false;
+        if (!$gueltig($von) || !$gueltig($bis) || $von > $bis) {
+            echo json_encode(['fertig' => true, 'punkte' => [], 'titel' => [], 'fehler' => 'Ungültiger Zeitraum']);
+            exit;
+        }
+        $bis = min($bis, date('Y-m-d'));
+        $vorlauf = max(0, min(100, (int)($_POST['vorlauf'] ?? 0)));
+        echo json_encode(depotVerlauf(datenLaden(), $von, $bis, 8.0, $vorlauf), JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
         exit;
     }
     if ($_GET['api'] === 'zuordnen' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {
@@ -735,7 +760,20 @@ switch ($seite) {
         $filter = (string)($_GET['status'] ?? '');
         $filter = isset(FZ_STATUS[$filter]) ? $filter : '';
         $sort = (string)($_GET['sort'] ?? 'name');
-        seite('Meine Firmen', seiteFirmen($d, yahooKurse(array_keys($d['firmen'])), $filter, $sort), 'firmen', $d);
+        // Depotwert und Ertrag je Firma (über alle Depots), Wochenveränderung des Kurses
+        $imDepot = [];
+        foreach (depotUebersicht($d)['positionen'] as $pos) {
+            if ($pos['symbol'] === '' || $pos['wert'] === null) {
+                continue;
+            }
+            $x = &$imDepot[$pos['symbol']];
+            $x ??= ['wert' => 0.0, 'einstand' => 0.0, 'heute' => 0.0];
+            $x['wert'] += (float)$pos['wert'];
+            $x['einstand'] += (float)$pos['einstand'];
+            $x['heute'] += (float)($pos['heute'] ?? 0);
+            unset($x);
+        }
+        seite('Meine Firmen', seiteFirmen($d, yahooKurse(array_keys($d['firmen'])), $filter, $sort, $imDepot, yahooWoche(array_keys($d['firmen']))), 'firmen', $d);
         break;
 
     case 'suche':
@@ -745,6 +783,10 @@ switch ($seite) {
             weiter(firmaUrl($treffer[0]['symbol'], $treffer[0]['isin'] ?? ''));
         }
         seite('Firma prüfen', seiteSuche($d, $q, $treffer), 'suche', $d);
+        break;
+
+    case 'verlauf':
+        seite('Depot-Verlauf', seiteVerlauf($d), 'verlauf', $d);
         break;
 
     case 'depot':

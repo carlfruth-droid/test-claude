@@ -366,6 +366,7 @@ function trNativLesen(array $zeilen): array
     $summen = ['dividenden' => 0.0, 'zinsen' => 0.0, 'einzahlungen' => 0.0, 'auszahlungen' => 0.0, 'konto' => 0.0];
     // Kapitalmaßnahmen am selben Tag gehören zusammen (z. B. Fusion: alte Aktie raus, neue rein)
     $massnahmen = [];
+    $verlauf = []; // je ISIN: e = [Datum, Stückänderung, Geld hinein (+) / heraus (−)], d = [Datum, Dividende]
     foreach ($buchungen as $b) {
         $summen['konto'] += (float)$b['betrag'] + $b['gebuehr'] + $b['steuer'];
         $i = $b['isin'];
@@ -383,13 +384,16 @@ function trNativLesen(array $zeilen): array
             $p = &$pos[$i];
             $p['gebuehren'] += abs($b['gebuehr']);
             if ($st > 0) {
-                $p['einstand'] += ($b['betrag'] !== null ? abs((float)$b['betrag']) : $st * (float)$b['kurs']) + abs($b['gebuehr']);
+                $kosten = ($b['betrag'] !== null ? abs((float)$b['betrag']) : $st * (float)$b['kurs']) + abs($b['gebuehr']);
+                $verlauf[$i]['e'][] = [$b['datum'], $st, round($kosten, 2)];
+                $p['einstand'] += $kosten;
                 $p['stueck'] += $st;
                 $zaehler['kauf'] = ($zaehler['kauf'] ?? 0) + 1;
             } else {
                 $anteil = min(-$st, max($p['stueck'], 0.0));
                 $schnitt = $p['stueck'] > 1e-9 ? $p['einstand'] / $p['stueck'] : 0.0;
                 $erloes = ($b['betrag'] !== null ? (float)$b['betrag'] : -$st * (float)$b['kurs']) - abs($b['gebuehr']);
+                $verlauf[$i]['e'][] = [$b['datum'], $st, round(-$erloes, 2)];
                 $p['realisiert'] += $erloes - $schnitt * $anteil;
                 $p['einstand'] -= $schnitt * $anteil;
                 $p['stueck'] += $st;
@@ -403,10 +407,12 @@ function trNativLesen(array $zeilen): array
             $betrag = (float)$b['betrag'];
             if (in_array($b['art'], ['DIVIDEND', 'DIVIDEND_EQUIVALENT_PAYMENT', 'EARNINGS'], true) && $i !== '') {
                 $pos[$i]['dividenden'] += $betrag + $b['steuer'];
+                $verlauf[$i]['d'][] = [$b['datum'], round($betrag + $b['steuer'], 2)];
                 $summen['dividenden'] += $betrag + $b['steuer'];
                 $zaehler['dividende'] = ($zaehler['dividende'] ?? 0) + 1;
             } elseif (in_array($b['art'], ['TILG', 'COMPENSATION', 'EXCHANGE', 'LIQUIDATION_PROCEEDS'], true) && $i !== '') {
                 $pos[$i]['realisiert'] += $betrag; // Auszahlung aus Fälligkeit, Abfindung, Umtausch
+                $verlauf[$i]['e'][] = [$b['datum'], 0.0, round(-$betrag, 2)];
             } elseif ($b['art'] === 'INTEREST_PAYMENT') {
                 $summen['zinsen'] += $betrag;
                 $zaehler['zins'] = ($zaehler['zins'] ?? 0) + 1;
@@ -427,6 +433,7 @@ function trNativLesen(array $zeilen): array
     foreach ($massnahmen as $gruppe) {
         $wegKosten = 0.0;
         $rein = [];
+        $raus = [];
         foreach ($gruppe as $b) {
             $p = &$pos[$b['isin']];
             $st = (float)$b['stueck'];
@@ -436,6 +443,7 @@ function trNativLesen(array $zeilen): array
                 $wegKosten += $schnitt * $anteil;
                 $p['einstand'] -= $schnitt * $anteil;
                 $p['stueck'] += $st;
+                $raus[] = [$b['isin'], $b['datum'], $st, $schnitt * $anteil];
             } else {
                 $p['stueck'] += $st;
                 $rein[] = $b['isin'];
@@ -443,9 +451,17 @@ function trNativLesen(array $zeilen): array
             unset($p);
         }
         $rein = array_values(array_unique($rein));
+        foreach ($raus as [$isin, $datum, $st, $kosten]) {
+            // Umtausch: der Einstand wandert zum neuen Titel; wertlos ausgebucht: kein Geldfluss
+            $verlauf[$isin]['e'][] = [$datum, $st, $rein !== [] ? round(-$kosten, 2) : 0.0];
+        }
         if ($rein !== []) {
             foreach ($rein as $ziel) {
                 $pos[$ziel]['einstand'] += $wegKosten / count($rein);
+            }
+            $reinZeilen = array_values(array_filter($gruppe, static fn(array $x): bool => (float)$x['stueck'] > 0));
+            foreach ($reinZeilen as $b) {
+                $verlauf[$b['isin']]['e'][] = [$b['datum'], (float)$b['stueck'], round($wegKosten / count($reinZeilen), 2)];
             }
         } elseif ($gruppe !== []) {
             // Wertlos, ausgebucht, fällig: der Einstand ist verloren (Erlöse kamen ggf. als Zahlung)
@@ -473,8 +489,42 @@ function trNativLesen(array $zeilen): array
         'ok' => true, 'fehler' => '', 'format' => 'traderepublic',
         'spalten' => ['Format' => 'Trade-Republic-Transaktionsexport'],
         'buchungen' => $anzeige, 'zeilen' => count($buchungen), 'zaehler' => $zaehler,
-        'fertige_positionen' => $positionen, 'summen' => $summen,
+        'fertige_positionen' => $positionen, 'summen' => $summen, 'verlauf' => verlaufSortieren($verlauf),
     ];
+}
+
+/** Ereignisse je Titel chronologisch ordnen. */
+function verlaufSortieren(array $verlauf): array
+{
+    foreach ($verlauf as &$v) {
+        $v += ['e' => [], 'd' => []];
+        usort($v['e'], static fn(array $a, array $b): int => strcmp($a[0], $b[0]));
+        usort($v['d'], static fn(array $a, array $b): int => strcmp($a[0], $b[0]));
+    }
+    unset($v);
+    return $verlauf;
+}
+
+/** Verlauf aus allgemein gelesenen Buchungen (andere CSV-Formate). */
+function trVerlaufAusBuchungen(array $buchungen): array
+{
+    $verlauf = [];
+    foreach ($buchungen as $b) {
+        $k = $b['isin'] !== '' ? $b['isin'] : ($b['symbol'] !== '' ? 'SYM:' . $b['symbol'] : '');
+        if ($k === '' || $b['datum'] === '') {
+            continue;
+        }
+        $st = abs((float)$b['stueck']);
+        $betrag = abs((float)$b['betrag']);
+        if ($b['typ'] === 'kauf' && $st > 0) {
+            $verlauf[$k]['e'][] = [$b['datum'], $st, round($betrag + (float)$b['gebuehr'], 2)];
+        } elseif ($b['typ'] === 'verkauf' && $st > 0) {
+            $verlauf[$k]['e'][] = [$b['datum'], -$st, round(-($betrag - (float)$b['gebuehr']), 2)];
+        } elseif ($b['typ'] === 'dividende') {
+            $verlauf[$k]['d'][] = [$b['datum'], round($betrag, 2)];
+        }
+    }
+    return verlaufSortieren($verlauf);
 }
 
 /** Positionen eines gelesenen Exports – fertig berechnet oder aus den Buchungen. */
@@ -523,7 +573,8 @@ function trImportSpeichern(array $ergebnis, string $dateiname): array
         $positionen[$k] += ['symbol' => '', 'art' => $klasse];
         // Börsenkürzel ordnet depotZuordnen() danach schrittweise zu; komplett verkaufte
         // Titel und solche ohne Börsenkurs bei Yahoo (Optionsscheine, Zertifikate) brauchen keins
-        if ($p['stueck'] > 1e-9 && $klasse !== 'derivat' && $klasse !== 'sonst') {
+        // auch verkaufte Titel: ihr Kurs wird für den Verlauf früherer Zeiträume gebraucht
+        if ($klasse !== 'derivat' && $klasse !== 'sonst') {
             $positionen[$k]['zuordnen'] = true;
         }
     }
@@ -541,6 +592,7 @@ function trImportSpeichern(array $ergebnis, string $dateiname): array
             'einzahlungen' => $summe('einzahlung', 'betrag'), 'auszahlungen' => $summe('auszahlung', 'betrag'),
         ],
         'buchungen' => array_slice(array_reverse($ergebnis['buchungen']), 0, 400),
+        'verlauf' => $ergebnis['verlauf'] ?? trVerlaufAusBuchungen($ergebnis['buchungen']),
     ];
     datenAendern(function (array &$d) use ($tr): void {
         $d['broker']['traderepublic'] = $tr;
@@ -813,6 +865,8 @@ function etoroAuszugLesen(array $blaetter): array
             'instrument' => ['Instrument / Aktion', 'Action', 'Instrument'], 'id' => ['Positions-ID', 'Position ID'],
             'richtung' => ['Long / Short', 'Long/Short'], 'schluss' => ['Schließungsdatum', 'Close Date'], 'hebel' => ['Hebel', 'Leverage'],
             'typ' => ['Art', 'Type'], 'isin' => ['ISIN'], 'kopiert' => ['Kopiert von', 'Copied From'],
+            'betrag' => ['Betrag', 'Amount'], 'einheiten' => ['Einheiten', 'Units'], 'auf' => ['Eröffnungsdatum', 'Open Date'],
+            'gewinn' => ['Gewinn (USD)', 'Profit(USD)', 'Profit (USD)'], 'kurs_auf' => ['Eröffnungskurs', 'Open Rate'],
         ],
         'bestaende' => [
             'stichtag' => ['Stichtag', 'Date'], 'instrument' => ['Instrument'], 'id' => ['Positions-ID', 'Position ID'],
@@ -955,7 +1009,9 @@ function etoroAuszugLesen(array $blaetter): array
             'id' => (string)$id, 'kuerzel' => $o['kuerzel'], 'waehrung' => $o['waehrung'],
             'name' => $info['name'] !== '' ? $info['name'] : $o['kuerzel'], 'isin' => $info['isin'],
             'art' => $krypto ? 'krypto' : ($cfd ? 'cfd' : (str_contains($o['typ'], 'etf') ? 'etf' : 'aktie')),
-            'cfd' => $cfd, 'betrag' => $o['betrag'], 'zeit' => $o['zeit'],
+            'cfd' => $cfd, 'betrag' => $o['betrag'], 'zeit' => $o['zeit'], 'einheiten_auf' => $o['einheiten'],
+            'splits' => array_map(static fn(array $x): array => [$x['zeit'], $x['faktor']],
+                array_values(array_filter($splits[$id] ?? [], static fn(array $x): bool => $x['zeit'] > $o['zeit']))),
             'stueck' => ($b !== null ? (zahlAusZelle($b['einheiten']) ?? $o['einheiten']) : $o['einheiten']) * $faktor,
             'hebel' => null, 'richtung' => 1, 'kurs_einstand' => null, 'wert_usd' => null,
         ];
@@ -978,6 +1034,33 @@ function etoroAuszugLesen(array $blaetter): array
         }
         $positionen[] = $p;
     }
+    // Geschlossene Positionen für den Verlauf früherer Zeiträume
+    $geschlosseneListe = [];
+    foreach ($daten['geschlossen'] as $r) {
+        $auf = excelZeit($r['auf'] ?? '');
+        $zu = excelZeit($r['schluss']);
+        $einh = zahlAusZelle($r['einheiten'] ?? '');
+        $kursAuf = zahlAusZelle($r['kurs_auf'] ?? '');
+        if ($auf <= 0 || $zu <= 0 || !$einh || $kursAuf === null) {
+            continue;
+        }
+        $o = $eroeffnet[$r['id']] ?? null;
+        $kuerzel = $o['kuerzel'] ?? (preg_match('/\(([^()]+)\)\s*$/u', $r['instrument'], $m) ? strtoupper($m[1]) : '');
+        if ($kuerzel === '') {
+            continue;
+        }
+        $info = $instrumente[$kuerzel] ?? ['name' => $kuerzel, 'isin' => ''];
+        $typ = $o['typ'] ?? mb_strtolower((string)($r['typ'] ?? ''));
+        $krypto = !empty($info['krypto']) || in_array($kuerzel, FZ_KRYPTO, true);
+        $geschlosseneListe[] = [
+            'kuerzel' => $kuerzel, 'waehrung' => $o['waehrung'] ?? 'USD', 'name' => $info['name'], 'isin' => $info['isin'],
+            'art' => $krypto ? 'krypto' : ($typ === 'cfd' ? 'cfd' : (str_contains($typ, 'etf') ? 'etf' : 'aktie')),
+            'auf' => $auf, 'zu' => $zu, 'einheiten' => $einh, 'kosten' => $einh * $kursAuf,
+            'betrag' => zahlAusZelle($r['betrag'] ?? '') ?? 0.0, 'gewinn' => zahlAusZelle($r['gewinn'] ?? '') ?? 0.0,
+            'hebel' => hebelLesen($r['hebel']), 'richtung' => stripos($r['richtung'], 'short') !== false ? -1 : 1,
+        ];
+    }
+
     if ($positionen === [] && $eroeffnet === []) {
         return ['ok' => false, 'fehler' => 'Im Kontoauszug wurden keine eröffneten Positionen gefunden.'];
     }
@@ -996,6 +1079,7 @@ function etoroAuszugLesen(array $blaetter): array
         'cash' => $kontostand, 'eigenkapital' => $eigenkapital, 'summen' => $summen,
         'eroeffnet' => count($eroeffnet), 'geschlossen' => count($geschlossen), 'zaehler' => $zaehler,
         'eingesetzt' => array_sum(array_column($positionen, 'betrag')), 'positionen' => $positionen,
+        'geschlossene' => $geschlosseneListe,
     ];
 }
 
@@ -1027,7 +1111,7 @@ function ausEuro(?float $eur, string $waehrung, array $fx): ?float
 function etoroAuszugSpeichern(array $ergebnis, string $dateiname): array
 {
     $offen = [];
-    foreach ($ergebnis['positionen'] as $p) {
+    foreach (array_merge($ergebnis['positionen'], $ergebnis['geschlossene'] ?? []) as $p) {
         $offen[$p['kuerzel']] ??= ['isin' => $p['isin'], 'name' => $p['name'], 'art' => $p['art'], 'waehrung' => $p['waehrung']];
     }
     $auszug = [
@@ -1035,6 +1119,7 @@ function etoroAuszugSpeichern(array $ergebnis, string $dateiname): array
         'stichtag' => $ergebnis['stichtag'], 'cash_usd' => $ergebnis['cash'], 'eigenkapital_usd' => $ergebnis['eigenkapital'],
         'summen' => $ergebnis['summen'], 'eingesetzt_usd' => $ergebnis['eingesetzt'], 'anzahl' => count($ergebnis['positionen']),
         'roh' => $ergebnis['positionen'], 'offen' => $offen, 'symbole' => [], 'positionen' => [],
+        'geschlossene' => $ergebnis['geschlossene'] ?? [], 'segmente' => [],
     ];
     datenAendern(function (array &$d) use ($auszug): void {
         $d['broker']['etoro_auszug'] = $auszug;
@@ -1078,8 +1163,9 @@ function etoroKuerzelZuordnen(array $instrumente): array
 }
 
 /** Rohpositionen je Instrument zusammenfassen; fehlende Hebel nach dem Stichtag eröffneter CFDs schätzen. */
-function etoroGruppieren(array $positionen, array $symbole): array
+function etoroGruppieren(array $positionen, array $symbole, ?array &$segmente = null): array
 {
+    $segmente = [];
     $alle = array_values(array_unique(array_filter(array_column($symbole, 'symbol'))));
     $kurse = $alle !== [] ? yahooKurse($alle) : [];
     $waehrungen = array_merge(['USD'], array_column($positionen, 'waehrung'),
@@ -1121,6 +1207,12 @@ function etoroGruppieren(array $positionen, array $symbole): array
         $g['anzahl']++;
         $g['geschaetzt'] = $g['geschaetzt'] || $geschaetzt;
         $gruppen[$schluessel] = $g;
+        $segmente[] = [
+            'kuerzel' => $p['kuerzel'], 'waehrung' => $p['waehrung'], 'auf' => (int)$p['zeit'], 'zu' => 0,
+            'einheiten' => (float)($p['einheiten_auf'] ?? $p['stueck']), 'splits' => $p['splits'] ?? [],
+            'kosten' => $p['stueck'] * (float)$p['kurs_einstand'], 'betrag' => $p['betrag'], 'gewinn' => 0.0,
+            'hebel' => $p['hebel'], 'richtung' => $p['richtung'],
+        ];
     }
     foreach ($gruppen as &$g) {
         $g['kurs_einstand'] = $g['stueck'] > 0 ? $g['kurs_summe'] / $g['stueck'] : null;
@@ -1196,9 +1288,15 @@ function depotZuordnen(float $budget = 8.0): int
         }
         $symbole = $ea['symbole'] + $neu;
         $fertig = count(array_diff_key($ea['offen'], $neu)) === 0;
-        $positionen = $fertig ? etoroGruppieren($ea['roh'], $symbole) : null;
+        $segmente = [];
+        $positionen = $fertig ? etoroGruppieren($ea['roh'], $symbole, $segmente) : null;
+        foreach ($fertig ? (array)($ea['geschlossene'] ?? []) : [] as $g) {
+            $segmente[] = ['kuerzel' => $g['kuerzel'], 'waehrung' => $g['waehrung'], 'auf' => $g['auf'], 'zu' => $g['zu'],
+                'einheiten' => $g['einheiten'], 'splits' => [], 'kosten' => $g['kosten'], 'betrag' => $g['betrag'],
+                'gewinn' => $g['gewinn'], 'hebel' => $g['hebel'], 'richtung' => $g['richtung']];
+        }
         $importZeit = (int)$ea['zeit'];
-        datenAendern(function (array &$d) use ($neu, $symbole, $positionen, $importZeit): void {
+        datenAendern(function (array &$d) use ($neu, $symbole, $positionen, $segmente, $importZeit): void {
             $a = &$d['broker']['etoro_auszug'];
             if ((int)($a['zeit'] ?? 0) !== $importZeit) {
                 return;
@@ -1207,7 +1305,8 @@ function depotZuordnen(float $budget = 8.0): int
             $a['offen'] = array_diff_key((array)$a['offen'], $neu);
             if ($positionen !== null) {
                 $a['positionen'] = $positionen;
-                unset($a['roh']);
+                $a['segmente'] = $segmente;
+                unset($a['roh'], $a['geschlossene']);
             }
             unset($a);
             depotFirmenAbgleichen($d);

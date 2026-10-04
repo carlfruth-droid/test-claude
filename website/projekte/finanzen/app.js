@@ -334,6 +334,120 @@
     if (bekannt) { logoSetzen(bekannt); }
   }
 
+  // ---------- Liniendiagramm (Kurs und Depotverlauf) ----------
+  // Gleitender Durchschnitt über die letzten „tage“ Kalendertage (je Punkt [Zeit, Wert])
+  function gleitend(punkte, tage) {
+    var erg = [], summe = 0, anfang = 0;
+    for (var i = 0; i < punkte.length; i++) {
+      summe += punkte[i][1];
+      while (punkte[anfang][0] <= punkte[i][0] - tage * 86400) { summe -= punkte[anfang][1]; anfang++; }
+      // erst zeigen, wenn der Zeitraum annähernd gefüllt ist
+      erg.push(punkte[i][0] - punkte[0][0] >= tage * 86400 * 0.9 ? [punkte[i][0], summe / (i - anfang + 1)] : [punkte[i][0], null]);
+    }
+    return erg;
+  }
+
+  function linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz) {
+    zusatz = (zusatz || []).filter(function (z) { return z.punkte.some(function (p) { return p[1] !== null; }); });
+    chart.innerHTML = '';
+    if (!punkte || punkte.length < 2) { chart.innerHTML = '<p class="leer">Kein Kursverlauf verfügbar.</p>'; if (aendEl) { aendEl.textContent = ''; } return; }
+    var B = chart.clientWidth || 600, H = chart.clientHeight || 210, oben = 10, unten = 22, links = 0, rechtsRand = 52;
+    var werte = punkte.map(function (p) { return p[1]; });
+    var alleWerte = werte.slice();
+    zusatz.forEach(function (z) { z.punkte.forEach(function (p) { if (p[1] !== null) { alleWerte.push(p[1]); } }); });
+    var min = Math.min.apply(null, alleWerte), max = Math.max.apply(null, alleWerte);
+    if (max === min) { max += 1; min -= 1; }
+    var puffer = (max - min) * 0.08; min -= puffer; max += puffer;
+    var x = function (i) { return links + i / (punkte.length - 1) * (B - links - rechtsRand); };
+    var y = function (v) { return oben + (1 - (v - min) / (max - min)) * (H - oben - unten); };
+    var erster = werte[0], letzter = werte[werte.length - 1];
+    var steigt = letzter >= erster;
+    var farbe = steigt ? '#13814a' : '#c4302b';
+    if (aendEl) {
+      var pz = (letzter - erster) / erster * 100;
+      aendEl.textContent = (pz > 0 ? '+' : (pz < 0 ? '−' : '')) + Math.abs(pz).toLocaleString('de-DE', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + ' %';
+      aendEl.style.color = farbe;
+    }
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + B + ' ' + H);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Kursverlauf');
+    var defs = document.createElementNS(ns, 'defs');
+    defs.innerHTML = '<linearGradient id="fz-flaeche" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + farbe + '" stop-opacity=".16"/><stop offset="1" stop-color="' + farbe + '" stop-opacity="0"/></linearGradient>';
+    svg.appendChild(defs);
+    for (var g = 0; g <= 3; g++) {
+      var wert = min + (max - min) * g / 3;
+      var yy = y(wert);
+      var linie = document.createElementNS(ns, 'line');
+      linie.setAttribute('x1', 0); linie.setAttribute('x2', B - rechtsRand + 4); linie.setAttribute('y1', yy); linie.setAttribute('y2', yy);
+      linie.setAttribute('class', 'gitter');
+      svg.appendChild(linie);
+      var t = document.createElementNS(ns, 'text');
+      t.setAttribute('x', B - rechtsRand + 8); t.setAttribute('y', yy + 4); t.setAttribute('class', 'achse');
+      t.textContent = wert.toLocaleString('de-DE', { maximumFractionDigits: wert >= 100 ? 0 : 2 });
+      svg.appendChild(t);
+    }
+    var d = '';
+    punkte.forEach(function (p, i) { d += (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p[1]).toFixed(1); });
+    var flaeche = document.createElementNS(ns, 'path');
+    flaeche.setAttribute('d', d + 'L' + x(punkte.length - 1).toFixed(1) + ' ' + (H - unten) + 'L' + x(0) + ' ' + (H - unten) + 'Z');
+    flaeche.setAttribute('fill', 'url(#fz-flaeche)');
+    svg.appendChild(flaeche);
+    var pfad = document.createElementNS(ns, 'path');
+    pfad.setAttribute('d', d);
+    pfad.setAttribute('class', 'linie');
+    pfad.setAttribute('stroke', farbe);
+    svg.appendChild(pfad);
+    zusatz.forEach(function (z) {
+      var dz = '', offen = false;
+      z.punkte.forEach(function (p, i) {
+        if (p[1] === null) { offen = false; return; }
+        dz += (offen ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p[1]).toFixed(1); offen = true;
+      });
+      var lz = document.createElementNS(ns, 'path');
+      lz.setAttribute('d', dz); lz.setAttribute('class', 'linie zusatz'); lz.setAttribute('stroke', z.farbe);
+      svg.appendChild(lz);
+    });
+    [0, Math.floor((punkte.length - 1) / 2), punkte.length - 1].forEach(function (i, n) {
+      var t2 = document.createElementNS(ns, 'text');
+      t2.setAttribute('x', x(i)); t2.setAttribute('y', H - 5); t2.setAttribute('class', 'achse');
+      t2.setAttribute('text-anchor', n === 0 ? 'start' : (n === 1 ? 'middle' : 'end'));
+      t2.textContent = datumFmt(punkte[i][0]);
+      svg.appendChild(t2);
+    });
+    var senkrecht = document.createElementNS(ns, 'line');
+    senkrecht.setAttribute('class', 'gitter');
+    senkrecht.setAttribute('y1', oben); senkrecht.setAttribute('y2', H - unten);
+    senkrecht.style.display = 'none';
+    svg.appendChild(senkrecht);
+    var punkt = document.createElementNS(ns, 'circle');
+    punkt.setAttribute('r', 4); punkt.setAttribute('fill', farbe); punkt.setAttribute('stroke', '#fff'); punkt.setAttribute('stroke-width', 2);
+    punkt.style.display = 'none';
+    svg.appendChild(punkt);
+    chart.appendChild(svg);
+    var tip = document.createElement('div');
+    tip.className = 'chart-tip';
+    tip.hidden = true;
+    chart.appendChild(tip);
+    var zeigen = function (ev) {
+      var r = svg.getBoundingClientRect();
+      var px = (ev.clientX - r.left) / r.width * B;
+      var i = Math.max(0, Math.min(punkte.length - 1, Math.round((px - links) / (B - links - rechtsRand) * (punkte.length - 1))));
+      var xx = x(i), yy2 = y(punkte[i][1]);
+      senkrecht.setAttribute('x1', xx); senkrecht.setAttribute('x2', xx); senkrecht.style.display = '';
+      punkt.setAttribute('cx', xx); punkt.setAttribute('cy', yy2); punkt.style.display = '';
+      tip.hidden = false;
+      tip.innerHTML = '<b>' + fmt(punkte[i][1]) + '</b>' + datumFmt(punkte[i][0])
+        + zusatz.map(function (z) { var v = z.punkte[i] && z.punkte[i][1]; return v === null || v === undefined ? '' : '<small style="color:' + z.farbe + '">' + z.name + ': ' + fmt(v) + '</small>'; }).join('');
+      tip.style.left = Math.max(60, Math.min(r.width - 60, xx / B * r.width)) + 'px';
+    };
+    var weg = function () { senkrecht.style.display = 'none'; punkt.style.display = 'none'; tip.hidden = true; };
+    svg.addEventListener('pointermove', zeigen);
+    svg.addEventListener('pointerdown', zeigen);
+    svg.addEventListener('pointerleave', weg);
+  }
+
   // ---------- Kurs-Chart ----------
   var chart = $('[data-chart]');
   var datenEl = $('#chart-daten');
@@ -353,92 +467,22 @@
       '5j': function () { return (roh.j5 && roh.j5.length ? roh.j5 : roh.j1) || []; }
     };
 
-    var zeichnen = function (punkte) {
-      chart.innerHTML = '';
-      if (!punkte || punkte.length < 2) { chart.innerHTML = '<p class="leer">Kein Kursverlauf verfügbar.</p>'; if (aendEl) { aendEl.textContent = ''; } return; }
-      var B = chart.clientWidth || 600, H = chart.clientHeight || 210, oben = 10, unten = 22, links = 0, rechtsRand = 52;
-      var werte = punkte.map(function (p) { return p[1]; });
-      var min = Math.min.apply(null, werte), max = Math.max.apply(null, werte);
-      if (max === min) { max += 1; min -= 1; }
-      var puffer = (max - min) * 0.08; min -= puffer; max += puffer;
-      var x = function (i) { return links + i / (punkte.length - 1) * (B - links - rechtsRand); };
-      var y = function (v) { return oben + (1 - (v - min) / (max - min)) * (H - oben - unten); };
-      var erster = werte[0], letzter = werte[werte.length - 1];
-      var steigt = letzter >= erster;
-      var farbe = steigt ? '#13814a' : '#c4302b';
-      if (aendEl) {
-        var pz = (letzter - erster) / erster * 100;
-        aendEl.textContent = (pz > 0 ? '+' : (pz < 0 ? '−' : '')) + Math.abs(pz).toLocaleString('de-DE', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + ' %';
-        aendEl.style.color = farbe;
-      }
-      var ns = 'http://www.w3.org/2000/svg';
-      var svg = document.createElementNS(ns, 'svg');
-      svg.setAttribute('viewBox', '0 0 ' + B + ' ' + H);
-      svg.setAttribute('role', 'img');
-      svg.setAttribute('aria-label', 'Kursverlauf');
-      var defs = document.createElementNS(ns, 'defs');
-      defs.innerHTML = '<linearGradient id="fz-flaeche" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + farbe + '" stop-opacity=".16"/><stop offset="1" stop-color="' + farbe + '" stop-opacity="0"/></linearGradient>';
-      svg.appendChild(defs);
-      for (var g = 0; g <= 3; g++) {
-        var wert = min + (max - min) * g / 3;
-        var yy = y(wert);
-        var linie = document.createElementNS(ns, 'line');
-        linie.setAttribute('x1', 0); linie.setAttribute('x2', B - rechtsRand + 4); linie.setAttribute('y1', yy); linie.setAttribute('y2', yy);
-        linie.setAttribute('class', 'gitter');
-        svg.appendChild(linie);
-        var t = document.createElementNS(ns, 'text');
-        t.setAttribute('x', B - rechtsRand + 8); t.setAttribute('y', yy + 4); t.setAttribute('class', 'achse');
-        t.textContent = wert.toLocaleString('de-DE', { maximumFractionDigits: wert >= 100 ? 0 : 2 });
-        svg.appendChild(t);
-      }
-      var d = '';
-      punkte.forEach(function (p, i) { d += (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p[1]).toFixed(1); });
-      var flaeche = document.createElementNS(ns, 'path');
-      flaeche.setAttribute('d', d + 'L' + x(punkte.length - 1).toFixed(1) + ' ' + (H - unten) + 'L' + x(0) + ' ' + (H - unten) + 'Z');
-      flaeche.setAttribute('fill', 'url(#fz-flaeche)');
-      svg.appendChild(flaeche);
-      var pfad = document.createElementNS(ns, 'path');
-      pfad.setAttribute('d', d);
-      pfad.setAttribute('class', 'linie');
-      pfad.setAttribute('stroke', farbe);
-      svg.appendChild(pfad);
-      [0, Math.floor((punkte.length - 1) / 2), punkte.length - 1].forEach(function (i, n) {
-        var t2 = document.createElementNS(ns, 'text');
-        t2.setAttribute('x', x(i)); t2.setAttribute('y', H - 5); t2.setAttribute('class', 'achse');
-        t2.setAttribute('text-anchor', n === 0 ? 'start' : (n === 1 ? 'middle' : 'end'));
-        t2.textContent = datumFmt(punkte[i][0]);
-        svg.appendChild(t2);
-      });
-      var senkrecht = document.createElementNS(ns, 'line');
-      senkrecht.setAttribute('class', 'gitter');
-      senkrecht.setAttribute('y1', oben); senkrecht.setAttribute('y2', H - unten);
-      senkrecht.style.display = 'none';
-      svg.appendChild(senkrecht);
-      var punkt = document.createElementNS(ns, 'circle');
-      punkt.setAttribute('r', 4); punkt.setAttribute('fill', farbe); punkt.setAttribute('stroke', '#fff'); punkt.setAttribute('stroke-width', 2);
-      punkt.style.display = 'none';
-      svg.appendChild(punkt);
-      chart.appendChild(svg);
-      var tip = document.createElement('div');
-      tip.className = 'chart-tip';
-      tip.hidden = true;
-      chart.appendChild(tip);
-      var zeigen = function (ev) {
-        var r = svg.getBoundingClientRect();
-        var px = (ev.clientX - r.left) / r.width * B;
-        var i = Math.max(0, Math.min(punkte.length - 1, Math.round((px - links) / (B - links - rechtsRand) * (punkte.length - 1))));
-        var xx = x(i), yy2 = y(punkte[i][1]);
-        senkrecht.setAttribute('x1', xx); senkrecht.setAttribute('x2', xx); senkrecht.style.display = '';
-        punkt.setAttribute('cx', xx); punkt.setAttribute('cy', yy2); punkt.style.display = '';
-        tip.hidden = false;
-        tip.innerHTML = '<b>' + fmt(punkte[i][1]) + '</b>' + datumFmt(punkte[i][0]);
-        tip.style.left = Math.max(60, Math.min(r.width - 60, xx / B * r.width)) + 'px';
-      };
-      var weg = function () { senkrecht.style.display = 'none'; punkt.style.display = 'none'; tip.hidden = true; };
-      svg.addEventListener('pointermove', zeigen);
-      svg.addEventListener('pointerdown', zeigen);
-      svg.addEventListener('pointerleave', weg);
+    var schnitte = { s30: speicher.lesen('fz-s30') === '1', s100: speicher.lesen('fz-s100') === '1' };
+    var zeichnen = function () {
+      // Durchschnitte aus dem ganzen verfügbaren Verlauf berechnen, dann auf die gewählte Spanne kürzen
+      var punkte = spannen[aktiv]();
+      var basis = aktiv === '5j' ? spannen['5j']() : (roh.j1 || []);
+      var ab = basis.length - punkte.length;
+      var zusatz = [];
+      if (schnitte.s30) { zusatz.push({ name: 'Ø 30 Tage', farbe: '#d97706', punkte: gleitend(basis, 30).slice(ab) }); }
+      if (schnitte.s100) { zusatz.push({ name: 'Ø 100 Tage', farbe: '#7c3aed', punkte: gleitend(basis, 100).slice(ab) }); }
+      linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz);
     };
+    $$('[data-schnitt]').forEach(function (k) {
+      var n = k.getAttribute('data-schnitt');
+      k.classList.toggle('aktiv', schnitte[n]);
+      k.addEventListener('click', function () { schnitte[n] = !schnitte[n]; k.classList.toggle('aktiv', schnitte[n]); speicher.schreiben('fz-' + n, schnitte[n] ? '1' : '0'); zeichnen(); });
+    });
 
     var aktiv = speicher.lesen('fz-spanne') || '1j';
     if (!spannen[aktiv]) { aktiv = '1j'; }
@@ -446,12 +490,174 @@
     var wechseln = function (s) {
       aktiv = s;
       knoepfe.forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-spanne') === s); });
-      zeichnen(spannen[s]());
+      zeichnen();
       speicher.schreiben('fz-spanne', s);
     };
     knoepfe.forEach(function (k) { k.addEventListener('click', function () { wechseln(k.getAttribute('data-spanne')); }); });
     wechseln(aktiv);
     var breite = chart.clientWidth;
-    window.addEventListener('resize', function () { if (Math.abs(chart.clientWidth - breite) > 20) { breite = chart.clientWidth; zeichnen(spannen[aktiv]()); } });
+    window.addEventListener('resize', function () { if (Math.abs(chart.clientWidth - breite) > 20) { breite = chart.clientWidth; zeichnen(); } });
+  }
+
+  // ---------- Depot-Verlauf: Zeitraum und Titel frei wählen ----------
+  var vb = $('[data-verlauf]');
+  if (vb) {
+    var vZustand = { zeitraum: '1j', von: '', bis: '', quelle: 'alle', aus: {} };
+    try { var gesp = JSON.parse(speicher.lesen('fz-verlauf') || 'null'); if (gesp) { vZustand = Object.assign(vZustand, gesp); } } catch (e) { /* egal */ }
+    var vDaten = null;
+    var heute = new Date();
+    var iso = function (d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    var euro = function (z) { return z.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: Math.abs(z) >= 1000 ? 0 : 2 }); };
+    var vorz = function (z) { return (z > 0 ? '+' : '') + euro(z); };
+    var prozent = function (z) { return z === null || !isFinite(z) ? '–' : (z > 0 ? '+' : '') + (z * 100).toLocaleString('de-DE', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + ' %'; };
+    var klasseVon = function (z) { return z > 0.004 ? 'plus' : (z < -0.004 ? 'minus' : ''); };
+    var tag = function (t) { return new Date(t * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }); };
+    var beginn = vb.getAttribute('data-beginn') || iso(new Date(heute.getFullYear() - 1, heute.getMonth(), heute.getDate()));
+    var vonFeld = $('[name=von]', vb.parentNode), bisFeld = $('[name=bis]', vb.parentNode);
+
+    var zeitraumGrenzen = function (z) {
+      var b = new Date(heute), v = new Date(heute);
+      var monate = { '1m': 1, '3m': 3, '6m': 6, '1j': 12, '3j': 36, '5j': 60 }[z];
+      if (monate) { v.setMonth(v.getMonth() - monate); }
+      if (z === '1t') {
+        // letzter Handelstag davor (am Montag also Freitag)
+        v.setDate(v.getDate() - 1);
+        while (v.getDay() === 0 || v.getDay() === 6) { v.setDate(v.getDate() - 1); }
+      }
+      if (z === '1w') { v.setDate(v.getDate() - 7); }
+      if (z === 'ytd') { v = new Date(heute.getFullYear(), 0, 1); }
+      var vonIso = z === 'max' ? beginn : iso(v);
+      if (vonIso < beginn) { vonIso = beginn; }
+      return [vonIso, iso(b)];
+    };
+    var speichern = function () { speicher.schreiben('fz-verlauf', JSON.stringify(vZustand)); };
+
+    var stand = $('[data-verlauf-stand]', vb), diagramm = $('[data-verlauf-chart]', vb), kennz = $('[data-verlauf-kennzahlen]', vb);
+    var liste = $('[data-verlauf-liste]'), sucheFeld = $('[data-verlauf-suche]');
+
+    // Kennzahlen einer Auswahl: Gewinn = Endwert − Anfangswert − Nettokäufe + Dividenden; Rendite nach Modified Dietz
+    var auswerten = function (titel) {
+      var p = vDaten.punkte, n = p.length, s0 = vDaten.start || 0, summe = new Array(n).fill(0), fluss = 0, gewichtet = 0, div = 0;
+      var T = p[n - 1] - p[s0] || 1;
+      titel.forEach(function (t) {
+        for (var i = 0; i < n; i++) {
+          summe[i] += t.w[i];
+          if (i > s0 && t.f[i]) { fluss += t.f[i]; gewichtet += t.f[i] * (p[n - 1] - p[i]) / T; }
+        }
+        div += t.div;
+      });
+      var v0 = summe[s0], v1 = summe[n - 1];
+      var gewinn = v1 - v0 - fluss + div;
+      var basis = v0 + gewichtet;
+      return { summe: summe, v0: v0, v1: v1, fluss: fluss, div: div, gewinn: gewinn, rendite: basis > 1 ? gewinn / basis : null };
+    };
+    var sichtbar = function () {
+      return vDaten.titel.filter(function (t) { return vZustand.quelle === 'alle' || t.quellen.indexOf(vZustand.quelle) >= 0; });
+    };
+    var gewaehlt = function () { return sichtbar().filter(function (t) { return !vZustand.aus[t.id]; }); };
+
+    var zeigen = function () {
+      if (!vDaten) { return; }
+      var alle = sichtbar(), auswahl = gewaehlt();
+      var k = auswerten(auswahl);
+      var s0 = vDaten.start || 0;
+      var alleP = vDaten.punkte.map(function (t, i) { return [t, Math.round(k.summe[i] * 100) / 100]; });
+      var punkte = alleP.slice(s0);
+      var zusatz = [];
+      if (vZustand.s30) { zusatz.push({ name: 'Ø 30 Tage', farbe: '#d97706', punkte: gleitend(alleP, 30).slice(s0) }); }
+      if (vZustand.s100) { zusatz.push({ name: 'Ø 100 Tage', farbe: '#7c3aed', punkte: gleitend(alleP, 100).slice(s0) }); }
+      linienChart(diagramm, punkte, euro, tag, null, zusatz);
+      var kachel = function (titel, wert, unter) { return '<div class="kachel"><span class="k-titel">' + titel + '</span><span class="k-wert">' + wert + '</span>' + (unter ? '<span class="k-unter">' + unter + '</span>' : '') + '</div>'; };
+      kennz.innerHTML =
+        kachel('Wert ' + tag(vDaten.punkte[s0]), euro(k.v0)) +
+        kachel('Wert ' + tag(vDaten.punkte[vDaten.punkte.length - 1]), euro(k.v1)) +
+        kachel('Gewinn im Zeitraum', '<span class="' + klasseVon(k.gewinn) + '">' + vorz(k.gewinn) + '</span>', '<span class="' + klasseVon(k.gewinn) + '">' + prozent(k.rendite) + '</span>') +
+        kachel('Käufe − Verkäufe', vorz(k.fluss), k.div ? 'Dividenden ' + euro(k.div) : '');
+      stand.textContent = (auswahl.length === 1 ? auswahl[0].name + ' – ' : '') + auswahl.length + ' von ' + alle.length + ' Titeln ausgewählt · ' + tag(vDaten.punkte[s0]) + ' bis ' + tag(vDaten.punkte[vDaten.punkte.length - 1]);
+      var q = (sucheFeld && sucheFeld.value || '').toLowerCase();
+      liste.innerHTML = '';
+      alle.forEach(function (t) {
+        if (q && (t.name + ' ' + t.symbol).toLowerCase().indexOf(q) < 0) { return; }
+        var e = auswerten([t]);
+        var li = document.createElement('li');
+        li.innerHTML = '<label><input type="checkbox"' + (vZustand.aus[t.id] ? '' : ' checked') + '><span><strong></strong><small></small></span></label>' +
+          '<span class="rechts"><b>' + euro(e.v1) + '</b><small class="' + klasseVon(e.gewinn) + '">' + vorz(e.gewinn) + ' (' + prozent(e.rendite) + ')</small></span>' +
+          '<button type="button" class="knopf-text klein" title="Nur diesen Titel zeigen">nur</button>';
+        $('strong', li).textContent = t.name;
+        $('small', li).textContent = t.symbol + ' · ' + t.quellen.map(function (x) { return x === 'etoro' ? 'eToro' : 'Trade Republic'; }).join(' + ') + (t.luecke ? ' · Kurse lückenhaft' : '');
+        $('input', li).addEventListener('change', function (ev) { if (ev.target.checked) { delete vZustand.aus[t.id]; } else { vZustand.aus[t.id] = 1; } speichern(); zeigen(); });
+        $('button', li).addEventListener('click', function () {
+          vZustand.aus = {};
+          alle.forEach(function (x) { if (x.id !== t.id) { vZustand.aus[x.id] = 1; } });
+          speichern(); zeigen(); vb.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        liste.appendChild(li);
+      });
+      if (!liste.children.length) { liste.innerHTML = '<li class="leer">Keine Titel gefunden.</li>'; }
+    };
+
+    var laden = function () {
+      var g = vZustand.zeitraum === 'frei' ? [vZustand.von, vZustand.bis] : zeitraumGrenzen(vZustand.zeitraum);
+      vonFeld.value = g[0]; bisFeld.value = g[1];
+      $$('[data-zeitraum]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-zeitraum') === vZustand.zeitraum); });
+      $$('[data-quelle]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-quelle') === vZustand.quelle); });
+      diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Kurse werden geladen …</p>';
+      kennz.innerHTML = ''; stand.textContent = ''; vDaten = null;
+      var versuche = 0;
+      var schritt = function () {
+        var daten = new FormData();
+        daten.append('csrf', csrf); daten.append('von', g[0]); daten.append('bis', g[1]); daten.append('vorlauf', '100');
+        fetch('?api=verlauf', { method: 'POST', body: daten, credentials: 'same-origin' })
+          .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+          .then(function (j) {
+            versuche = 0;
+            if (!j.fertig) {
+              var proz = j.gesamt ? Math.round((1 - j.offen / j.gesamt) * 100) : 0;
+              diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Historische Kurse werden geladen … ' + Math.max(0, proz) + ' %</p>';
+              schritt();
+              return;
+            }
+            vDaten = j;
+            if (!j.titel.length) { diagramm.innerHTML = '<p class="leer">In diesem Zeitraum waren keine Titel im Depot.</p>'; kennz.innerHTML = ''; liste.innerHTML = ''; stand.textContent = ''; return; }
+            zeigen();
+          })
+          .catch(function () {
+            if (++versuche < 4) { setTimeout(schritt, 3000); return; }
+            diagramm.innerHTML = '<p class="leer">Der Verlauf konnte nicht geladen werden. Bitte die Seite neu laden.</p>';
+          });
+      };
+      schritt();
+    };
+
+    $$('[data-zeitraum]').forEach(function (k) {
+      k.addEventListener('click', function () { vZustand.zeitraum = k.getAttribute('data-zeitraum'); speichern(); laden(); });
+    });
+    $$('[data-verlauf-schnitt]').forEach(function (k) {
+      var n = k.getAttribute('data-verlauf-schnitt');
+      k.classList.toggle('aktiv', !!vZustand[n]);
+      k.addEventListener('click', function () { vZustand[n] = !vZustand[n]; k.classList.toggle('aktiv', vZustand[n]); speichern(); zeigen(); });
+    });
+    $$('[data-quelle]').forEach(function (k) {
+      k.addEventListener('click', function () { vZustand.quelle = k.getAttribute('data-quelle'); speichern(); $$('[data-quelle]').forEach(function (x) { x.classList.toggle('aktiv', x === k); }); zeigen(); });
+    });
+    var freiForm = $('[data-verlauf-frei]');
+    if (freiForm) {
+      freiForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        if (!vonFeld.value || !bisFeld.value || vonFeld.value > bisFeld.value) { return; }
+        vZustand.zeitraum = 'frei'; vZustand.von = vonFeld.value; vZustand.bis = bisFeld.value; speichern(); laden();
+      });
+    }
+    $$('[data-verlauf-alle]').forEach(function (k) {
+      k.addEventListener('click', function () {
+        var an = k.getAttribute('data-verlauf-alle') === '1';
+        sichtbar().forEach(function (t) { if (an) { delete vZustand.aus[t.id]; } else { vZustand.aus[t.id] = 1; } });
+        speichern(); zeigen();
+      });
+    });
+    if (sucheFeld) { sucheFeld.addEventListener('input', zeigen); }
+    var vBreite = diagramm.clientWidth;
+    window.addEventListener('resize', function () { if (Math.abs(diagramm.clientWidth - vBreite) > 20) { vBreite = diagramm.clientWidth; zeigen(); } });
+    laden();
   }
 })();

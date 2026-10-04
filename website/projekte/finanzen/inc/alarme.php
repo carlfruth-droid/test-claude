@@ -120,16 +120,33 @@ function alarmeAusfuehren(string $anlass): array
 
 function benachrichtigen(array $d, string $titel, string $text, string $link): bool
 {
-    $ok = false;
+    $erg = benachrichtigenMitDetails($d, $titel, $text, $link);
+    return in_array(true, array_column($erg, 'ok'), true);
+}
+
+/**
+ * Verschickt über alle eingerichteten Wege und merkt sich das Ergebnis je Weg
+ * (für die Anzeige unter Einstellungen). Rückgabe: [weg => ['ok' => bool, 'text' => …]]
+ */
+function benachrichtigenMitDetails(array $d, string $titel, string $text, string $link): array
+{
+    $erg = [];
     $mail = einstellung($d, 'email');
     if ($mail !== '' && filter_var($mail, FILTER_VALIDATE_EMAIL)) {
-        $ok = mailSenden($mail, $titel, $text . "\n\nZur Firma: " . $link) || $ok;
+        $ok = mailSenden($mail, $titel, $text . "\n\nLink: " . $link);
+        $erg['email'] = ['ok' => $ok, 'text' => $ok ? 'an den Mailserver übergeben' : 'vom Server abgelehnt (mail() meldet einen Fehler)'];
     }
     $thema = einstellung($d, 'ntfy');
     if ($thema !== '' && einstellung($d, 'ntfy_aus') !== '1') {
-        $ok = ntfySenden($thema, $titel, $text, $link) || $ok;
+        [$ok, $info] = ntfySenden($thema, $titel, $text, $link);
+        $erg['push'] = ['ok' => $ok, 'text' => $info];
     }
-    return $ok;
+    datenAendern(function (array &$d) use ($erg, $titel): void {
+        $log = (array)($d['benachrichtigungen'] ?? []);
+        array_unshift($log, ['zeit' => time(), 'titel' => mb_substr($titel, 0, 80), 'wege' => $erg]);
+        $d['benachrichtigungen'] = array_slice($log, 0, 10);
+    });
+    return $erg;
 }
 
 function mailSenden(string $an, string $betreff, string $text): bool
@@ -137,16 +154,23 @@ function mailSenden(string $an, string $betreff, string $text): bool
     if (!function_exists('mail')) {
         return false;
     }
+    $absender = preg_match('/<([^>]+)>/', FZ_ABSENDER, $m) ? $m[1] : FZ_ABSENDER;
+    $domain = substr((string)strrchr($absender, '@'), 1);
     $kopf = 'From: ' . FZ_ABSENDER . "\r\n"
+        . 'Reply-To: ' . $absender . "\r\n"
+        . 'Date: ' . date(DATE_RFC2822) . "\r\n"
+        . 'Message-ID: <' . bin2hex(random_bytes(12)) . '@' . $domain . ">\r\n"
         . "MIME-Version: 1.0\r\n"
         . "Content-Type: text/plain; charset=UTF-8\r\n"
         . "Content-Transfer-Encoding: 8bit";
     $inhalt = $text . "\n\n— Deine Finanzzentrale auf fruthzeug.de\n(Keine Anlageberatung. Kurse können verzögert sein.)";
-    return @mail($an, mb_encode_mimeheader($betreff, 'UTF-8', 'B'), $inhalt, $kopf);
+    $betreff = mb_encode_mimeheader($betreff, 'UTF-8', 'B');
+    // Absender auch im Umschlag setzen (sonst nimmt der Server den technischen Benutzer – Gmail sortiert das gern aus)
+    return @mail($an, $betreff, $inhalt, $kopf, '-f' . $absender) || @mail($an, $betreff, $inhalt, $kopf);
 }
 
-/** Push über ntfy.sh (oder einen eigenen ntfy-Server, wenn eine URL eingetragen ist). */
-function ntfySenden(string $thema, string $titel, string $text, string $link): bool
+/** Push über ntfy.sh (oder einen eigenen ntfy-Server, wenn eine URL eingetragen ist). Rückgabe: [ok, Beschreibung] */
+function ntfySenden(string $thema, string $titel, string $text, string $link): array
 {
     $server = 'https://ntfy.sh';
     $name = $thema;
@@ -154,13 +178,16 @@ function ntfySenden(string $thema, string $titel, string $text, string $link): b
         [$server, $name] = [$m[1], $m[2]];
     }
     if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $name)) {
-        return false;
+        return [false, 'ungültiges Thema'];
     }
     $r = http($server . '/', [
         'post' => (string)json_encode(['topic' => $name, 'title' => $titel, 'message' => $text, 'click' => $link, 'tags' => ['chart_with_upwards_trend']]),
         'kopf' => ['Content-Type: application/json'], 'zeit' => 12,
     ]);
-    return $r['code'] >= 200 && $r['code'] < 300;
+    if ($r['code'] >= 200 && $r['code'] < 300) {
+        return [true, 'von ntfy angenommen'];
+    }
+    return [false, $r['code'] === 0 ? 'ntfy nicht erreichbar (' . ($r['fehler'] ?: 'Zeitüberschreitung') . ')' : 'ntfy meldet HTTP ' . $r['code']];
 }
 
 /** Status der automatischen Prüfung für die Anzeige: ['ok' => bool, 'text' => …] */

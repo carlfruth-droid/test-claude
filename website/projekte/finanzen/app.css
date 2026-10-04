@@ -465,3 +465,22 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 }
 .fortschritt { height: 8px; border-radius: 99px; background: #e8edf5; overflow: hidden; margin: 6px 0 4px; }
 .fortschritt span { display: block; height: 100%; background: var(--akzent); transition: width .4s; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+.chip { border: 1px solid var(--rand); background: #fff; color: var(--text); border-radius: 99px; padding: 6px 12px; font: inherit; font-size: .88rem; cursor: pointer; }
+.chip.aktiv { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+.zeitraum-frei { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; margin-bottom: 12px; }
+.zeitraum-frei .feld { margin: 0; }
+.verlauf-chart { height: 230px; }
+.verlauf-liste li { display: flex; align-items: center; gap: 10px; }
+.verlauf-liste label { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
+.verlauf-liste label span { min-width: 0; }
+.verlauf-liste label strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verlauf-liste input[type=checkbox] { width: 20px; height: 20px; flex: none; accent-color: var(--akzent); }
+.verlauf-liste .knopf-text.klein { padding: 4px 0; font-size: .82rem; }
+[data-verlauf-suche] { margin: 6px 0 4px; }
+@media (max-width: 420px) { .zeitraum-frei { grid-template-columns: 1fr 1fr; } .zeitraum-frei .knopf { grid-column: span 2; } }
+.chart .linie.zusatz { stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; }
+.chips.schnitte { margin-top: 8px; }
+.chips.schnitte i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.chip.aktiv i { background: #fff !important; }
+.chart-tip small { display: block; }
