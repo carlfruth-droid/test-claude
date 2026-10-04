@@ -48,12 +48,13 @@
   var gemerkt = {};
   try { gemerkt = JSON.parse(speicher.lesen(seitenSchluessel) || '{}') || {}; } catch (e) { gemerkt = {}; }
 
-  function nachladen(akk) {
+  function nachladen(akk, frisch) {
     var teil = akk.getAttribute('data-teil');
-    if (!teil || akk.getAttribute('data-geladen')) { return; }
+    if (!teil || (akk.getAttribute('data-geladen') && !frisch)) { return; }
     akk.setAttribute('data-geladen', '1');
     var ziel = $('.akk-inhalt', akk);
-    fetch('?teil=' + encodeURIComponent(teil) + '&s=' + encodeURIComponent(akk.getAttribute('data-s') || ''), { credentials: 'same-origin' })
+    if (frisch) { $$('[data-neu-laden]', ziel).forEach(function (k) { k.disabled = true; k.textContent = 'Wird aktualisiert …'; }); }
+    fetch('?teil=' + encodeURIComponent(teil) + '&s=' + encodeURIComponent(akk.getAttribute('data-s') || '') + (frisch ? '&frisch=1' : ''), { credentials: 'same-origin' })
       .then(function (r) {
         if (r.status === 401) { location.reload(); return ''; }
         return r.text();
@@ -75,10 +76,35 @@
     if (id && Object.prototype.hasOwnProperty.call(gemerkt, id)) { akk.open = !!gemerkt[id]; }
     if (akk.open) { nachladen(akk); }
     akk.addEventListener('toggle', function () {
-      if (akk.open) { nachladen(akk); }
+      if (akk.open) { nachladen(akk, veraltet(akk)); }
       if (id) { gemerkt[id] = akk.open ? 1 : 0; speicher.schreiben(seitenSchluessel, JSON.stringify(gemerkt)); }
     });
   });
+
+  // Nachrichten: älter als 30 Minuten abgerufen → beim Öffnen bzw. Zurückkehren neu laden
+  function veraltet(akk) {
+    var k = $('[data-abgerufen]', akk);
+    var t = k ? parseInt(k.getAttribute('data-abgerufen'), 10) : 0;
+    return !!t && Date.now() / 1000 - t > 1800;
+  }
+  function vorZeit(ts) {
+    var d = Date.now() / 1000 - ts;
+    if (d < 90) { return 'gerade eben'; }
+    if (d < 3600) { return 'vor ' + Math.round(d / 60) + ' Min.'; }
+    if (d < 86400) { return 'vor ' + Math.round(d / 3600) + ' Std.'; }
+    var tage = Math.floor(d / 86400);
+    return tage === 1 ? 'gestern' : 'vor ' + tage + ' Tagen';
+  }
+  function zeitenNachfuehren() {
+    $$('[data-vor]').forEach(function (el) { el.textContent = '(' + vorZeit(parseInt(el.getAttribute('data-vor'), 10)) + ')'; });
+  }
+  setInterval(zeitenNachfuehren, 60000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') { return; }
+    zeitenNachfuehren();
+    $$('details.akk[open]').forEach(function (akk) { if (veraltet(akk)) { nachladen(akk, true); } });
+  });
+  window.addEventListener('pageshow', function (e) { if (e.persisted) { zeitenNachfuehren(); $$('details.akk[open]').forEach(function (akk) { if (veraltet(akk)) { nachladen(akk, true); } }); } });
 
   // Anker (#f-limits) öffnet das passende Akkordeon
   function ankerOeffnen(id) {
@@ -97,6 +123,10 @@
         });
       });
     });
+    $$('[data-neu-laden]', wurzel).forEach(function (k) {
+      k.addEventListener('click', function () { var akk = k.closest('details.akk'); if (akk) { nachladen(akk, true); } });
+    });
+    if (wurzel !== document) { zeitenNachfuehren(); }
     $$('[data-oeffne]', wurzel).forEach(function (a) {
       a.addEventListener('click', function (e) { e.preventDefault(); ankerOeffnen(a.getAttribute('data-oeffne')); });
     });

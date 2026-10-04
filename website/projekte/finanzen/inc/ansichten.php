@@ -1047,23 +1047,34 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
 // Nachladbare Teile des Steckbriefs
 // ---------------------------------------------------------------------------
 
-function teilNews(array $f, array $p): string
+function teilNews(array $f, array $p, bool $frisch = false): string
 {
     $begriff = $f['suchbegriff'] !== '' ? $f['suchbegriff'] : nameKurz($p['name']);
-    $de = googleNews($begriff, 'de');
-    $en = googleNews($begriff, 'en');
-    $liste = static function (array $news): string {
+    $de = googleNews($begriff, 'de', $frisch);
+    $en = googleNews($begriff, 'en', $frisch);
+    $abgerufen = min(array_filter([newsAbgerufen($begriff, 'de'), newsAbgerufen($begriff, 'en')]) ?: [0]);
+    $wochentage = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+    $liste = static function (array $news) use ($wochentage): string {
         if ($news === []) {
             return leer('Keine aktuellen Meldungen gefunden.');
         }
         $html = '<ul class="news">';
         foreach ($news as $n) {
+            $wann = '';
+            if ($n['zeit'] > 0) {
+                // Festes Datum plus „vor …“, das der Browser laufend nachführt
+                $wann = ' · <time datetime="' . e(date('c', $n['zeit'])) . '">' . e($wochentage[(int)date('w', $n['zeit'])] . ' ' . date('d.m.', $n['zeit']) . ' ' . date('H:i', $n['zeit'])) . '</time>'
+                    . ' <span class="leise" data-vor="' . $n['zeit'] . '">(' . e(vorZeit($n['zeit'])) . ')</span>';
+            }
             $html .= '<li><a href="' . e($n['link']) . '" target="_blank" rel="noopener noreferrer">' . e($n['titel']) . '</a>'
-                . '<small>' . e($n['quelle']) . ($n['zeit'] > 0 ? ' · ' . e(vorZeit($n['zeit'])) : '') . '</small></li>';
+                . '<small>' . e($n['quelle']) . $wann . '</small></li>';
         }
         return $html . '</ul>';
     };
-    return '<div class="reiter" data-reiter><div class="reiter-knoepfe"><button type="button" class="aktiv" data-reiter-ziel="de">Deutsch</button><button type="button" data-reiter-ziel="en">Englisch</button></div>'
+    return '<div class="news-kopf" data-abgerufen="' . $abgerufen . '"><span class="klein leise">'
+        . ($abgerufen > 0 ? 'Abgerufen ' . e(date('d.m.', $abgerufen)) . ' um ' . e(date('H:i', $abgerufen)) . ' Uhr <span data-vor="' . $abgerufen . '">(' . e(vorZeit($abgerufen)) . ')</span>' : '')
+        . '</span><button type="button" class="knopf-text" data-neu-laden>' . ico('neu') . ' Aktualisieren</button></div>'
+        . '<div class="reiter" data-reiter><div class="reiter-knoepfe"><button type="button" class="aktiv" data-reiter-ziel="de">Deutsch</button><button type="button" data-reiter-ziel="en">Englisch</button></div>'
         . '<div data-reiter-inhalt="de">' . $liste($de) . '</div><div data-reiter-inhalt="en" hidden>' . $liste($en) . '</div></div>'
         . '<p class="klein leise">Suchbegriff: „' . e($begriff) . '“ – änderbar unter „Profil & Stammdaten“. Quelle: Google News.</p>';
 }
