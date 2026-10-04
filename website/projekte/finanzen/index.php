@@ -641,7 +641,7 @@ if (isset($_GET['teil'])) {
     }
     $id = ['isin' => $f['isin'], 'lei' => $f['lei'], 'wikidata' => $f['wikidata']];
     echo match ($teil) {
-        'news' => teilNews($f, $p),
+        'news' => teilNews($f, $p, isset($_GET['frisch'])),
         'aktionaere' => teilAktionaere($f, $p, $id),
         'beteiligungen' => teilBeteiligungen($f, $id),
         'profil' => teilProfil($f, $p, $id),

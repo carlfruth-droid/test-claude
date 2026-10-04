@@ -367,6 +367,8 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .news li:last-child { border-bottom: 0; }
 .news a { color: var(--text); font-weight: 560; }
 .news small { display: block; color: var(--leise); margin-top: 2px; }
+.news-kopf { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.news-kopf .knopf-text { white-space: nowrap; }
 .reiter-knoepfe { display: inline-flex; background: #f1f4f9; border-radius: 999px; padding: 3px; margin-bottom: 8px; }
 .reiter-knoepfe button { border: 0; background: none; padding: 6px 14px; border-radius: 999px; font: inherit; font-size: .88rem; font-weight: 600; color: var(--leise); cursor: pointer; }
 .reiter-knoepfe button.aktiv { background: #fff; color: var(--text); box-shadow: var(--schatten); }

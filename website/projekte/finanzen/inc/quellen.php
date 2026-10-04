@@ -329,9 +329,10 @@ function identitaetErmitteln(array $firma, array $profil): array
 // News
 // ---------------------------------------------------------------------------
 
-function googleNews(string $suchbegriff, string $sprache): array
+/** Meldungen der letzten 30 Tage; $frisch = Abruf erzwingen (höchstens einmal pro Minute). */
+function googleNews(string $suchbegriff, string $sprache, bool $frisch = false): array
 {
-    $liste = gecacht('news:' . $sprache . ':' . mb_strtolower($suchbegriff), 1800, function () use ($suchbegriff, $sprache): ?array {
+    $liste = gecacht(newsSchluessel($suchbegriff, $sprache), $frisch ? 60 : 1800, function () use ($suchbegriff, $sprache): ?array {
         $q = '"' . $suchbegriff . '" ' . ($sprache === 'de' ? 'Aktie' : 'stock') . ' when:30d';
         $ort = $sprache === 'de' ? '&hl=de&gl=DE&ceid=DE:de' : '&hl=en-US&gl=US&ceid=US:en';
         $r = http('https://news.google.com/rss/search?q=' . rawurlencode($q) . $ort, ['ua' => 'browser', 'zeit' => 15]);
@@ -367,6 +368,17 @@ function googleNews(string $suchbegriff, string $sprache): array
         return array_slice($liste, 0, 15);
     });
     return is_array($liste) ? $liste : [];
+}
+
+function newsSchluessel(string $suchbegriff, string $sprache): string
+{
+    return 'news:' . $sprache . ':' . mb_strtolower($suchbegriff);
+}
+
+/** Zeitpunkt des letzten erfolgreichen Abrufs (0 = unbekannt). */
+function newsAbgerufen(string $suchbegriff, string $sprache): int
+{
+    return (int)(cacheLesen(newsSchluessel($suchbegriff, $sprache), 0)['zeit'] ?? 0);
 }
 
 // ---------------------------------------------------------------------------
