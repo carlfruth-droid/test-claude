@@ -463,3 +463,5 @@ input[type="file"] { font: inherit; font-size: .92rem; }
   .zeile-extra { padding-left: 16px; }
   .marke span { font-size: 1rem; }
 }
+.fortschritt { height: 8px; border-radius: 99px; background: #e8edf5; overflow: hidden; margin: 6px 0 4px; }
+.fortschritt span { display: block; height: 100%; background: var(--akzent); transition: width .4s; }

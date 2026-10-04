@@ -106,6 +106,29 @@
   });
   window.addEventListener('pageshow', function (e) { if (e.persisted) { zeitenNachfuehren(); $$('details.akk[open]').forEach(function (akk) { if (veraltet(akk)) { nachladen(akk, true); } }); } });
 
+  // ---------- Depot: importierte Titel schrittweise zuordnen ----------
+  var zuordnen = $('[data-zuordnen]');
+  if (zuordnen) {
+    var gesamt = parseInt(zuordnen.getAttribute('data-zuordnen'), 10) || 1, fehlversuche = 0;
+    var schritt = function () {
+      var daten = new FormData();
+      daten.append('csrf', csrf);
+      fetch('?api=zuordnen', { method: 'POST', body: daten, credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+        .then(function (j) {
+          fehlversuche = 0;
+          $('[data-zuordnen-zahl]', zuordnen).textContent = j.offen;
+          $('[data-zuordnen-balken]', zuordnen).style.width = Math.round((1 - j.offen / gesamt) * 100) + '%';
+          if (j.offen > 0) { schritt(); } else { location.reload(); }
+        })
+        .catch(function () {
+          if (++fehlversuche < 4) { setTimeout(schritt, 3000); return; }
+          $('[data-zuordnen-hinweis]', zuordnen).textContent = 'Die Verbindung zum Server ist abgebrochen. Lade die Seite neu, um weiterzumachen.';
+        });
+    };
+    schritt();
+  }
+
   // Anker (#f-limits) öffnet das passende Akkordeon
   function ankerOeffnen(id) {
     var el = document.getElementById(id);

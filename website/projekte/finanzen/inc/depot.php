@@ -517,27 +517,14 @@ function trPositionen(array $buchungen): array
 function trImportSpeichern(array $ergebnis, string $dateiname): array
 {
     $positionen = trPositionenAus($ergebnis);
-    if (function_exists('set_time_limit')) { @set_time_limit(240); }
     $klassen = ['STOCK' => 'aktie', 'FUND' => 'etf', 'CRYPTO' => 'krypto', 'DERIVATIVE' => 'derivat', 'BOND' => 'anleihe', 'SYNTHETIC' => 'sonst'];
-    $isins = [];
-    foreach ($positionen as $p) {
-        if ($p['stueck'] > 1e-9 && $p['isin'] !== '' && !in_array($klassen[(string)($p['klasse'] ?? '')] ?? '', ['derivat', 'sonst'], true)) {
-            $isins[] = $p['isin'];
-        }
-    }
-    yahooSucheVorladen($isins, ['EQUITY', 'ETF', 'MUTUALFUND']);
     foreach ($positionen as $k => $p) {
         $klasse = $klassen[(string)($p['klasse'] ?? '')] ?? '';
-        if ($p['stueck'] <= 1e-9 || $klasse === 'derivat' || $klasse === 'sonst') {
-            // komplett verkauft oder ohne Börsenkurs bei Yahoo (Optionsscheine, Zertifikate, Bezugsrechte)
-            $positionen[$k] += ['symbol' => '', 'art' => $klasse];
-            continue;
-        }
-        $info = $p['isin'] !== '' ? symbolZuIsin($p['isin'], $p['name']) : ['symbol' => $p['ticker'], 'art' => '', 'name' => $p['name']];
-        $positionen[$k]['symbol'] = $info['symbol'];
-        $positionen[$k]['art'] = $info['art'] !== '' ? $info['art'] : $klasse;
-        if ($p['name'] === $k && $info['name'] !== '') {
-            $positionen[$k]['name'] = $info['name'];
+        $positionen[$k] += ['symbol' => '', 'art' => $klasse];
+        // Börsenkürzel ordnet depotZuordnen() danach schrittweise zu; komplett verkaufte
+        // Titel und solche ohne Börsenkurs bei Yahoo (Optionsscheine, Zertifikate) brauchen keins
+        if ($p['stueck'] > 1e-9 && $klasse !== 'derivat' && $klasse !== 'sonst') {
+            $positionen[$k]['zuordnen'] = true;
         }
     }
     $daten = array_column($ergebnis['buchungen'], 'datum');
@@ -1032,45 +1019,69 @@ function ausEuro(?float $eur, string $waehrung, array $fx): ?float
 }
 
 /** Kontoauszug übernehmen: Yahoo-Kürzel zuordnen, fehlende Hebel schätzen, Positionen je Instrument zusammenfassen. */
+/**
+ * Kontoauszug übernehmen. Gespeichert werden zunächst die Rohpositionen; die
+ * Zuordnung zu Börsenkürzeln läuft danach schrittweise (depotZuordnen), damit
+ * keine Anfrage an das Zeitlimit des Servers stößt.
+ */
 function etoroAuszugSpeichern(array $ergebnis, string $dateiname): array
 {
-    if (function_exists('set_time_limit')) { @set_time_limit(240); }
-    $positionen = $ergebnis['positionen'];
-    $isins = array_values(array_unique(array_filter(array_map(
-        static fn(array $p): string => $p['art'] !== 'krypto' ? $p['isin'] : '', $positionen))));
-    yahooSucheVorladen($isins, ['EQUITY', 'ETF', 'MUTUALFUND']);
+    $offen = [];
+    foreach ($ergebnis['positionen'] as $p) {
+        $offen[$p['kuerzel']] ??= ['isin' => $p['isin'], 'name' => $p['name'], 'art' => $p['art'], 'waehrung' => $p['waehrung']];
+    }
+    $auszug = [
+        'zeit' => time(), 'datei' => mb_substr($dateiname, 0, 120), 'von' => $ergebnis['von'], 'bis' => $ergebnis['bis'],
+        'stichtag' => $ergebnis['stichtag'], 'cash_usd' => $ergebnis['cash'], 'eigenkapital_usd' => $ergebnis['eigenkapital'],
+        'summen' => $ergebnis['summen'], 'eingesetzt_usd' => $ergebnis['eingesetzt'], 'anzahl' => count($ergebnis['positionen']),
+        'roh' => $ergebnis['positionen'], 'offen' => $offen, 'symbole' => [], 'positionen' => [],
+    ];
+    datenAendern(function (array &$d) use ($auszug): void {
+        $d['broker']['etoro_auszug'] = $auszug;
+        depotFirmenAbgleichen($d);
+    });
+    return $auszug;
+}
 
-    // Kürzel je Instrument: Krypto → BTC-USD, sonst über die ISIN, ersatzweise das eToro-Kürzel
+/** Yahoo-Kürzel für eToro-Instrumente: Krypto → BTC-USD, sonst über die ISIN, ersatzweise das eToro-Kürzel. */
+function etoroKuerzelZuordnen(array $instrumente): array
+{
+    yahooSucheVorladen(array_values(array_filter(array_map(
+        static fn(array $i): string => $i['art'] !== 'krypto' ? $i['isin'] : '', $instrumente))), ['EQUITY', 'ETF', 'MUTUALFUND']);
     $symbole = [];
     $ohneIsin = [];
-    foreach ($positionen as $p) {
-        $k = $p['kuerzel'];
-        if (isset($symbole[$k])) {
-            continue;
-        }
-        if ($p['art'] === 'krypto') {
+    foreach ($instrumente as $k => $i) {
+        if ($i['art'] === 'krypto') {
             $symbole[$k] = ['symbol' => $k . '-USD', 'name' => ''];
-        } elseif ($p['isin'] !== '') {
-            $info = symbolZuIsin($p['isin'], $p['name']);
+        } elseif ($i['isin'] !== '') {
+            $info = symbolZuIsin($i['isin'], $i['name']);
             $symbole[$k] = ['symbol' => $info['symbol'], 'name' => $info['name']];
         } else {
-            $s = etoroZuYahoo($k);
-            if (!str_contains($s, '.') && isset(['CHF' => 1, 'GBp' => 1, 'HKD' => 1][$p['waehrung']])) {
-                $s .= ['CHF' => '.SW', 'GBp' => '.L', 'HKD' => '.HK'][$p['waehrung']];
+            $s = etoroZuYahoo((string)$k);
+            if (!str_contains($s, '.') && isset(['CHF' => 1, 'GBp' => 1, 'HKD' => 1][$i['waehrung']])) {
+                $s .= ['CHF' => '.SW', 'GBp' => '.L', 'HKD' => '.HK'][$i['waehrung']];
             }
             $symbole[$k] = ['symbol' => $s, 'name' => ''];
-            $ohneIsin[$k] = $p['waehrung'];
+            $ohneIsin[$k] = $i['waehrung'];
         }
     }
-    $alle = array_values(array_unique(array_filter(array_column($symbole, 'symbol'))));
-    $kurse = $alle !== [] ? yahooKurse($alle) : [];
     // Ohne ISIN nur verknüpfen, wenn Yahoo das Kürzel in derselben Währung kennt (sonst droht eine falsche Firma)
+    $pruefen = array_values(array_filter(array_map(static fn($k): string => $symbole[$k]['symbol'], array_keys($ohneIsin))));
+    $kurse = $pruefen !== [] ? yahooKurse($pruefen) : [];
     foreach ($ohneIsin as $k => $w) {
         $s = $symbole[$k]['symbol'];
         if ($s === '' || !isset($kurse[$s]) || waehrungBasis((string)($kurse[$s]['waehrung'] ?? '')) !== waehrungBasis($w)) {
             $symbole[$k]['symbol'] = '';
         }
     }
+    return $symbole;
+}
+
+/** Rohpositionen je Instrument zusammenfassen; fehlende Hebel nach dem Stichtag eröffneter CFDs schätzen. */
+function etoroGruppieren(array $positionen, array $symbole): array
+{
+    $alle = array_values(array_unique(array_filter(array_column($symbole, 'symbol'))));
+    $kurse = $alle !== [] ? yahooKurse($alle) : [];
     $waehrungen = array_merge(['USD'], array_column($positionen, 'waehrung'),
         array_map(static fn(array $k): string => (string)($k['waehrung'] ?? ''), $kurse));
     $fx = wechselkurse($waehrungen);
@@ -1118,17 +1129,91 @@ function etoroAuszugSpeichern(array $ergebnis, string $dateiname): array
     unset($g);
     uasort($gruppen, static fn(array $a, array $b): int => $b['einstand_usd'] <=> $a['einstand_usd']);
 
-    $auszug = [
-        'zeit' => time(), 'datei' => mb_substr($dateiname, 0, 120), 'von' => $ergebnis['von'], 'bis' => $ergebnis['bis'],
-        'stichtag' => $ergebnis['stichtag'], 'cash_usd' => $ergebnis['cash'], 'eigenkapital_usd' => $ergebnis['eigenkapital'],
-        'summen' => $ergebnis['summen'], 'eingesetzt_usd' => $ergebnis['eingesetzt'], 'anzahl' => count($positionen),
-        'positionen' => array_values($gruppen),
-    ];
-    datenAendern(function (array &$d) use ($auszug): void {
-        $d['broker']['etoro_auszug'] = $auszug;
-        depotFirmenAbgleichen($d);
-    });
-    return $auszug;
+    return array_values($gruppen);
+}
+
+/** Wie viele Titel noch auf ihr Börsenkürzel warten. */
+function zuordnungOffen(array $d): int
+{
+    $n = count(array_filter((array)($d['broker']['traderepublic']['positionen'] ?? []), static fn(array $p): bool => !empty($p['zuordnen'])));
+    return $n + count((array)($d['broker']['etoro_auszug']['offen'] ?? []));
+}
+
+/**
+ * Ordnet einen Teil der importierten Titel ihrem Börsenkürzel zu – so viel,
+ * wie in das Zeitbudget passt. Rückgabe: noch offene Titel.
+ */
+function depotZuordnen(float $budget = 8.0): int
+{
+    $start = microtime(true);
+    $d = datenLaden();
+    $zeitUm = static fn(): bool => microtime(true) - $start > $budget;
+
+    // Trade Republic
+    $tr = $d['broker']['traderepublic'] ?? null;
+    $offen = array_filter((array)($tr['positionen'] ?? []), static fn(array $p): bool => !empty($p['zuordnen']));
+    $erg = [];
+    foreach (array_chunk($offen, 10, true) as $teil) {
+        if ($zeitUm()) {
+            break;
+        }
+        yahooSucheVorladen(array_values(array_filter(array_column($teil, 'isin'))), ['EQUITY', 'ETF', 'MUTUALFUND']);
+        foreach ($teil as $k => $p) {
+            $erg[$k] = $p['isin'] !== '' ? symbolZuIsin($p['isin'], $p['name']) : ['symbol' => (string)($p['ticker'] ?? ''), 'art' => '', 'name' => $p['name']];
+            if ($zeitUm()) {
+                break 2;
+            }
+        }
+    }
+    if ($erg !== []) {
+        $importZeit = (int)($tr['zeit'] ?? 0);
+        datenAendern(function (array &$d) use ($erg, $importZeit): void {
+            if ((int)($d['broker']['traderepublic']['zeit'] ?? 0) !== $importZeit) {
+                return; // inzwischen neu importiert
+            }
+            foreach ($erg as $k => $info) {
+                $p = &$d['broker']['traderepublic']['positionen'][$k];
+                $p['symbol'] = $info['symbol'];
+                $p['art'] = $info['art'] !== '' ? $info['art'] : (string)($p['art'] ?? '');
+                if ($p['name'] === $k && $info['name'] !== '') {
+                    $p['name'] = $info['name'];
+                }
+                unset($p['zuordnen'], $p);
+            }
+            depotFirmenAbgleichen($d);
+        });
+    }
+
+    // eToro-Kontoauszug
+    $ea = $d['broker']['etoro_auszug'] ?? null;
+    if ($ea !== null && !empty($ea['offen']) && !$zeitUm()) {
+        $neu = [];
+        foreach (array_chunk($ea['offen'], 12, true) as $teil) {
+            $neu += etoroKuerzelZuordnen($teil);
+            if ($zeitUm()) {
+                break;
+            }
+        }
+        $symbole = $ea['symbole'] + $neu;
+        $fertig = count(array_diff_key($ea['offen'], $neu)) === 0;
+        $positionen = $fertig ? etoroGruppieren($ea['roh'], $symbole) : null;
+        $importZeit = (int)$ea['zeit'];
+        datenAendern(function (array &$d) use ($neu, $symbole, $positionen, $importZeit): void {
+            $a = &$d['broker']['etoro_auszug'];
+            if ((int)($a['zeit'] ?? 0) !== $importZeit) {
+                return;
+            }
+            $a['symbole'] = $symbole;
+            $a['offen'] = array_diff_key((array)$a['offen'], $neu);
+            if ($positionen !== null) {
+                $a['positionen'] = $positionen;
+                unset($a['roh']);
+            }
+            unset($a);
+            depotFirmenAbgleichen($d);
+        });
+    }
+    return zuordnungOffen(datenLaden());
 }
 
 // ---------------------------------------------------------------------------

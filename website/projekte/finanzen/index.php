@@ -49,6 +49,10 @@ if (isset($_GET['cron'])) {
     if ($z['etoro_api'] !== '' && time() - (int)($d['broker']['etoro']['zeit'] ?? 0) > 6 * 3600) {
         $erg['etoro'] = etoroAktualisieren() === '' ? 'ok' : 'fehler';
     }
+    if (zuordnungOffen($d) > 0) {
+        // Falls die Depotseite während der Zuordnung geschlossen wurde
+        $erg['zuordnung_offen'] = depotZuordnen(60.0);
+    }
     cacheAufraeumen();
     echo json_encode(['ok' => true] + $erg, JSON_UNESCAPED_UNICODE);
     exit;
@@ -76,6 +80,15 @@ function diagnose(): array
         'ki_schluessel' => kiSchluessel() !== '' ? 'vorhanden' : 'fehlt',
         'mail' => function_exists('mail') ? 'verfügbar' : 'fehlt',
         'eingerichtet' => passwortGesetzt(),
+        'php_grenzen' => [
+            'max_execution_time' => (string)ini_get('max_execution_time'),
+            'set_time_limit' => function_exists('set_time_limit') && !in_array('set_time_limit', array_map('trim', explode(',', (string)ini_get('disable_functions'))), true),
+            'upload_max_filesize' => (string)ini_get('upload_max_filesize'),
+            'post_max_size' => (string)ini_get('post_max_size'),
+            'memory_limit' => (string)ini_get('memory_limit'),
+            'zip' => class_exists('ZipArchive'),
+            'simplexml' => function_exists('simplexml_load_string'),
+        ],
     ];
 }
 
@@ -417,7 +430,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                 $tr = trImportSpeichern($ergebnis, (string)($ergebnis['datei'] ?? ''));
                 @unlink(fzPfad('tr-vorschau.json'));
                 $offen = count(array_filter($tr['positionen'], static fn(array $p): bool => $p['stueck'] > 1e-9));
-                meldung('Trade Republic importiert: ' . $offen . ' aktuelle Positionen.');
+                meldung('Trade Republic importiert: ' . $offen . ' aktuelle Positionen. Die Kurse werden jetzt zugeordnet.');
                 weiter(url(['seite' => 'depot']));
                 break;
             case 'tr_verwerfen':
@@ -462,7 +475,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                 }
                 $auszug = etoroAuszugSpeichern($ergebnis, (string)($ergebnis['datei'] ?? ''));
                 @unlink(fzPfad('etoro-vorschau.json'));
-                meldung('eToro importiert: ' . $auszug['anzahl'] . ' offene Positionen in ' . count($auszug['positionen']) . ' Titeln.');
+                meldung('eToro importiert: ' . $auszug['anzahl'] . ' offene Positionen in ' . count($auszug['offen']) . ' Titeln. Die Kurse werden jetzt zugeordnet.');
                 weiter(url(['seite' => 'depot']));
                 break;
             case 'etoro_verwerfen':
@@ -584,6 +597,11 @@ if (isset($_GET['api'])) {
         $treffer = array_slice(firmenSuchen((string)($_GET['q'] ?? '')), 0, 8);
         echo json_encode(array_map(static fn(array $t): array => ['name' => $t['name'], 'symbol' => $t['symbol'], 'boerse' => $t['boerse'],
             'url' => firmaUrl($t['symbol'], $t['isin'] ?? '')], $treffer), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($_GET['api'] === 'zuordnen' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {
+        session_write_close();
+        echo json_encode(['ok' => true, 'offen' => depotZuordnen(8.0)]);
         exit;
     }
     if ($_GET['api'] === 'ki' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {

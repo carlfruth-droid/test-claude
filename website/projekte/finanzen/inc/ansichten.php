@@ -1353,7 +1353,15 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
       <form method="post" action="./?seite=depot" data-laden="Kurse werden zugeordnet …"><?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_uebernehmen"><button class="knopf" type="submit"><?= ico('haken') ?> Übernehmen</button></form>
       <form method="post" action="./?seite=depot"><?= csrfFeld() ?><input type="hidden" name="aktion" value="etoro_verwerfen"><button class="knopf zweit" type="submit">Verwerfen</button></form>
     </div>
-    <p class="klein leise">Das Übernehmen dauert etwa eine halbe Minute: Jeder Titel wird einem Börsenkürzel zugeordnet, damit die Kurse danach live mitlaufen. Ein neuer Import ersetzt den vorherigen.</p>
+    <p class="klein leise">Nach dem Übernehmen bekommt jeder Titel sein Börsenkürzel (etwa eine Minute, mit Fortschrittsanzeige), damit die Kurse live mitlaufen. Ein neuer Import ersetzt den vorherigen.</p>
+  </section>
+<?php endif; ?>
+<?php $offen = zuordnungOffen($d); if ($offen > 0): ?>
+  <section class="karte vorschau" data-zuordnen="<?= $offen ?>">
+    <h2 class="karten-titel"><?= ico('neu') ?> Kurse werden zugeordnet</h2>
+    <p>Noch <strong data-zuordnen-zahl><?= $offen ?></strong> Titel. Jeder bekommt sein Börsenkürzel, damit die Kurse danach live mitlaufen. Das dauert etwa eine Minute – die Seite lädt sich danach selbst neu.</p>
+    <div class="fortschritt"><span data-zuordnen-balken style="width:0%"></span></div>
+    <p class="klein leise" data-zuordnen-hinweis>Lass die Seite so lange geöffnet. Wird sie geschlossen, macht der Server später allein weiter.</p>
   </section>
 <?php endif; ?>
 <section class="karte depot-summe">
