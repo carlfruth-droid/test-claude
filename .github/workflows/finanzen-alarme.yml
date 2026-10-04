@@ -5,8 +5,7 @@ name: Finanzzentrale – Alarme prüfen
 # GitHub nur auf dem Standard-Branch.
 on:
   schedule:
-    - cron: '7,37 6-21 * * 1-5'   # werktags etwa alle 30 Minuten (8–23 Uhr deutscher Sommerzeit)
-    - cron: '17 7 * * 0,6'        # am Wochenende einmal morgens (Wiedervorlagen, Termine)
+    - cron: '7,37 6-21 * * *'   # täglich etwa alle 30 Minuten (8–23 Uhr deutscher Sommerzeit); auch Push-Nachversand
   workflow_dispatch:
 
 jobs:
