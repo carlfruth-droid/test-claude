@@ -456,6 +456,7 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
             case 'woche': return $woche[$f['symbol']] ?? null;
             case 'gesamt': return $gesamtProz($f);
             case 'kursziel': return $potenzial($f);
+            case 'crv': return isset($f['szenario']['werte']['crv']) ? (float)$f['szenario']['werte']['crv'] : null;
             case 'heute': return $kurse[$f['symbol']]['aend_proz'] ?? null;
             case 'pruefung': return isset(letztePruefung($f)['zeit']) ? (int)letztePruefung($f)['zeit'] : null;
             case 'seit': return $seitPruefung($f);
@@ -486,7 +487,7 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
   <form method="get" action="./" class="sortieren">
     <input type="hidden" name="seite" value="firmen"><input type="hidden" name="status" value="<?= e($filter) ?>"><input type="hidden" name="dir" value="">
     <select name="sort" data-auto-absenden aria-label="Sortierung">
-      <?php foreach (['name' => 'Name', 'depotwert' => 'Depotwert', 'heute' => '% heute', 'woche' => '% Woche', 'gesamt' => '% Ertrag insgesamt', 'kursziel' => 'Analysten-Kursziel (Potenzial)', 'seit' => 'Seit erster Prüfung', 'pruefung' => 'Zuletzt geprüft', 'bewertung' => 'Meine Bewertung'] as $k => $t): ?>
+      <?php foreach (['name' => 'Name', 'depotwert' => 'Depotwert', 'heute' => '% heute', 'woche' => '% Woche', 'gesamt' => '% Ertrag insgesamt', 'kursziel' => 'Analysten-Kursziel (Potenzial)', 'crv' => 'Meine Empfehlung (CRV)', 'seit' => 'Seit erster Prüfung', 'pruefung' => 'Zuletzt geprüft', 'bewertung' => 'Meine Bewertung'] as $k => $t): ?>
         <option value="<?= e($k) ?>"<?= $sortierung === $k ? ' selected' : '' ?>><?= e($t) ?></option>
       <?php endforeach; ?>
     </select>
@@ -503,12 +504,13 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
       $ges = $gesamtProz($f); ?>
     <div class="filterbar">
       <?= firmaZeile($f, $kurse[$f['symbol']] ?? null, true) ?>
-      <?php if ($seit !== null || $f['bewertung'] > 0 || $dep !== null || $wo !== null || $potenzial($f) !== null): ?>
+      <?php if ($seit !== null || $f['bewertung'] > 0 || $dep !== null || $wo !== null || $potenzial($f) !== null || isset($f['szenario']['werte']['crv'])): ?>
         <div class="zeile-extra">
           <?php if ($dep !== null): ?><span>Im Depot <b><?= e(geld($dep['wert'])) ?></b></span><?php endif; ?>
           <?php if ($ges !== null): ?><span>Ertrag <b class="<?= klasse($ges) ?>"><?= proz($ges, 1, true) ?></b></span><?php endif; ?>
           <?php if ($wo !== null): ?><span>Woche <b class="<?= klasse($wo) ?>"><?= proz($wo, 1, true) ?></b></span><?php endif; ?>
           <?php $pot = $potenzial($f); if ($pot !== null): ?><span>Kursziel <b class="<?= klasse($pot) ?>"><?= proz($pot, 1, true) ?></b></span><?php endif; ?>
+          <?php if (isset($f['szenario']['werte']['crv'])): $c = (float)$f['szenario']['werte']['crv']; ?><span>CRV <b class="<?= $c >= 2 ? 'plus' : ($c < 1 ? 'minus' : '') ?>"><?= e(zahl($c, 1)) ?></b></span><?php endif; ?>
           <?php if ($seit !== null): ?><span>Seit erster Prüfung <b class="<?= klasse($seit) ?>"><?= proz($seit, 1, true) ?></b></span><?php endif; ?>
           <?php if ($f['bewertung'] > 0): ?><span class="sterne-klein" aria-label="<?= (int)$f['bewertung'] ?> von 5 Sternen"><?= str_repeat('★', (int)$f['bewertung']) . '<i>' . str_repeat('★', 5 - (int)$f['bewertung']) . '</i>' ?></span><?php endif; ?>
         </div>
@@ -1005,6 +1007,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     $verlaufHtml = (string)ob_get_clean();
 
     $aktiveLimits = count(array_filter($f['limits'], static fn(array $l): bool => !empty($l['aktiv']) && empty($l['ausgeloest'])));
+    $szWerte = isset($f['szenario']['werte']['basis']['kurs']) && ($f['szenario']['waehrung'] ?? $w) === $w ? $f['szenario']['werte'] : null;
     $marken = [];
     foreach ($position['geschaefte'] ?? [] as $g) {
         if ($g['typ'] === 'kauf' || $g['typ'] === 'verkauf') {
@@ -1013,7 +1016,8 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
         }
     }
     $chartDaten = json_encode(['j1' => $p['verlauf_1j'], 'j5' => $p['verlauf_5j'], 'w' => $w, 'k' => $marken,
-        'ziel' => $p['kursziel'] !== null ? ['mittel' => $p['kursziel'], 'hoch' => $p['kursziel_hoch'], 'tief' => $p['kursziel_tief'], 'anzahl' => (int)$p['analysten']] : null],
+        'ziel' => $p['kursziel'] !== null ? ['mittel' => $p['kursziel'], 'hoch' => $p['kursziel_hoch'], 'tief' => $p['kursziel_tief'], 'anzahl' => (int)$p['analysten']] : null,
+        'szenario' => $szWerte !== null ? ['mittel' => $szWerte['basis']['kurs'], 'hoch' => $szWerte['bulle']['kurs'], 'tief' => $szWerte['baer']['kurs'], 'art' => 'szenario', 'name' => 'Basis'] : null],
         JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES);
     $positionHtml = $position !== null ? positionHtml($position, $s) : '';
     $istUs = !str_contains($s, '.') && !str_contains($s, '=');
@@ -1055,7 +1059,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     <span class="chart-aend"></span>
   </div>
   <div class="chart" data-chart></div>
-  <div class="chips schnitte"><button type="button" class="chip" data-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button><?php if ($p['kursziel'] !== null): ?><button type="button" class="chip" data-schnitt="ziel"><i style="background:#0e7490"></i>Analysten-Prognose</button><?php endif; ?><?php if ($marken !== []): ?><button type="button" class="chip" data-schnitt="marken"><i style="background:#13814a"></i>Käufe/Verkäufe</button><?php endif; ?></div>
+  <div class="chips schnitte"><button type="button" class="chip" data-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button><?php if ($p['kursziel'] !== null): ?><button type="button" class="chip" data-schnitt="ziel"><i style="background:#0e7490"></i>Analysten-Prognose</button><?php endif; ?><?php if ($szWerte !== null): ?><button type="button" class="chip" data-schnitt="szenario"><i style="background:#9333ea"></i>Meine Szenarien</button><?php endif; ?><?php if ($marken !== []): ?><button type="button" class="chip" data-schnitt="marken"><i style="background:#13814a"></i>Käufe/Verkäufe</button><?php endif; ?></div>
   <script type="application/json" id="chart-daten"><?= $chartDaten ?></script>
 </section>
 <?php if ($positionHtml !== ''): ?>
@@ -1065,6 +1069,8 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
 
 <h2 class="abschnitt">Analyse</h2>
 <?= akk('Auf einen Blick', 'puls', $blick, ['offen' => true, 'id' => 'f-blick']) ?>
+<?= akk('Meine Empfehlung', 'ziel', empfehlungHtmlKarte($f, $p, $kiVerfuegbar, kiModell($d)), ['id' => 'f-empfehlung', 'offen' => !empty($f['szenario']),
+    'meta' => isset($f['szenario']['werte']['crv']) ? 'CRV ' . e(zahl((float)$f['szenario']['werte']['crv'], 1)) : 'Szenario-Modell']) ?>
 <?= akk('Kennzahlen', 'balken', $kz, ['id' => 'f-kennzahlen', 'meta' => $p['kgv'] !== null ? 'KGV ' . e(zahl($p['kgv'], 1)) : '']) ?>
 <?= akk('Umsatz & Gewinn', 'trend', balkenSvg($p['jahre'], (string)($p['bilanzwaehrung'] ?: $w)), ['id' => 'f-jahre']) ?>
 <?= akk('Analysten', 'ziel', empfehlungHtml($p), ['id' => 'f-analysten', 'meta' => $p['empfehlung'] !== '' ? e(urteilText($p['empfehlung'])) : '']) ?>
@@ -1849,6 +1855,103 @@ function positionHtml(array $pos, string $symbol): string
   </ul>
 </details>
 <p class="klein leise">Kauflose nach FIFO (zuerst gekauft, zuerst verkauft). Trade-Republic-Beträge inklusive Gebühren; eToro-Beträge in Dollar, zum heutigen Kurs in Euro umgerechnet. „Rendite pro Jahr“ ist der interne Zinsfuß über alle Käufe, Verkäufe, Dividenden und den heutigen Wert.</p>
+<?php
+    return (string)ob_get_clean();
+}
+
+/** Karte „Meine Empfehlung“: Fakten zu Schritt 1 und 2 sowie die Szenario-Analyse der KI. */
+function empfehlungHtmlKarte(array $f, array $p, bool $kiVerfuegbar, string $modell): string
+{
+    $fk = szenarioFakten($p);
+    $w = $fk['waehrung'];
+    $bw = $fk['bilanzwaehrung'];
+    $sz = is_array($f['szenario'] ?? null) ? $f['szenario'] : null;
+    $werte = $sz['werte'] ?? null;
+    ob_start(); ?>
+<?php if ($werte !== null): ?>
+  <?php
+    $crv = $werte['crv'];
+    $crvKlasse = $crv === null ? '' : ($crv >= 2 ? 'gruen' : ($crv >= 1 ? 'gelb' : 'rot'));
+    $seit = $sz['kurs'] && $p['kurs'] && ($sz['waehrung'] ?? $w) === $w ? $p['kurs'] / $sz['kurs'] - 1 : null;
+  ?>
+  <div class="urteil">
+    <div class="urteil-crv <?= e($crvKlasse) ?>"><span>CRV</span><b><?= e($crv !== null ? zahl($crv, 1) : '–') ?></b><small><?= $crv !== null ? ($crv >= 2 ? 'Einstieg lohnt sich mathematisch' : 'unter 2 – lohnt sich mathematisch nicht') : '' ?></small></div>
+    <div class="urteil-text">
+      <?php if ($werte['bewertung'] !== ''): ?><span class="abzeichen <?= e(['unterbewertet' => 'gruen', 'fair' => 'gelb', 'teuer' => 'rot'][$werte['bewertung']]) ?>"><?= e(ucfirst($werte['bewertung'])) ?> bewertet</span><?php endif; ?>
+      <?php if ($werte['einstieg'] !== ''): ?><span class="abzeichen <?= e(['ja' => 'gruen', 'grenzwertig' => 'gelb', 'nein' => 'rot'][$werte['einstieg']]) ?>">Einstieg: <?= e($werte['einstieg']) ?></span><?php endif; ?>
+      <?php if ($werte['kurz'] !== ''): ?><p><?= e($werte['kurz']) ?></p><?php endif; ?>
+    </div>
+  </div>
+  <?php
+    $max = max(1.0, ...array_map(static fn(string $k): float => abs((float)($werte[$k]['rendite'] ?? 0)), ['baer', 'basis', 'bulle']));
+  ?>
+  <ul class="szenarien">
+    <?php foreach (['bulle' => ['Bullen-Szenario', 'Best Case'], 'basis' => ['Basis-Szenario', 'Likely Case'], 'baer' => ['Bären-Szenario', 'Worst Case']] as $k => [$titel, $unter]):
+        $r = $werte[$k]['rendite']; ?>
+      <li class="sz-<?= e($k) ?>">
+        <span class="sz-titel"><strong><?= e($titel) ?></strong><small><?= e($unter) ?><?= $werte[$k]['kurs'] !== null ? ' · Ziel ' . e(geld($werte[$k]['kurs'], $sz['waehrung'] ?? $w)) : '' ?><?= $k === 'baer' && $werte['baer']['unterstuetzung'] !== null ? ' · Unterstützung ' . e(geld($werte['baer']['unterstuetzung'], $sz['waehrung'] ?? $w)) : '' ?></small></span>
+        <span class="sz-balken"><i style="width:<?= $r !== null ? round(abs($r) / $max * 50, 1) : 0 ?>%;<?= $r !== null && $r < 0 ? 'right:50%' : 'left:50%' ?>"></i></span>
+        <b class="<?= klasse($r) ?>"><?= e($r !== null ? proz($r / 100, 0, true) : '–') ?></b>
+      </li>
+    <?php endforeach; ?>
+  </ul>
+  <p class="klein leise">Analyse vom <?= e(datum((int)$sz['zeit'])) ?> bei einem Kurs von <?= e(geld($sz['kurs'], $sz['waehrung'] ?? $w)) ?><?= $seit !== null ? ' · seitdem <span class="' . klasse($seit) . '">' . e(proz($seit, 1, true)) . '</span>' : '' ?> · <?= e(modellName((string)$sz['modell'])) ?> mit Web-Recherche · keine Anlageberatung.</p>
+<?php endif; ?>
+
+<h4>Schritt 1 · Das operative Fundament (Zahlen)</h4>
+<?php if ($fk['jahre'] !== []): ?>
+  <div class="tabelle-rahmen"><table class="tabelle zahlen">
+    <thead><tr><th>Jahr</th><th>Umsatz</th><th>Wachstum</th><th>Gewinn</th><th>Marge</th></tr></thead>
+    <tbody>
+      <?php foreach ($fk['jahre'] as $j): ?><tr><td><?= e($j['jahr']) ?></td><td><?= e(gross($j['umsatz'], $bw)) ?></td><td class="<?= klasse($j['umsatz_wachstum']) ?>"><?= e(proz($j['umsatz_wachstum'], 1, true)) ?></td><td><?= e(gross($j['gewinn'], $bw)) ?></td><td><?= e(proz($j['marge'])) ?></td></tr><?php endforeach; ?>
+      <?php foreach ($fk['schaetzungen'] as $k => $sch): ?><tr class="schaetzung"><td><?= e(substr((string)$sch['ende'], 0, 4)) ?> (Prognose)</td><td><?= e(gross($sch['umsatz'], $bw)) ?></td><td class="<?= klasse($sch['umsatz_wachstum']) ?>"><?= e(proz($sch['umsatz_wachstum'], 1, true)) ?></td><td colspan="2">EPS <?= e(zahl($sch['eps'], 2)) ?> <?= e($w) ?></td></tr><?php endforeach; ?>
+    </tbody>
+  </table></div>
+<?php endif; ?>
+<?= kacheln([
+    ['Bruttomarge', e(proz($fk['bruttomarge'])), 'letzte 12 Monate', ''],
+    ['Nettomarge', e(proz($fk['nettomarge'])), 'operativ ' . e(proz($fk['opmarge'])), ampel($fk['nettomarge'], [0.15, 0.05, true], 'nettomarge')],
+    ['Nettoverschuldung / EBITDA', e(zahl($fk['schulden_ebitda'], 2)), $fk['schulden_ebitda'] !== null ? ($fk['schulden_ebitda'] < 0 ? 'Nettocash' : ($fk['schulden_ebitda'] < 3 ? 'gesund (unter 3)' : 'hoch (über 3)')) : '', ampel($fk['schulden_ebitda'], [1.5, 3, false], 'verschuldung')],
+    ['Nettoverschuldung', e(gross($fk['netto_schulden'], $bw)), 'EBITDA ' . e(gross($fk['ebitda'], $bw)), ''],
+]) ?>
+
+<h4>Schritt 2 · Die Erwartungshaltung (Zahlen)</h4>
+<?php
+    $fwdNaechstes = $fk['kgv_fwd']['+1y']['kgv'] ?? ($fk['kgv_fwd']['0y']['kgv'] ?? $fk['kgv_erw']);
+    $vergleich = $fwdNaechstes !== null && $fk['kgv_schnitt'] ? $fwdNaechstes / $fk['kgv_schnitt'] : null;
+    $einordnung = $vergleich === null ? '' : ($vergleich < 0.85 ? 'unter dem eigenen Durchschnitt – eher günstig' : ($vergleich > 1.15 ? 'über dem eigenen Durchschnitt – viel Wachstum eingepreist' : 'nahe am eigenen Durchschnitt – eher fair'));
+    $kacheln = [['KGV aktuell', e(zahl($fk['kgv'], 1)), 'letzte 12 Monate', ampel($fk['kgv'], [15, 25, false], 'kgv')]];
+    foreach ($fk['kgv_fwd'] as $x) {
+        $kacheln[] = ['KGV ' . $x['titel'], e(zahl($x['kgv'], 1)), 'Konsens-EPS ' . e(zahl($x['eps'], 2)) . ' ' . e($w), ampel($x['kgv'], [15, 25, false], 'kgv')];
+    }
+    if ($fk['kgv_fwd'] === []) {
+        $kacheln[] = ['KGV erwartet', e(zahl($fk['kgv_erw'], 1)), 'laut Yahoo', ''];
+    }
+    $kacheln[] = ['Ø-KGV der letzten Jahre', e(zahl($fk['kgv_schnitt'], 1)), $fk['kgv_hist'] !== [] ? e(implode(' · ', array_map(static fn($j, $k): string => $j . ': ' . zahl($k, 0), array_keys($fk['kgv_hist']), $fk['kgv_hist']))) : 'nicht berechenbar', ''];
+?>
+<?= kacheln($kacheln) ?>
+<?php if ($einordnung !== ''): ?><p>Aus den Zahlen: Das erwartete KGV liegt <strong><?= e($einordnung) ?></strong> (<?= e(proz($vergleich - 1, 0, true)) ?> gegenüber dem Durchschnitt).</p><?php endif; ?>
+<p class="klein leise">Das Durchschnitts-KGV ist eine Näherung aus Jahresendkurs, heutiger Aktienzahl und Jahresgewinn der verfügbaren Jahre; die KI prüft es zusätzlich per Recherche.</p>
+
+<h4>Analyse der KI · Schritt 1 bis 3 mit Szenarien und CRV</h4>
+<div class="ki-bereich" data-ki="<?= e((string)$p['symbol']) ?>" data-ki-art="szenario">
+  <?php if (!$kiVerfuegbar): ?><div class="hinweis">Für die Szenario-Analyse fehlt der Anthropic-Schlüssel auf dem Server.</div><?php endif; ?>
+  <?php if ($sz !== null): ?>
+    <div class="ki-text"><?= mdHtml((string)$sz['text']) ?></div>
+    <?php if (!empty($sz['quellen'])): ?>
+      <details class="quellen"><summary>Quellen (<?= count($sz['quellen']) ?>)</summary><ul>
+        <?php foreach ($sz['quellen'] as $q): ?><li><a href="<?= e($q['url']) ?>" target="_blank" rel="noopener noreferrer"><?= e($q['titel']) ?></a></li><?php endforeach; ?>
+      </ul></details>
+    <?php endif; ?>
+  <?php else: ?>
+    <p>Die KI prüft die Zahlen oben, recherchiert Konsens und historisches KGV und erstellt Bären-, Basis- und Bullen-Szenario für 12–24 Monate samt Chance-Risiko-Verhältnis.</p>
+  <?php endif; ?>
+  <?php if ($kiVerfuegbar): ?>
+    <button class="knopf<?= $sz !== null ? ' zweit' : '' ?>" type="button" data-ki-start><?= ico($sz !== null ? 'neu' : 'blitz') ?> <?= $sz !== null ? 'Analyse neu erstellen' : 'Szenario-Analyse erstellen' ?></button>
+    <span class="klein leise ki-dauer">dauert etwa 2 Minuten · <?= e($modell === 'claude-haiku-4-5' ? 'ca. 10 Cent' : 'ca. 30–50 Cent') ?></span>
+    <div class="ki-status" hidden></div>
+  <?php endif; ?>
+</div>
 <?php
     return (string)ob_get_clean();
 }

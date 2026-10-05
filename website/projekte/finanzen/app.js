@@ -332,13 +332,14 @@
       var daten = new FormData();
       daten.append('csrf', csrf);
       daten.append('s', bereich.getAttribute('data-ki'));
+      daten.append('art', bereich.getAttribute('data-ki-art') || 'einschaetzung');
       fetch('?api=ki', { method: 'POST', body: daten, credentials: 'same-origin' })
         .then(function (r) { return r.json(); })
         .then(function (j) {
           clearInterval(uhr);
           if (j && j.ok) {
             status.textContent = 'Fertig – wird angezeigt …';
-            location.hash = 'f-ki';
+            location.hash = bereich.getAttribute('data-ki-art') === 'szenario' ? 'f-empfehlung' : 'f-ki';
             location.reload();
           } else {
             status.className = 'ki-status fehlerbox';
@@ -386,6 +387,8 @@
 
   function linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marker, prognose) {
     marker = marker || [];
+    var prognosen = (Array.isArray(prognose) ? prognose : (prognose ? [prognose] : [])).filter(function (pr) { return pr && pr.mittel; });
+    prognose = prognosen.length ? prognosen[0] : null;
     zusatz = (zusatz || []).filter(function (z) { return z.punkte.some(function (p) { return p[1] !== null; }); });
     chart.innerHTML = '';
     if (!punkte || punkte.length < 2) { chart.innerHTML = '<p class="leer">Kein Kursverlauf verfügbar.</p>'; if (aendEl) { aendEl.textContent = ''; } return; }
@@ -393,7 +396,7 @@
     var werte = punkte.map(function (p) { return p[1]; });
     var alleWerte = werte.slice();
     zusatz.forEach(function (z) { z.punkte.forEach(function (p) { if (p[1] !== null) { alleWerte.push(p[1]); } }); });
-    if (prognose) { ['hoch', 'mittel', 'tief'].forEach(function (k) { if (prognose[k]) { alleWerte.push(prognose[k]); } }); }
+    prognosen.forEach(function (pr) { ['hoch', 'mittel', 'tief'].forEach(function (k) { if (pr[k]) { alleWerte.push(pr[k]); } }); });
     var min = Math.min.apply(null, alleWerte), max = Math.max.apply(null, alleWerte);
     if (max === min) { max += 1; min -= 1; }
     var puffer = (max - min) * 0.08, nieNegativ = min >= 0; min -= puffer; max += puffer;
@@ -459,32 +462,35 @@
       svg.appendChild(t2);
     });
     // Analysten-Prognose: Trichter vom letzten Kurs zu Kursziel tief/mittel/hoch in 12 Monaten
-    if (prognose && prognose.mittel) {
+    prognosen.forEach(function (pr, nr) {
       var x0 = x(punkte.length - 1), y0 = y(punkte[punkte.length - 1][1]), x1 = B - rechtsRand;
-      var hoch = prognose.hoch || prognose.mittel, tief = prognose.tief || prognose.mittel;
+      var art = pr.art === 'szenario' ? ' szenario' : '';
+      var hoch = pr.hoch || pr.mittel, tief = pr.tief || pr.mittel;
       var kegel = document.createElementNS(ns, 'path');
       kegel.setAttribute('d', 'M' + x0 + ' ' + y0 + 'L' + x1 + ' ' + y(hoch) + 'L' + x1 + ' ' + y(tief) + 'Z');
-      kegel.setAttribute('class', 'prognose-flaeche');
+      kegel.setAttribute('class', 'prognose-flaeche' + art);
       svg.appendChild(kegel);
-      [['hoch', hoch], ['mittel', prognose.mittel], ['tief', tief]].forEach(function (z) {
+      [['hoch', hoch], ['mittel', pr.mittel], ['tief', tief]].forEach(function (z) {
         var l = document.createElementNS(ns, 'path');
         l.setAttribute('d', 'M' + x0 + ' ' + y0 + 'L' + x1 + ' ' + y(z[1]));
-        l.setAttribute('class', 'prognose-linie ' + z[0]);
+        l.setAttribute('class', 'prognose-linie ' + z[0] + art);
         svg.appendChild(l);
         var pkt = document.createElementNS(ns, 'circle');
         pkt.setAttribute('cx', x1); pkt.setAttribute('cy', y(z[1])); pkt.setAttribute('r', z[0] === 'mittel' ? 3.5 : 2.5);
-        pkt.setAttribute('class', 'prognose-punkt');
+        pkt.setAttribute('class', 'prognose-punkt' + art);
         svg.appendChild(pkt);
       });
-      var tz = document.createElementNS(ns, 'text');
-      tz.setAttribute('x', x1); tz.setAttribute('y', H - 5); tz.setAttribute('class', 'achse'); tz.setAttribute('text-anchor', 'end');
-      tz.textContent = '+12 Mon.';
-      svg.appendChild(tz);
+      if (nr === 0) {
+        var tz = document.createElementNS(ns, 'text');
+        tz.setAttribute('x', x1); tz.setAttribute('y', H - 5); tz.setAttribute('class', 'achse'); tz.setAttribute('text-anchor', 'end');
+        tz.textContent = '+12 Mon.';
+        svg.appendChild(tz);
+      }
       var tl = document.createElementNS(ns, 'text');
-      tl.setAttribute('x', x1 - 4); tl.setAttribute('y', y(prognose.mittel) - 6); tl.setAttribute('class', 'achse prognose-text'); tl.setAttribute('text-anchor', 'end');
-      tl.textContent = 'Ziel ' + fmt(prognose.mittel);
+      tl.setAttribute('x', x1 - 4); tl.setAttribute('y', y(pr.mittel) + (nr === 0 ? -6 : 14)); tl.setAttribute('class', 'achse prognose-text' + art); tl.setAttribute('text-anchor', 'end');
+      tl.textContent = (pr.name || 'Ziel') + ' ' + fmt(pr.mittel);
       svg.appendChild(tl);
-    }
+    });
     // Kauf ▲ / Verkauf ▼ am ersten Rasterpunkt ab dem Geschäftstag
     var jePunkt = {};
     marker.forEach(function (m) {
@@ -557,7 +563,7 @@
     };
 
     var schnitte = { s30: speicher.lesen('fz-s30') === '1', s100: speicher.lesen('fz-s100') === '1',
-      ziel: speicher.lesen('fz-ziel') === '1', marken: speicher.lesen('fz-marken') !== '0' };
+      ziel: speicher.lesen('fz-ziel') === '1', marken: speicher.lesen('fz-marken') !== '0', szenario: speicher.lesen('fz-szenario') !== '0' };
     var zeichnen = function () {
       // Durchschnitte aus dem ganzen verfügbaren Verlauf berechnen, dann auf die gewählte Spanne kürzen
       var punkte = spannen[aktiv]();
@@ -571,7 +577,8 @@
         var von = punkte[0][0], bis = punkte[punkte.length - 1][0] + 86400;
         marken = roh.k.filter(function (m) { return m.t >= von && m.t <= bis; });
       }
-      linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marken, schnitte.ziel && roh.ziel ? roh.ziel : null);
+      linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marken,
+        [schnitte.ziel && roh.ziel ? roh.ziel : null, schnitte.szenario && roh.szenario ? roh.szenario : null]);
     };
     $$('[data-schnitt]').forEach(function (k) {
       var n = k.getAttribute('data-schnitt');

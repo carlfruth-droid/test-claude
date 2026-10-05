@@ -502,3 +502,30 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .knopf-icon.richtung { font-size: 1.1rem; font-weight: 700; min-width: 40px; text-align: center; text-decoration: none; border: 1px solid var(--rand); border-radius: 10px; padding: 6px 10px; background: #fff; color: var(--text); }
 [data-sortierung] { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
 [data-sortierung] select { flex: 1; }
+.chart .prognose-flaeche.szenario { fill: #9333ea; }
+.chart .prognose-linie.szenario { stroke: #9333ea; }
+.chart .prognose-punkt.szenario { fill: #9333ea; }
+.chart .prognose-text.szenario { fill: #9333ea; }
+.urteil { display: flex; gap: 14px; align-items: stretch; margin: 4px 0 14px; }
+.urteil-crv { flex: none; width: 118px; border-radius: 14px; padding: 10px 12px; background: #f6f8fc; border: 1px solid var(--rand); display: flex; flex-direction: column; }
+.urteil-crv span { font-size: .78rem; font-weight: 650; letter-spacing: .05em; color: var(--leise); }
+.urteil-crv b { font-size: 2rem; line-height: 1.1; }
+.urteil-crv small { font-size: .74rem; color: var(--leise); }
+.urteil-crv.gruen { background: #eaf7ef; border-color: #b9e3c8; } .urteil-crv.gruen b { color: var(--plus); }
+.urteil-crv.gelb { background: #fff8e6; border-color: #f3dc9b; } .urteil-crv.gelb b { color: #a16207; }
+.urteil-crv.rot { background: #fdeeee; border-color: #f2c2c0; } .urteil-crv.rot b { color: var(--minus); }
+.urteil-text { flex: 1; min-width: 0; }
+.urteil-text p { margin: 8px 0 0; }
+.abzeichen { display: inline-block; font-size: .8rem; font-weight: 650; padding: 3px 9px; border-radius: 99px; margin: 0 6px 6px 0; background: #eef1f6; }
+.abzeichen.gruen { background: #eaf7ef; color: var(--plus); } .abzeichen.gelb { background: #fff8e6; color: #a16207; } .abzeichen.rot { background: #fdeeee; color: var(--minus); }
+.szenarien { list-style: none; margin: 0 0 6px; padding: 0; }
+.szenarien li { display: grid; grid-template-columns: 1fr 34% auto; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid #eef1f6; }
+.szenarien li:last-child { border-bottom: 0; }
+.sz-titel strong { display: block; font-size: .95rem; } .sz-titel small { color: var(--leise); font-size: .8rem; }
+.sz-balken { position: relative; height: 10px; background: #f1f4f9; border-radius: 99px; }
+.sz-balken::after { content: ''; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: #c8d0dc; }
+.sz-balken i { position: absolute; top: 0; bottom: 0; border-radius: 99px; }
+.sz-bulle .sz-balken i { background: var(--plus); } .sz-basis .sz-balken i { background: #0e7490; } .sz-baer .sz-balken i { background: var(--minus); }
+.szenarien b { min-width: 58px; text-align: right; }
+.tabelle.zahlen td, .tabelle.zahlen th { white-space: nowrap; }
+.tabelle tr.schaetzung td { color: var(--leise); font-style: italic; }

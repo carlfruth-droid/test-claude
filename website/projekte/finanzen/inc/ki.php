@@ -131,12 +131,18 @@ function kiAuftrag(array $firma, array $p): array
 function kiAnalyse(array $firma, array $profil, string $modell): array
 {
     [$system, $auftrag] = kiAuftrag($firma, $profil);
+    return kiLauf($system, $auftrag, $modell);
+}
+
+/** Eine Anfrage mit Websuche ausführen (mit Fortsetzung bei „pause_turn“). */
+function kiLauf(string $system, string $auftrag, string $modell, int $suchen = 6): array
+{
     [$werkzeug, $betas] = kiGeruest($modell);
     $body = [
         'model' => $modell,
         'max_tokens' => 16000,
         'system' => $system,
-        'tools' => [['type' => $werkzeug[0], 'name' => 'web_search', 'max_uses' => 6]],
+        'tools' => [['type' => $werkzeug[0], 'name' => 'web_search', 'max_uses' => $suchen]],
     ];
     if ($betas !== []) {
         $body['fallbacks'] = 'default';
@@ -252,6 +258,7 @@ function mdHtml(string $md): string
     $html = '';
     $absatz = [];
     $liste = '';
+    $tabelle = [];
     $absatzZu = static function () use (&$absatz, &$html): void {
         if ($absatz !== []) {
             $html .= '<p>' . mdInline(implode(' ', $absatz)) . '</p>';
@@ -269,6 +276,10 @@ function mdHtml(string $md): string
         if ($t === '') {
             $absatzZu();
             $listeZu();
+            if ($tabelle !== []) {
+                $html .= '</tbody></table></div>';
+                $tabelle = [];
+            }
             continue;
         }
         if (preg_match('/^(#{1,4})\s+(.+)$/u', $t, $m)) {
@@ -277,6 +288,26 @@ function mdHtml(string $md): string
             $ebene = min(4, strlen($m[1]) + 1);
             $html .= '<h' . $ebene . '>' . mdInline(trim($m[2], '# ')) . '</h' . $ebene . '>';
             continue;
+        }
+        if (str_starts_with($t, '|') && str_ends_with($t, '|')) {
+            // Tabelle: Zeilen sammeln, Trennzeile (|---|) überspringen
+            $absatzZu();
+            $listeZu();
+            $zellen = array_map('trim', explode('|', trim($t, '|')));
+            if (preg_match('/^[\s|:\-]+$/', $t)) {
+                continue;
+            }
+            if ($tabelle === []) {
+                $html .= '<div class="tabelle-rahmen"><table class="tabelle"><thead><tr>' . implode('', array_map(static fn(string $z): string => '<th>' . mdInline($z) . '</th>', $zellen)) . '</tr></thead><tbody>';
+            } else {
+                $html .= '<tr>' . implode('', array_map(static fn(string $z): string => '<td>' . mdInline($z) . '</td>', $zellen)) . '</tr>';
+            }
+            $tabelle[] = $zellen;
+            continue;
+        }
+        if ($tabelle !== []) {
+            $html .= '</tbody></table></div>';
+            $tabelle = [];
         }
         if (preg_match('/^[-*•]\s+(.+)$/u', $t, $m) || preg_match('/^\d+[.)]\s+(.+)$/u', $t, $m)) {
             $art = preg_match('/^\d/', $t) ? 'ol' : 'ul';
@@ -294,6 +325,9 @@ function mdHtml(string $md): string
     }
     $absatzZu();
     $listeZu();
+    if ($tabelle !== []) {
+        $html .= '</tbody></table></div>';
+    }
     return $html;
 }
 

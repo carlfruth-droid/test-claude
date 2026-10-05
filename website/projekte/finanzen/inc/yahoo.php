@@ -8,7 +8,7 @@ declare(strict_types=1);
  */
 
 const FZ_YAHOO_MODULE = 'price,summaryDetail,financialData,defaultKeyStatistics,assetProfile,majorHoldersBreakdown,'
-    . 'institutionOwnership,fundOwnership,insiderHolders,insiderTransactions,recommendationTrend,calendarEvents,earnings,upgradeDowngradeHistory';
+    . 'institutionOwnership,fundOwnership,insiderHolders,insiderTransactions,recommendationTrend,calendarEvents,earnings,upgradeDowngradeHistory,earningsTrend';
 
 function yahooCookieDatei(): string
 {
@@ -543,6 +543,7 @@ function firmaProfil(string $symbol, bool $heimErgaenzen = true): ?array
         'cash' => yRoh($r, 'financialData', 'totalCash'),
         'schulden' => yRoh($r, 'financialData', 'totalDebt'),
         'fcf' => yRoh($r, 'financialData', 'freeCashflow'),
+        'ebitda' => yRoh($r, 'financialData', 'ebitda'),
         'bilanzwaehrung' => yText($r, 'financialData', 'financialCurrency') ?: (string)($r['earnings']['financialCurrency'] ?? ''),
         'div_rendite' => yRoh($r, 'summaryDetail', 'dividendYield') ?? yRoh($r, 'summaryDetail', 'trailingAnnualDividendYield'),
         'div_je_aktie' => yRoh($r, 'summaryDetail', 'dividendRate') ?? yRoh($r, 'summaryDetail', 'trailingAnnualDividendRate'),
@@ -617,6 +618,21 @@ function firmaProfil(string $symbol, bool $heimErgaenzen = true): ?array
     $p['jahre'] = [];
     foreach ((array)($r['earnings']['financialsChart']['yearly'] ?? []) as $j) {
         $p['jahre'][] = ['jahr' => (string)($j['date'] ?? ''), 'umsatz' => yWert($j['revenue'] ?? null), 'gewinn' => yWert($j['earnings'] ?? null)];
+    }
+    // Analysten-Schätzungen für das laufende und das nächste Geschäftsjahr
+    $p['schaetzungen'] = [];
+    foreach ((array)($r['earningsTrend']['trend'] ?? []) as $tr) {
+        $periode = (string)($tr['period'] ?? '');
+        if ($periode === '0y' || $periode === '+1y') {
+            $p['schaetzungen'][$periode] = [
+                'ende' => (string)($tr['endDate'] ?? ''),
+                'eps' => yWert($tr['earningsEstimate']['avg'] ?? null),
+                'eps_wachstum' => yWert($tr['earningsEstimate']['growth'] ?? null),
+                'umsatz' => yWert($tr['revenueEstimate']['avg'] ?? null),
+                'umsatz_wachstum' => yWert($tr['revenueEstimate']['growth'] ?? null),
+                'analysten' => (int)(yWert($tr['earningsEstimate']['numberOfAnalysts'] ?? null) ?? 0),
+            ];
+        }
     }
     $p['termine'] = termineAus($r);
     $p['verlauf_1j'] = $v1['punkte'] ?? [];
@@ -705,6 +721,13 @@ function heimatErgaenzen(array $p): array
             continue;
         }
         $p[$k] = in_array($k, $betraege, true) && $v !== null ? (float)$v * $faktor : $v;
+    }
+    if ($p['schaetzungen'] === $h['schaetzungen']) {
+        // Gewinn je Aktie in die Handelswährung umrechnen (Umsatz bleibt in der Bilanzwährung)
+        foreach ($p['schaetzungen'] as &$sz) {
+            $sz['eps'] = $sz['eps'] !== null ? $sz['eps'] * $faktor : null;
+        }
+        unset($sz);
     }
     foreach ($p['analystenwechsel'] as &$a) {
         if ($a['ziel'] !== null && $p['analystenwechsel'] === $h['analystenwechsel']) {
