@@ -39,14 +39,16 @@ function alarmeAusfuehren(string $anlass): array
 
     // Termine (Quartalszahlen, Dividende) im Hintergrund auffrischen – je Lauf nur wenige Firmen
     $termine = [];
+    $analysten = [];
     if ($anlass === 'cron') {
         $kandidaten = array_filter($d['firmen'], static fn(array $f): bool =>
             $f['status'] !== 'verworfen' && time() - (int)$f['termine_zeit'] > 3 * 86400);
         uasort($kandidaten, static fn(array $a, array $b): int => (int)$a['termine_zeit'] <=> (int)$b['termine_zeit']);
-        foreach (array_slice(array_keys($kandidaten), 0, 4) as $s) {
+        foreach (array_slice(array_keys($kandidaten), 0, 8) as $s) {
             $roh = yahooKennzahlenRoh((string)$s, 86400);
             if ($roh !== null) {
                 $termine[(string)$s] = termineAus($roh);
+                $analysten[(string)$s] = analystenAusRoh($roh);
             }
         }
     }
@@ -54,12 +56,16 @@ function alarmeAusfuehren(string $anlass): array
     $heute = date('Y-m-d');
     $bald = date('Y-m-d', strtotime('+2 days'));
     $meldungen = [];
-    datenAendern(function (array &$d) use ($kurse, $termine, $heute, $bald, $anlass, &$meldungen): void {
+    datenAendern(function (array &$d) use ($kurse, $termine, $analysten, $heute, $bald, $anlass, &$meldungen): void {
         foreach ($d['firmen'] as $s => &$f) {
             $s = (string)$s;
             if (isset($termine[$s])) {
                 $f['termine'] = $termine[$s];
                 $f['termine_zeit'] = time();
+            }
+            // Kursziel nur übernehmen, wenn vorhanden (die Firmenseite ergänzt es ggf. von der Heimatbörse)
+            if (isset($analysten[$s]) && ($analysten[$s]['ziel'] !== null || empty($f['analysten']))) {
+                $f['analysten'] = $analysten[$s];
             }
             $kurs = $kurse[$s]['kurs'] ?? null;
             $veraltet = !empty($kurse[$s]['veraltet']);

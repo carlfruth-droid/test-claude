@@ -492,3 +492,13 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .verlauf-liste li > span:first-child strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .verlauf-liste li > span:first-child small { display: block; color: var(--leise); }
 .geschaefte li { align-items: flex-start; }
+.chart .prognose-flaeche { fill: #0e7490; opacity: .08; }
+.chart .prognose-linie { stroke: #0e7490; stroke-width: 1.3; stroke-dasharray: 3 3; fill: none; vector-effect: non-scaling-stroke; }
+.chart .prognose-linie.mittel { stroke-width: 2; stroke-dasharray: 6 3; }
+.chart .prognose-punkt { fill: #0e7490; }
+.chart .prognose-text { fill: #0e7490; font-weight: 600; }
+.lose li > div { display: flex; justify-content: space-between; gap: 10px; width: 100%; }
+.lose li .rechts small { display: block; }
+.knopf-icon.richtung { font-size: 1.1rem; font-weight: 700; min-width: 40px; text-align: center; text-decoration: none; border: 1px solid var(--rand); border-radius: 10px; padding: 6px 10px; background: #fff; color: var(--text); }
+[data-sortierung] { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+[data-sortierung] select { flex: 1; }

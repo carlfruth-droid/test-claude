@@ -19,6 +19,7 @@ require FZ_APP . '/inc/alarme.php';
 require FZ_APP . '/inc/xlsx.php';
 require FZ_APP . '/inc/depot.php';
 require FZ_APP . '/inc/verlauf.php';
+require FZ_APP . '/inc/position.php';
 require FZ_APP . '/inc/ansichten.php';
 
 header('X-Robots-Tag: noindex, nofollow');
@@ -738,7 +739,11 @@ switch ($seite) {
         if ($p !== null && isset($d['firmen'][$s])) {
             $f = $d['firmen'][$s];
             $neu = ['name' => $p['name'], 'waehrung' => $p['waehrung'], 'boerse' => $p['boerse'], 'termine' => $p['termine']];
-            if ($f['pruefungen'] === [] || $f['name'] !== $neu['name'] || $f['waehrung'] !== $neu['waehrung'] || $f['termine'] != $neu['termine']) {
+            $ana = analystenAusProfil($p);
+            if ($ana['ziel'] !== null && (($f['analysten']['ziel'] ?? null) !== $ana['ziel'] || time() - (int)($f['analysten']['zeit'] ?? 0) > 6 * 3600)) {
+                $neu['analysten'] = $ana;
+            }
+            if ($f['pruefungen'] === [] || $f['name'] !== $neu['name'] || $f['waehrung'] !== $neu['waehrung'] || $f['termine'] != $neu['termine'] || isset($neu['analysten'])) {
                 datenAendern(function (array &$d) use ($s, $neu, $p): void {
                     foreach ($neu as $k => $v) {
                         $d['firmen'][$s][$k] = $v;
@@ -755,13 +760,32 @@ switch ($seite) {
         if ($p !== null && (($d['firmen'][$s]['depot'] ?? []) !== [] || !empty($d['broker']))) {
             $depot = depotUebersicht($d);
         }
-        seite($p['name'] ?? $s, seiteFirma($d, $s, $p, $depot, kiSchluessel() !== ''), 'firma', $d);
+        $position = $p !== null ? positionDetails($d, $s, $p) : null;
+        seite($p['name'] ?? $s, seiteFirma($d, $s, $p, $depot, kiSchluessel() !== '', $position), 'firma', $d);
         break;
 
     case 'firmen':
         $filter = (string)($_GET['status'] ?? '');
         $filter = isset(FZ_STATUS[$filter]) ? $filter : '';
         $sort = (string)($_GET['sort'] ?? 'name');
+        $richtung = (string)($_GET['dir'] ?? '') === 'auf' ? 'auf' : ((string)($_GET['dir'] ?? '') === 'ab' ? 'ab' : ($sort === 'name' ? 'auf' : 'ab'));
+        if ($sort === 'kursziel') {
+            // fehlende oder alte Analystendaten nachladen (die Alarm-Prüfung frischt sie sonst nach und nach auf)
+            $fehlend = array_keys(array_filter($d['firmen'], static fn(array $f): bool => time() - (int)($f['analysten']['zeit'] ?? 0) > 7 * 86400));
+            if ($fehlend !== []) {
+                $neu = analystenNachladen($fehlend, 10.0);
+                if ($neu !== []) {
+                    datenAendern(function (array &$d) use ($neu): void {
+                        foreach ($neu as $s => $a) {
+                            if (isset($d['firmen'][$s]) && ($a['ziel'] !== null || empty($d['firmen'][$s]['analysten']['ziel']))) {
+                                $d['firmen'][$s]['analysten'] = $a;
+                            }
+                        }
+                    });
+                    $d = datenLaden();
+                }
+            }
+        }
         // Depotwert und Ertrag je Firma (über alle Depots), Wochenveränderung des Kurses
         $imDepot = [];
         foreach (depotUebersicht($d)['positionen'] as $pos) {
@@ -775,7 +799,7 @@ switch ($seite) {
             $x['heute'] += (float)($pos['heute'] ?? 0);
             unset($x);
         }
-        seite('Meine Firmen', seiteFirmen($d, yahooKurse(array_keys($d['firmen'])), $filter, $sort, $imDepot, yahooWoche(array_keys($d['firmen']))), 'firmen', $d);
+        seite('Meine Firmen', seiteFirmen($d, yahooKurse(array_keys($d['firmen'])), $filter, $sort, $imDepot, yahooWoche(array_keys($d['firmen'])), $richtung), 'firmen', $d);
         break;
 
     case 'suche':

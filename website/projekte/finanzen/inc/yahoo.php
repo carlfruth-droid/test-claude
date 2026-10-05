@@ -738,6 +738,56 @@ function besitzerListe(array $liste): array
 }
 
 /** Anstehende Termine: Quartalszahlen und Dividende (Tag als JJJJ-MM-TT). */
+/** Analysten-Schnappschuss für Sortierung und Listen (Kursziel und Abstand zum Kurs). */
+function analystenSchnappschuss(?float $ziel, ?float $hoch, ?float $tief, int $anzahl, string $empfehlung, ?float $kurs, string $waehrung): array
+{
+    return ['ziel' => $ziel, 'hoch' => $hoch, 'tief' => $tief, 'anzahl' => $anzahl, 'empfehlung' => $empfehlung,
+        'kurs' => $kurs, 'waehrung' => $waehrung, 'potenzial' => $ziel !== null && $kurs ? $ziel / $kurs - 1 : null, 'zeit' => time()];
+}
+
+/**
+ * Analystendaten für mehrere Firmen parallel nachladen (für die Sortierung nach Kursziel).
+ * Rückgabe: [symbol => Schnappschuss]
+ */
+function analystenNachladen(array $symbole, float $budget = 8.0): array
+{
+    $start = microtime(true);
+    $crumb = yahooCrumb();
+    $erg = [];
+    if ($crumb === '') {
+        return $erg;
+    }
+    foreach (array_chunk(array_values($symbole), 10) as $teil) {
+        if (microtime(true) - $start > $budget) {
+            break;
+        }
+        $anfragen = [];
+        foreach ($teil as $s) {
+            $anfragen[$s] = ['url' => mitCrumb('https://query1.finance.yahoo.com/v10/finance/quoteSummary/' . rawurlencode((string)$s) . '?modules=financialData,price', $crumb),
+                'ua' => 'browser', 'cookies' => yahooCookieDatei(), 'zeit' => 12];
+        }
+        foreach (httpViele($anfragen) as $s => $r) {
+            $roh = httpJson($r)['quoteSummary']['result'][0] ?? null;
+            // auch ohne Kursziel merken, damit nicht bei jedem Aufruf erneut gefragt wird
+            $erg[(string)$s] = is_array($roh) ? analystenAusRoh($roh) : analystenSchnappschuss(null, null, null, 0, '', null, '');
+        }
+    }
+    return $erg;
+}
+
+function analystenAusProfil(array $p): array
+{
+    return analystenSchnappschuss($p['kursziel'], $p['kursziel_hoch'], $p['kursziel_tief'], (int)$p['analysten'], (string)$p['empfehlung'], $p['kurs'], (string)$p['waehrung']);
+}
+
+function analystenAusRoh(array $r): array
+{
+    return analystenSchnappschuss(yRoh($r, 'financialData', 'targetMeanPrice'), yRoh($r, 'financialData', 'targetHighPrice'),
+        yRoh($r, 'financialData', 'targetLowPrice'), (int)(yRoh($r, 'financialData', 'numberOfAnalystOpinions') ?? 0),
+        (string)($r['financialData']['recommendationKey'] ?? ''), yRoh($r, 'price', 'regularMarketPrice') ?? yRoh($r, 'financialData', 'currentPrice'),
+        (string)($r['price']['currency'] ?? ''));
+}
+
 function termineAus(array $r): array
 {
     $t = [];

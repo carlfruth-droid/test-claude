@@ -106,6 +106,31 @@
   });
   window.addEventListener('pageshow', function (e) { if (e.persisted) { zeitenNachfuehren(); $$('details.akk[open]').forEach(function (akk) { if (veraltet(akk)) { nachladen(akk, true); } }); } });
 
+  // ---------- Depot: Positionen sortieren (alle Depots gleich) ----------
+  var depotSort = $('[data-sortierung]');
+  if (depotSort) {
+    var dsZustand = { feld: 'wert', richtung: 'ab' };
+    try { dsZustand = Object.assign(dsZustand, JSON.parse(speicher.lesen('fz-depot-sort') || '{}')); } catch (e) { /* egal */ }
+    var dsWahl = $('select', depotSort), dsKnopf = $('button', depotSort);
+    var dsAnwenden = function () {
+      dsWahl.value = dsZustand.feld; dsKnopf.textContent = dsZustand.richtung === 'auf' ? '↑' : '↓';
+      $$('ul[data-sortieren]').forEach(function (ul) {
+        var li = Array.prototype.slice.call(ul.children);
+        li.sort(function (a, b) {
+          var x = a.getAttribute('data-s-' + dsZustand.feld), y = b.getAttribute('data-s-' + dsZustand.feld);
+          if (x === '' || y === '') { return (x === '') - (y === ''); }
+          var c = dsZustand.feld === 'name' ? x.localeCompare(y, 'de') : parseFloat(x) - parseFloat(y);
+          return dsZustand.richtung === 'auf' ? c : -c;
+        });
+        li.forEach(function (el) { ul.appendChild(el); });
+      });
+      speicher.schreiben('fz-depot-sort', JSON.stringify(dsZustand));
+    };
+    dsWahl.addEventListener('change', function () { dsZustand.feld = dsWahl.value; dsZustand.richtung = dsWahl.value === 'name' ? 'auf' : 'ab'; dsAnwenden(); });
+    dsKnopf.addEventListener('click', function () { dsZustand.richtung = dsZustand.richtung === 'auf' ? 'ab' : 'auf'; dsAnwenden(); });
+    dsAnwenden();
+  }
+
   // ---------- Push-Test direkt vom Gerät (ntfy drosselt das Webhosting) ----------
   $$('[data-ntfy-test]').forEach(function (k) {
     k.addEventListener('click', function () {
@@ -359,7 +384,7 @@
     return erg;
   }
 
-  function linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marker) {
+  function linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marker, prognose) {
     marker = marker || [];
     zusatz = (zusatz || []).filter(function (z) { return z.punkte.some(function (p) { return p[1] !== null; }); });
     chart.innerHTML = '';
@@ -368,11 +393,14 @@
     var werte = punkte.map(function (p) { return p[1]; });
     var alleWerte = werte.slice();
     zusatz.forEach(function (z) { z.punkte.forEach(function (p) { if (p[1] !== null) { alleWerte.push(p[1]); } }); });
+    if (prognose) { ['hoch', 'mittel', 'tief'].forEach(function (k) { if (prognose[k]) { alleWerte.push(prognose[k]); } }); }
     var min = Math.min.apply(null, alleWerte), max = Math.max.apply(null, alleWerte);
     if (max === min) { max += 1; min -= 1; }
     var puffer = (max - min) * 0.08, nieNegativ = min >= 0; min -= puffer; max += puffer;
     if (nieNegativ && min < 0) { min = 0; }
-    var x = function (i) { return links + i / (punkte.length - 1) * (B - links - rechtsRand); };
+    // mit Prognose: rechts Platz für die nächsten 12 Monate lassen
+    var prognoseBreite = prognose ? Math.round((B - links - rechtsRand) * 0.24) : 0;
+    var x = function (i) { return links + i / (punkte.length - 1) * (B - links - rechtsRand - prognoseBreite); };
     var y = function (v) { return oben + (1 - (v - min) / (max - min)) * (H - oben - unten); };
     var erster = werte[0], letzter = werte[werte.length - 1];
     var steigt = letzter >= erster;
@@ -430,6 +458,33 @@
       t2.textContent = datumFmt(punkte[i][0]);
       svg.appendChild(t2);
     });
+    // Analysten-Prognose: Trichter vom letzten Kurs zu Kursziel tief/mittel/hoch in 12 Monaten
+    if (prognose && prognose.mittel) {
+      var x0 = x(punkte.length - 1), y0 = y(punkte[punkte.length - 1][1]), x1 = B - rechtsRand;
+      var hoch = prognose.hoch || prognose.mittel, tief = prognose.tief || prognose.mittel;
+      var kegel = document.createElementNS(ns, 'path');
+      kegel.setAttribute('d', 'M' + x0 + ' ' + y0 + 'L' + x1 + ' ' + y(hoch) + 'L' + x1 + ' ' + y(tief) + 'Z');
+      kegel.setAttribute('class', 'prognose-flaeche');
+      svg.appendChild(kegel);
+      [['hoch', hoch], ['mittel', prognose.mittel], ['tief', tief]].forEach(function (z) {
+        var l = document.createElementNS(ns, 'path');
+        l.setAttribute('d', 'M' + x0 + ' ' + y0 + 'L' + x1 + ' ' + y(z[1]));
+        l.setAttribute('class', 'prognose-linie ' + z[0]);
+        svg.appendChild(l);
+        var pkt = document.createElementNS(ns, 'circle');
+        pkt.setAttribute('cx', x1); pkt.setAttribute('cy', y(z[1])); pkt.setAttribute('r', z[0] === 'mittel' ? 3.5 : 2.5);
+        pkt.setAttribute('class', 'prognose-punkt');
+        svg.appendChild(pkt);
+      });
+      var tz = document.createElementNS(ns, 'text');
+      tz.setAttribute('x', x1); tz.setAttribute('y', H - 5); tz.setAttribute('class', 'achse'); tz.setAttribute('text-anchor', 'end');
+      tz.textContent = '+12 Mon.';
+      svg.appendChild(tz);
+      var tl = document.createElementNS(ns, 'text');
+      tl.setAttribute('x', x1 - 4); tl.setAttribute('y', y(prognose.mittel) - 6); tl.setAttribute('class', 'achse prognose-text'); tl.setAttribute('text-anchor', 'end');
+      tl.textContent = 'Ziel ' + fmt(prognose.mittel);
+      svg.appendChild(tl);
+    }
     // Kauf ▲ / Verkauf ▼ am ersten Rasterpunkt ab dem Geschäftstag
     var jePunkt = {};
     marker.forEach(function (m) {
@@ -466,7 +521,7 @@
     var zeigen = function (ev) {
       var r = svg.getBoundingClientRect();
       var px = (ev.clientX - r.left) / r.width * B;
-      var i = Math.max(0, Math.min(punkte.length - 1, Math.round((px - links) / (B - links - rechtsRand) * (punkte.length - 1))));
+      var i = Math.max(0, Math.min(punkte.length - 1, Math.round((px - links) / (B - links - rechtsRand - prognoseBreite) * (punkte.length - 1))));
       var xx = x(i), yy2 = y(punkte[i][1]);
       senkrecht.setAttribute('x1', xx); senkrecht.setAttribute('x2', xx); senkrecht.style.display = '';
       punkt.setAttribute('cx', xx); punkt.setAttribute('cy', yy2); punkt.style.display = '';
@@ -501,7 +556,8 @@
       '5j': function () { return (roh.j5 && roh.j5.length ? roh.j5 : roh.j1) || []; }
     };
 
-    var schnitte = { s30: speicher.lesen('fz-s30') === '1', s100: speicher.lesen('fz-s100') === '1' };
+    var schnitte = { s30: speicher.lesen('fz-s30') === '1', s100: speicher.lesen('fz-s100') === '1',
+      ziel: speicher.lesen('fz-ziel') === '1', marken: speicher.lesen('fz-marken') !== '0' };
     var zeichnen = function () {
       // Durchschnitte aus dem ganzen verfügbaren Verlauf berechnen, dann auf die gewählte Spanne kürzen
       var punkte = spannen[aktiv]();
@@ -510,7 +566,12 @@
       var zusatz = [];
       if (schnitte.s30) { zusatz.push({ name: 'Ø 30 Tage', farbe: '#d97706', punkte: gleitend(basis, 30).slice(ab) }); }
       if (schnitte.s100) { zusatz.push({ name: 'Ø 100 Tage', farbe: '#7c3aed', punkte: gleitend(basis, 100).slice(ab) }); }
-      linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz);
+      var marken = [];
+      if (schnitte.marken && roh.k && punkte.length) {
+        var von = punkte[0][0], bis = punkte[punkte.length - 1][0] + 86400;
+        marken = roh.k.filter(function (m) { return m.t >= von && m.t <= bis; });
+      }
+      linienChart(chart, punkte, fmt, datumFmt, aendEl, zusatz, marken, schnitte.ziel && roh.ziel ? roh.ziel : null);
     };
     $$('[data-schnitt]').forEach(function (k) {
       var n = k.getAttribute('data-schnitt');
@@ -569,20 +630,27 @@
     var stand = $('[data-verlauf-stand]', vb), diagramm = $('[data-verlauf-chart]', vb), kennz = $('[data-verlauf-kennzahlen]', vb);
     var liste = $('[data-verlauf-liste]'), sucheFeld = $('[data-verlauf-suche]');
 
-    // Kennzahlen einer Auswahl: Gewinn = Endwert − Anfangswert − Nettokäufe + Dividenden; Rendite nach Modified Dietz
+    // Kennzahlen einer Auswahl: Gewinn = Endwert − Anfangswert − Nettokäufe + Dividenden; Rendite auf das durchschnittlich eingesetzte Kapital
     var auswerten = function (titel) {
-      var p = vDaten.punkte, n = p.length, s0 = vDaten.start || 0, summe = new Array(n).fill(0), fluss = 0, gewichtet = 0, div = 0;
-      var T = p[n - 1] - p[s0] || 1;
+      var p = vDaten.punkte, n = p.length, s0 = vDaten.start || 0, summe = new Array(n).fill(0), fluesse = new Array(n).fill(0), fluss = 0, div = 0;
       titel.forEach(function (t) {
         for (var i = 0; i < n; i++) {
           summe[i] += t.w[i];
-          if (i > s0 && t.f[i]) { fluss += t.f[i]; gewichtet += t.f[i] * (p[n - 1] - p[i]) / T; }
+          if (i > s0 && t.f[i]) { fluss += t.f[i]; fluesse[i] += t.f[i]; }
         }
         div += t.div;
       });
       var v0 = summe[s0], v1 = summe[n - 1];
       var gewinn = v1 - v0 - fluss + div;
-      var basis = v0 + gewichtet;
+      // Rendite bezogen auf das durchschnittlich eingesetzte Kapital (Anfangswert plus Käufe minus Verkäufe, über die Zeit gemittelt)
+      // gemittelt nur über die Zeit, in der Kapital gebunden war (Haltedauer)
+      var eingesetzt = v0, kapital = 0, gewicht = 0;
+      for (var j = s0 + 1; j < n; j++) {
+        var dt = p[j] - p[j - 1];
+        if (eingesetzt > 0.005 || summe[j - 1] > 0.005) { kapital += Math.max(eingesetzt, summe[j - 1], 0) * dt; gewicht += dt; }
+        eingesetzt += fluesse[j];
+      }
+      var basis = gewicht > 0 ? kapital / gewicht : Math.max(v0, eingesetzt);
       return { summe: summe, v0: v0, v1: v1, fluss: fluss, div: div, gewinn: gewinn, rendite: basis > 1 ? gewinn / basis : null };
     };
     var sichtbar = function () {
@@ -667,8 +735,25 @@
         liste.appendChild(li);
       };
       var letzter = vDaten.punkte.length - 1;
-      var aktuell = alle.filter(function (t) { return t.w[letzter] > 0.005 && passt(t); });
-      var verkauft = alle.filter(function (t) { return !(t.w[letzter] > 0.005) && passt(t); });
+      // Sortieren: fehlende Werte immer ans Ende
+      var feld = vZustand.sort || 'wert', richtung = vZustand.richtung || (feld === 'name' ? 'auf' : 'ab');
+      var wertVon = {};
+      alle.forEach(function (t) {
+        var e = feld === 'gewinn' || feld === 'rendite' ? auswerten([t]) : null;
+        wertVon[t.id] = feld === 'name' ? t.name.toLowerCase() : feld === 'pot' ? t.pot : feld === 'gewinn' ? e.gewinn : feld === 'rendite' ? e.rendite : t.w[letzter];
+      });
+      var sortiere = function (liste) {
+        return liste.sort(function (a, b) {
+          var x = wertVon[a.id], y = wertVon[b.id];
+          if (x === null || x === undefined || y === null || y === undefined) { return (x === null || x === undefined) - (y === null || y === undefined); }
+          var c = feld === 'name' ? x.localeCompare(y, 'de') : x - y;
+          return richtung === 'auf' ? c : -c;
+        });
+      };
+      var sortWahl = $('[data-verlauf-sort]'), sortKnopf = $('[data-verlauf-richtung]');
+      if (sortWahl) { sortWahl.value = feld; sortKnopf.textContent = richtung === 'auf' ? '↑' : '↓'; }
+      var aktuell = sortiere(alle.filter(function (t) { return t.w[letzter] > 0.005 && passt(t); }));
+      var verkauft = sortiere(alle.filter(function (t) { return !(t.w[letzter] > 0.005) && passt(t); }));
       if (aktuell.length) { ueberschrift('Aktuell im Depot (' + aktuell.length + ')'); aktuell.forEach(zeile); }
       if (verkauft.length) { ueberschrift('Im Zeitraum verkauft (' + verkauft.length + ')'); verkauft.forEach(zeile); }
       // Ehemalige Titel außerhalb des Zeitraums: Tippen springt in die Haltedauer
@@ -716,6 +801,15 @@
               return;
             }
             vDaten = j;
+            if (vZustand.titelSprung) {
+              var ziel = (j.katalog || []).filter(function (t) { return t.id === vZustand.titelSprung; })[0];
+              delete vZustand.titelSprung;
+              if (ziel) {
+                var vonD = new Date((ziel.erster - 14 * 86400) * 1000), bisD = new Date(ziel.aktuell ? Date.now() : Math.min(Date.now(), (ziel.letzter + 14 * 86400) * 1000));
+                vZustand.zeitraum = 'frei'; vZustand.von = iso(vonD) < beginn ? beginn : iso(vonD); vZustand.bis = iso(bisD); vZustand.nur = ziel.id;
+                speichern(); history.replaceState(null, '', '?seite=verlauf'); laden(); return;
+              }
+            }
             if (vZustand.nur) { var nur = vZustand.nur; delete vZustand.nur; if (j.titel.some(function (t) { return t.id === nur; })) { vZustand.aus = {}; j.titel.forEach(function (t) { if (t.id !== nur) { vZustand.aus[t.id] = 1; } }); speichern(); } }
             if (!j.titel.length) { diagramm.innerHTML = '<p class="leer">In diesem Zeitraum waren keine Titel im Depot.</p>'; kennz.innerHTML = ''; liste.innerHTML = ''; stand.textContent = ''; return; }
             zeigen();
@@ -757,6 +851,14 @@
       });
     });
     if (sucheFeld) { sucheFeld.addEventListener('input', zeigen); }
+    var vSortWahl = $('[data-verlauf-sort]'), vSortKnopf = $('[data-verlauf-richtung]');
+    if (vSortWahl) {
+      vSortWahl.addEventListener('change', function () { vZustand.sort = vSortWahl.value; vZustand.richtung = vSortWahl.value === 'name' ? 'auf' : 'ab'; speichern(); zeigen(); });
+      vSortKnopf.addEventListener('click', function () { var f = vZustand.sort || 'wert'; var r = vZustand.richtung || (f === 'name' ? 'auf' : 'ab'); vZustand.richtung = r === 'auf' ? 'ab' : 'auf'; speichern(); zeigen(); });
+    }
+    // Aufruf von der Firmenseite (?titel=…): Haltedauer dieses Titels zeigen
+    var titelParam = new URLSearchParams(location.search).get('titel');
+    if (titelParam) { vZustand.titelSprung = titelParam; }
     var vBreite = diagramm.clientWidth;
     window.addEventListener('resize', function () { if (Math.abs(diagramm.clientWidth - vBreite) > 20) { vBreite = diagramm.clientWidth; zeigen(); } });
     laden();
