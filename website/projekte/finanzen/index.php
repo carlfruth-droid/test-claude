@@ -20,6 +20,7 @@ require FZ_APP . '/inc/xlsx.php';
 require FZ_APP . '/inc/depot.php';
 require FZ_APP . '/inc/verlauf.php';
 require FZ_APP . '/inc/position.php';
+require FZ_APP . '/inc/szenario.php';
 require FZ_APP . '/inc/ansichten.php';
 
 header('X-Robots-Tag: noindex, nofollow');
@@ -642,11 +643,21 @@ if (isset($_GET['api'])) {
         session_write_close(); // die Analyse dauert – andere Seiten sollen derweil nicht blockieren
         $d = datenLaden();
         $f = $d['firmen'][$s] ?? firmaNormal(['name' => $p['name']], $s);
-        $erg = kiAnalyse($f, $p, kiModell($d));
-        if ($erg['ok']) {
-            firmaAendern($s, function (array &$f) use ($erg): void {
-                $f['ki'] = ['text' => $erg['text'], 'quellen' => $erg['quellen'], 'modell' => $erg['modell'], 'zeit' => $erg['zeit']];
-            });
+        if ((string)($_POST['art'] ?? '') === 'szenario') {
+            $erg = szenarioAnalyse($f, $p, kiModell($d));
+            if ($erg['ok']) {
+                firmaAendern($s, function (array &$f) use ($erg): void {
+                    $f['szenario'] = ['text' => $erg['text'], 'quellen' => $erg['quellen'], 'modell' => $erg['modell'], 'zeit' => $erg['zeit'],
+                        'werte' => $erg['werte'], 'kurs' => $erg['kurs'], 'waehrung' => $erg['waehrung']];
+                });
+            }
+        } else {
+            $erg = kiAnalyse($f, $p, kiModell($d));
+            if ($erg['ok']) {
+                firmaAendern($s, function (array &$f) use ($erg): void {
+                    $f['ki'] = ['text' => $erg['text'], 'quellen' => $erg['quellen'], 'modell' => $erg['modell'], 'zeit' => $erg['zeit']];
+                });
+            }
         }
         echo json_encode($erg['ok'] ? ['ok' => true] : ['ok' => false, 'fehler' => $erg['fehler']], JSON_UNESCAPED_UNICODE);
         exit;
