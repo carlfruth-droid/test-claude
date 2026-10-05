@@ -462,6 +462,7 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
             'id' => $s, 'name' => $t['name'], 'symbol' => $s, 'art' => $t['art'], 'quellen' => array_keys($t['quellen']),
             'w' => $werte, 'f' => $fluesse, 'div' => round($div, 2), 'luecke' => $luecke,
             'k' => array_slice($geschaefte, -300),
+            'pot' => isset($d['firmen'][$s]['analysten']['potenzial']) ? round((float)$d['firmen'][$s]['analysten']['potenzial'], 4) : null,
         ];
     }
     usort($ergebnis, static fn(array $a, array $b): int => end($b['w']) <=> end($a['w']));

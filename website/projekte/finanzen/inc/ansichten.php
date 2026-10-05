@@ -429,8 +429,18 @@ function seiteUebersicht(array $d, array $kurse, ?array $depot): string
 // Meine Firmen
 // ---------------------------------------------------------------------------
 
-function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung, array $imDepot = [], array $woche = []): string
+function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung, array $imDepot = [], array $woche = [], string $richtung = 'ab'): string
 {
+    // Abstand zum Analysten-Kursziel mit dem aktuellen Kurs
+    $potenzial = static function (array $f) use ($kurse): ?float {
+        $a = $f['analysten'] ?? null;
+        if (!is_array($a) || $a['ziel'] === null) {
+            return null;
+        }
+        $k = $kurse[$f['symbol']]['kurs'] ?? null;
+        $gleich = ($kurse[$f['symbol']]['waehrung'] ?? '') === ($a['waehrung'] ?? '') || ($a['waehrung'] ?? '') === '';
+        return $k && $gleich ? (float)$a['ziel'] / (float)$k - 1 : ($a['potenzial'] ?? null);
+    };
     $gesamtProz = static fn(array $f): ?float => isset($imDepot[$f['symbol']]) && $imDepot[$f['symbol']]['einstand'] > 0
         ? $imDepot[$f['symbol']]['wert'] / $imDepot[$f['symbol']]['einstand'] - 1 : null;
     $liste = array_values(array_filter($d['firmen'], static fn(array $f): bool => $filter === '' || $f['status'] === $filter));
@@ -439,25 +449,28 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
         $jetzt = $kurse[$f['symbol']]['kurs'] ?? null;
         return $erste && $jetzt ? ($jetzt - $erste) / $erste : null;
     };
-    usort($liste, static function (array $a, array $b) use ($sortierung, $kurse, $seitPruefung, $imDepot, $woche, $gesamtProz): int {
+    // Schlüssel je Firma; fehlende Werte stehen immer am Ende, egal in welche Richtung sortiert wird
+    $schluessel = static function (array $f) use ($sortierung, $kurse, $seitPruefung, $imDepot, $woche, $gesamtProz, $potenzial) {
         switch ($sortierung) {
-            case 'depotwert':
-                return ($imDepot[$b['symbol']]['wert'] ?? -1) <=> ($imDepot[$a['symbol']]['wert'] ?? -1) ?: strcasecmp($a['name'], $b['name']);
-            case 'woche':
-                return ($woche[$b['symbol']] ?? -9) <=> ($woche[$a['symbol']] ?? -9);
-            case 'gesamt':
-                return ($gesamtProz($b) ?? -9) <=> ($gesamtProz($a) ?? -9) ?: strcasecmp($a['name'], $b['name']);
-            case 'heute':
-                return ($kurse[$b['symbol']]['aend_proz'] ?? -9) <=> ($kurse[$a['symbol']]['aend_proz'] ?? -9);
-            case 'pruefung':
-                return (int)(letztePruefung($b)['zeit'] ?? 0) <=> (int)(letztePruefung($a)['zeit'] ?? 0);
-            case 'seit':
-                return ($seitPruefung($b) ?? -9) <=> ($seitPruefung($a) ?? -9);
-            case 'bewertung':
-                return (int)$b['bewertung'] <=> (int)$a['bewertung'];
-            default:
-                return strcasecmp($a['name'], $b['name']);
+            case 'depotwert': return $imDepot[$f['symbol']]['wert'] ?? null;
+            case 'woche': return $woche[$f['symbol']] ?? null;
+            case 'gesamt': return $gesamtProz($f);
+            case 'kursziel': return $potenzial($f);
+            case 'heute': return $kurse[$f['symbol']]['aend_proz'] ?? null;
+            case 'pruefung': return isset(letztePruefung($f)['zeit']) ? (int)letztePruefung($f)['zeit'] : null;
+            case 'seit': return $seitPruefung($f);
+            case 'bewertung': return (int)$f['bewertung'] ?: null;
+            default: return mb_strtolower($f['name']);
         }
+    };
+    usort($liste, static function (array $a, array $b) use ($schluessel, $richtung): int {
+        $x = $schluessel($a);
+        $y = $schluessel($b);
+        if ($x === null || $y === null) {
+            return ($x === null) <=> ($y === null) ?: strcasecmp($a['name'], $b['name']);
+        }
+        $c = is_string($x) ? strcmp($x, (string)$y) : $x <=> $y;
+        return ($richtung === 'auf' ? $c : -$c) ?: strcasecmp($a['name'], $b['name']);
     });
     $zaehler = array_count_values(array_column($d['firmen'], 'status'));
     ob_start(); ?>
@@ -471,12 +484,13 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
 <div class="werkzeugleiste">
   <input type="search" class="filterfeld" placeholder="In der Liste filtern …" data-filter="#firmenliste">
   <form method="get" action="./" class="sortieren">
-    <input type="hidden" name="seite" value="firmen"><input type="hidden" name="status" value="<?= e($filter) ?>">
+    <input type="hidden" name="seite" value="firmen"><input type="hidden" name="status" value="<?= e($filter) ?>"><input type="hidden" name="dir" value="">
     <select name="sort" data-auto-absenden aria-label="Sortierung">
-      <?php foreach (['name' => 'Name', 'depotwert' => 'Depotwert', 'heute' => '% heute', 'woche' => '% Woche', 'gesamt' => '% Ertrag insgesamt', 'seit' => 'Seit erster Prüfung', 'pruefung' => 'Zuletzt geprüft', 'bewertung' => 'Meine Bewertung'] as $k => $t): ?>
+      <?php foreach (['name' => 'Name', 'depotwert' => 'Depotwert', 'heute' => '% heute', 'woche' => '% Woche', 'gesamt' => '% Ertrag insgesamt', 'kursziel' => 'Analysten-Kursziel (Potenzial)', 'seit' => 'Seit erster Prüfung', 'pruefung' => 'Zuletzt geprüft', 'bewertung' => 'Meine Bewertung'] as $k => $t): ?>
         <option value="<?= e($k) ?>"<?= $sortierung === $k ? ' selected' : '' ?>><?= e($t) ?></option>
       <?php endforeach; ?>
     </select>
+    <a class="knopf-icon richtung" href="<?= e(url(['seite' => 'firmen', 'status' => $filter, 'sort' => $sortierung, 'dir' => $richtung === 'auf' ? 'ab' : 'auf'])) ?>" title="<?= $richtung === 'auf' ? 'Aufsteigend – tippen für absteigend' : 'Absteigend – tippen für aufsteigend' ?>" aria-label="Sortierrichtung umkehren"><?= $richtung === 'auf' ? '↑' : '↓' ?></a>
   </form>
 </div>
 <section class="karte ohne-rand" id="firmenliste">
@@ -489,11 +503,12 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
       $ges = $gesamtProz($f); ?>
     <div class="filterbar">
       <?= firmaZeile($f, $kurse[$f['symbol']] ?? null, true) ?>
-      <?php if ($seit !== null || $f['bewertung'] > 0 || $dep !== null || $wo !== null): ?>
+      <?php if ($seit !== null || $f['bewertung'] > 0 || $dep !== null || $wo !== null || $potenzial($f) !== null): ?>
         <div class="zeile-extra">
           <?php if ($dep !== null): ?><span>Im Depot <b><?= e(geld($dep['wert'])) ?></b></span><?php endif; ?>
           <?php if ($ges !== null): ?><span>Ertrag <b class="<?= klasse($ges) ?>"><?= proz($ges, 1, true) ?></b></span><?php endif; ?>
           <?php if ($wo !== null): ?><span>Woche <b class="<?= klasse($wo) ?>"><?= proz($wo, 1, true) ?></b></span><?php endif; ?>
+          <?php $pot = $potenzial($f); if ($pot !== null): ?><span>Kursziel <b class="<?= klasse($pot) ?>"><?= proz($pot, 1, true) ?></b></span><?php endif; ?>
           <?php if ($seit !== null): ?><span>Seit erster Prüfung <b class="<?= klasse($seit) ?>"><?= proz($seit, 1, true) ?></b></span><?php endif; ?>
           <?php if ($f['bewertung'] > 0): ?><span class="sterne-klein" aria-label="<?= (int)$f['bewertung'] ?> von 5 Sternen"><?= str_repeat('★', (int)$f['bewertung']) . '<i>' . str_repeat('★', 5 - (int)$f['bewertung']) . '</i>' ?></span><?php endif; ?>
         </div>
@@ -731,7 +746,7 @@ function empfehlungHtml(array $p): string
     return $html !== '' ? $html : leer('Keine Analystendaten verfügbar.');
 }
 
-function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $kiVerfuegbar): string
+function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $kiVerfuegbar, ?array $position = null): string
 {
     $f = $d['firmen'][$symbol] ?? null;
     if ($p === null) {
@@ -990,7 +1005,17 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     $verlaufHtml = (string)ob_get_clean();
 
     $aktiveLimits = count(array_filter($f['limits'], static fn(array $l): bool => !empty($l['aktiv']) && empty($l['ausgeloest'])));
-    $chartDaten = json_encode(['j1' => $p['verlauf_1j'], 'j5' => $p['verlauf_5j'], 'w' => $w], JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES);
+    $marken = [];
+    foreach ($position['geschaefte'] ?? [] as $g) {
+        if ($g['typ'] === 'kauf' || $g['typ'] === 'verkauf') {
+            $marken[] = ['t' => $g['zeit'], 'typ' => $g['typ'], 'text' => ($g['typ'] === 'kauf' ? '▲ Kauf ' : '▼ Verkauf ') . geld(abs((float)$g['betrag']))
+                . ($g['quelle'] === 'etoro' ? ' (eToro)' : ' (TR)')];
+        }
+    }
+    $chartDaten = json_encode(['j1' => $p['verlauf_1j'], 'j5' => $p['verlauf_5j'], 'w' => $w, 'k' => $marken,
+        'ziel' => $p['kursziel'] !== null ? ['mittel' => $p['kursziel'], 'hoch' => $p['kursziel_hoch'], 'tief' => $p['kursziel_tief'], 'anzahl' => (int)$p['analysten']] : null],
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES);
+    $positionHtml = $position !== null ? positionHtml($position, $s) : '';
     $istUs = !str_contains($s, '.') && !str_contains($s, '=');
 
     ob_start(); ?>
@@ -1030,9 +1055,13 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     <span class="chart-aend"></span>
   </div>
   <div class="chart" data-chart></div>
-  <div class="chips schnitte"><button type="button" class="chip" data-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button></div>
+  <div class="chips schnitte"><button type="button" class="chip" data-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button><?php if ($p['kursziel'] !== null): ?><button type="button" class="chip" data-schnitt="ziel"><i style="background:#0e7490"></i>Analysten-Prognose</button><?php endif; ?><?php if ($marken !== []): ?><button type="button" class="chip" data-schnitt="marken"><i style="background:#13814a"></i>Käufe/Verkäufe</button><?php endif; ?></div>
   <script type="application/json" id="chart-daten"><?= $chartDaten ?></script>
 </section>
+<?php if ($positionHtml !== ''): ?>
+<?= akk('Meine Position', 'depot', $positionHtml, ['offen' => true, 'id' => 'f-position',
+    'meta' => $position['wert'] > 0 ? e(geld($position['wert'])) : 'verkauft']) ?>
+<?php endif; ?>
 
 <h2 class="abschnitt">Analyse</h2>
 <?= akk('Auf einen Blick', 'puls', $blick, ['offen' => true, 'id' => 'f-blick']) ?>
@@ -1295,7 +1324,7 @@ function positionsTabelle(array $positionen, array $d): string
     if ($positionen === []) {
         return leer('Keine Positionen.');
     }
-    $html = '<ul class="positionen">';
+    $html = '<ul class="positionen" data-sortieren>';
     foreach ($positionen as $pos) {
         $verlinkt = $pos['symbol'] !== '' && isset($d['firmen'][$pos['symbol']]);
         $name = e($pos['name']);
@@ -1310,7 +1339,8 @@ function positionsTabelle(array $positionen, array $d): string
             . (!empty($pos['stand_auszug']) ? ' · Wert laut Kontoauszug' : '')
             . (!empty($pos['herkunft']) ? ' · ' . implode(', ', array_unique($pos['herkunft'])) : '')
             . ' · Einstand ' . geld($pos['einstand']);
-        $html .= '<li>' . ($verlinkt ? '<a href="' . e(firmaUrl($pos['symbol'])) . '">' : '<div>')
+        $html .= '<li data-s-wert="' . e((string)($pos['wert'] ?? '')) . '" data-s-gv="' . e((string)($pos['gv'] ?? '')) . '" data-s-gvp="' . e((string)($pos['gv_proz'] ?? ''))
+            . '" data-s-heute="' . e((string)($pos['aend_proz'] ?? '')) . '" data-s-name="' . e(mb_strtolower($pos['name'])) . '">' . ($verlinkt ? '<a href="' . e(firmaUrl($pos['symbol'])) . '">' : '<div>')
             . '<span><strong>' . $name . '</strong><small>' . e($unter) . '</small></span>'
             . '<span class="rechts"><b>' . e($pos['wert'] !== null ? geld($pos['wert']) : 'kein Kurs') . '</b>'
             . ($pos['gv'] !== null ? '<small class="' . klasse($pos['gv']) . '">' . e(($pos['gv'] > 0 ? '+' : '') . geld($pos['gv'])) . ' (' . e(proz($pos['gv_proz'], 1, true)) . ')</small>' : '')
@@ -1421,6 +1451,15 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
   <?php endif; ?>
 </section>
 
+<?php if ($depot['positionen'] !== []): ?>
+<div class="werkzeugleiste" data-sortierung>
+  <span class="klein leise">Positionen sortieren:</span>
+  <select aria-label="Sortierung der Positionen">
+    <option value="wert">Wert</option><option value="gvp">Gewinn/Verlust %</option><option value="gv">Gewinn/Verlust €</option><option value="heute">% heute</option><option value="name">Name</option>
+  </select>
+  <button type="button" class="knopf-icon richtung" aria-label="Sortierrichtung umkehren">↓</button>
+</div>
+<?php endif; ?>
 <?php foreach (FZ_QUELLEN as $q => $titel):
     if (empty($jeQuelle[$q])) {
         continue;
@@ -1729,15 +1768,87 @@ function seiteVerlauf(array $d): string
   <div class="raster" data-verlauf-kennzahlen></div>
   <p class="klein leise" data-verlauf-stand></p>
   <div data-verlauf-geschaefte></div>
-  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl berücksichtigt, wann Geld hinzukam (Modified Dietz). Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
+  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
 </section>
 <section class="karte">
   <span class="karten-titel"><?= ico('liste') ?> Titel auswählen</span>
   <input type="search" placeholder="Titel suchen …" data-verlauf-suche aria-label="Titel suchen">
+  <div class="werkzeugleiste">
+    <select data-verlauf-sort aria-label="Sortierung">
+      <option value="wert">Wert am Ende</option><option value="rendite">Rendite im Zeitraum %</option><option value="gewinn">Gewinn im Zeitraum €</option><option value="pot">Analysten-Kursziel (Potenzial)</option><option value="name">Name</option>
+    </select>
+    <button type="button" class="knopf-icon richtung" data-verlauf-richtung aria-label="Sortierrichtung umkehren">↓</button>
+  </div>
   <div class="knopf-reihe"><button type="button" class="knopf-text" data-verlauf-alle="1">Alle auswählen</button><button type="button" class="knopf-text" data-verlauf-alle="0">Keine</button></div>
   <ul class="positionen verlauf-liste" data-verlauf-liste></ul>
 </section>
 <?php endif; ?>
+<?php
+    return (string)ob_get_clean();
+}
+
+/** Meine Position: Ergebnis, Kauflose, Verkäufe und alle Buchungen. */
+function positionHtml(array $pos, string $symbol): string
+{
+    // $dativ für „seit …“ / „vor …“ (Tagen, Monaten, Jahren)
+    $dauer = static function (int $tage, bool $dativ = false): string {
+        if ($tage < 60) {
+            return $tage . ($tage === 1 ? ' Tag' : ($dativ ? ' Tagen' : ' Tage'));
+        }
+        if ($tage < 730) {
+            return round($tage / 30.44) . ($dativ ? ' Monaten' : ' Monate');
+        }
+        return zahl($tage / 365.25, 1) . ($dativ ? ' Jahren' : ' Jahre');
+    };
+    $farbe = static fn(?float $x): string => '<span class="' . klasse($x) . '">';
+    $vz = static fn(?float $x): string => $x === null ? '–' : ($x > 0 ? '+' : '') . geld($x);
+    $quelle = static fn(array $x): string => $x['quelle'] === 'etoro' ? 'eToro' . (!empty($x['short']) ? ' · Short' : '') . (($x['hebel'] ?? 1) > 1 ? ' · Hebel ' . zahl($x['hebel'], 0) : '') : 'Trade Republic';
+    ob_start(); ?>
+<?= kacheln([
+    ['Wert heute', e(geld($pos['wert'])), e(zahl($pos['bestand'], $pos['bestand'] < 10 ? 4 : 2)) . ' Stück', ''],
+    ['Offener Gewinn', $farbe($pos['offen_gewinn']) . e($vz($pos['offen_gewinn'])) . '</span>', $farbe($pos['offen_rendite']) . e(proz($pos['offen_rendite'], 1, true)) . '</span> auf ' . e(geld($pos['einstand'])), ''],
+    ['Realisiert (Verkäufe)', $farbe($pos['realisiert']) . e($vz($pos['realisiert'])) . '</span>', (int)$pos['anzahl_verkaeufe'] . ' Verkäufe', ''],
+    ['Dividenden', e(geld($pos['dividenden'])), '', ''],
+    ['Gesamtergebnis', $farbe($pos['gesamt']) . e($vz($pos['gesamt'])) . '</span>', $farbe($pos['gesamt_rendite']) . e(proz($pos['gesamt_rendite'], 1, true)) . '</span> auf ' . e(geld($pos['gekauft'])) . ' gekauft', ''],
+    ['Rendite pro Jahr', $farbe($pos['xirr']) . e(proz($pos['xirr'], 1, true)) . '</span>', 'berücksichtigt, wann Geld floss', ''],
+    ['Erster Kauf', e($pos['erster'] ? datum((int)$pos['erster']) : '–'), $pos['erster'] ? 'vor ' . e($dauer((int)floor((time() - $pos['erster']) / 86400), true)) : '', ''],
+    ['Käufe', (string)(int)$pos['anzahl_kaeufe'], '', ''],
+]) ?>
+<p><a class="knopf klein zweit" href="./?seite=verlauf&amp;titel=<?= e(rawurlencode($symbol)) ?>"><?= ico('kurve') ?> Wertverlauf meiner Position</a></p>
+
+<?php if ($pos['lose'] !== []): ?>
+  <h4>Offene Käufe (<?= count($pos['lose']) ?>)</h4>
+  <ul class="positionen lose">
+    <?php foreach ($pos['lose'] as $l): ?>
+      <li><div><span><strong><?= e(datum((int)$l['zeit'])) ?></strong><small><?= e(zahl($l['stueck'], $l['stueck'] < 10 ? 4 : 2)) ?> Stück zu <?= e(geld($l['preis'])) ?> · <?= e($quelle($l)) ?> · seit <?= e($dauer((int)$l['tage'], true)) ?></small></span>
+        <span class="rechts"><b><?= e(geld($l['wert'])) ?></b><small class="<?= klasse($l['gewinn']) ?>"><?= e($vz($l['gewinn'])) ?> (<?= e(proz($l['rendite'], 1, true)) ?>)</small><?php if ($l['jahresrendite'] !== null): ?><small class="leise"><?= e(proz($l['jahresrendite'], 1, true)) ?> p. a.</small><?php endif; ?></span></div></li>
+    <?php endforeach; ?>
+  </ul>
+<?php endif; ?>
+
+<?php if ($pos['realisiert_liste'] !== []): ?>
+  <h4>Verkauft (<?= count($pos['realisiert_liste']) ?>)</h4>
+  <ul class="positionen lose">
+    <?php foreach (array_slice($pos['realisiert_liste'], 0, 100) as $r): ?>
+      <li><div><span><strong><?= e(datum((int)$r['kauf'])) ?> → <?= e(datum((int)$r['verkauf'])) ?></strong><small><?= e(zahl($r['stueck'], $r['stueck'] < 10 ? 4 : 2)) ?> Stück<?= $r['kaufpreis'] !== null ? ' · Kauf ' . e(geld($r['kaufpreis'])) : '' ?><?= $r['verkaufspreis'] !== null ? ' · Verkauf ' . e(geld($r['verkaufspreis'])) : '' ?> · <?= e($quelle($r)) ?> · <?= e($dauer((int)$r['tage'])) ?> gehalten</small></span>
+        <span class="rechts"><b class="<?= klasse($r['gewinn']) ?>"><?= e($vz($r['gewinn'])) ?></b><small class="<?= klasse($r['rendite']) ?>"><?= e(proz($r['rendite'], 1, true)) ?></small></span></div></li>
+    <?php endforeach; ?>
+  </ul>
+  <?php if (count($pos['realisiert_liste']) > 100): ?><p class="klein leise">Die 100 letzten Verkäufe.</p><?php endif; ?>
+<?php endif; ?>
+
+<details class="unterbereich">
+  <summary><?= ico('liste') ?> Alle Buchungen (<?= count($pos['geschaefte']) ?>)</summary>
+  <ul class="liste-schlicht geschaefte">
+    <?php foreach (array_slice($pos['geschaefte'], 0, 300) as $g):
+        $text = ['kauf' => '▲ Kauf', 'verkauf' => '▼ Verkauf', 'dividende' => 'Dividende', 'massnahme' => 'Kapitalmaßnahme'][$g['typ']]; ?>
+      <li><span><b class="<?= $g['typ'] === 'kauf' ? 'plus' : ($g['typ'] === 'verkauf' ? 'minus' : '') ?>"><?= e($text) ?></b> <?= e(datum((int)$g['zeit'])) ?>
+        <small class="leise" style="display:block"><?= $g['stueck'] != 0 ? e(zahl(abs((float)$g['stueck']), 4)) . ' Stück' . ($g['kurs'] !== null ? ' zu ' . e(geld((float)$g['kurs'])) : '') . ' · ' : '' ?><?= e($quelle($g)) ?></small></span>
+        <b><?= $g['betrag'] != 0 ? e(geld(abs((float)$g['betrag']))) : '' ?></b></li>
+    <?php endforeach; ?>
+  </ul>
+</details>
+<p class="klein leise">Kauflose nach FIFO (zuerst gekauft, zuerst verkauft). Trade-Republic-Beträge inklusive Gebühren; eToro-Beträge in Dollar, zum heutigen Kurs in Euro umgerechnet. „Rendite pro Jahr“ ist der interne Zinsfuß über alle Käufe, Verkäufe, Dividenden und den heutigen Wert.</p>
 <?php
     return (string)ob_get_clean();
 }
