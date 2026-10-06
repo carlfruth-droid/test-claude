@@ -776,10 +776,20 @@ switch ($seite) {
         break;
 
     case 'firmen':
-        $filter = (string)($_GET['status'] ?? '');
+        // Ansicht (Filter, Sortierung, Richtung) merken – ohne Angaben gilt die zuletzt gewählte
+        $gemerkt = (array)($d['einstellungen']['firmen_ansicht'] ?? []);
+        $mitAngaben = isset($_GET['status']) || isset($_GET['sort']) || isset($_GET['dir']);
+        $filter = (string)($mitAngaben ? ($_GET['status'] ?? '') : ($gemerkt['status'] ?? ''));
         $filter = isset(FZ_STATUS[$filter]) ? $filter : '';
-        $sort = (string)($_GET['sort'] ?? 'name');
-        $richtung = (string)($_GET['dir'] ?? '') === 'auf' ? 'auf' : ((string)($_GET['dir'] ?? '') === 'ab' ? 'ab' : ($sort === 'name' ? 'auf' : 'ab'));
+        $sort = (string)($mitAngaben ? ($_GET['sort'] ?? 'name') : ($gemerkt['sort'] ?? 'name'));
+        $dirWunsch = (string)($mitAngaben ? ($_GET['dir'] ?? '') : ($gemerkt['dir'] ?? ''));
+        $richtung = $dirWunsch === 'auf' ? 'auf' : ($dirWunsch === 'ab' ? 'ab' : ($sort === 'name' ? 'auf' : 'ab'));
+        $ansicht = ['status' => $filter, 'sort' => $sort, 'dir' => $richtung];
+        if ($mitAngaben && $ansicht !== $gemerkt) {
+            datenAendern(function (array &$d) use ($ansicht): void {
+                $d['einstellungen']['firmen_ansicht'] = $ansicht;
+            });
+        }
         if ($sort === 'kursziel') {
             // fehlende oder alte Analystendaten nachladen (die Alarm-Prüfung frischt sie sonst nach und nach auf)
             $fehlend = array_keys(array_filter($d['firmen'], static fn(array $f): bool => time() - (int)($f['analysten']['zeit'] ?? 0) > 7 * 86400));
