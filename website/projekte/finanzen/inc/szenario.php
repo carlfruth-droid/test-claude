@@ -193,3 +193,16 @@ function szenarioAnalyse(array $firma, array $p, string $modell): array
     [$erg['text'], $werte] = szenarioJson($erg['text']);
     return $erg + ['werte' => $werte, 'kurs' => $p['kurs'], 'waehrung' => (string)$p['waehrung']];
 }
+
+/** Die wichtigsten Wettbewerber mit Marktstellung (kurze KI-Recherche). */
+function wettbewerberAnalyse(array $firma, array $p, string $modell): array
+{
+    $system = 'Du bist ein nüchterner Branchenanalyst und schreibst für einen Privatanleger aus Deutschland. Recherchiere im Web aktuelle, belastbare Angaben. '
+        . 'Schreibe auf Deutsch, knapp, mit konkreten Zahlen samt Stand. Unsichere Angaben kennzeichnest du.';
+    $auftrag = 'Firma: ' . $p['name'] . ' (' . $p['symbol'] . ($firma['isin'] !== '' ? ', ISIN ' . $firma['isin'] : '') . ($p['branche'] !== '' ? ', Branche ' . $p['branche'] : '') . ")\n\n"
+        . "Nenne die 4 bis 8 wichtigsten direkten Wettbewerber – nach Geschäftsbereichen, falls die Firma mehrere hat.\n"
+        . "Gib eine Markdown-Tabelle mit den Spalten: Wettbewerber | Land | Börsenkürzel | Umsatz (letztes Geschäftsjahr) | Überschneidung / Marktstellung.\n"
+        . "Danach unter ## Marktstellung 3 bis 5 Stichpunkte: Marktanteile, wo die Firma führt, wo sie hinterherläuft, und welche neuen Konkurrenten oder Ersatzprodukte drohen.\n"
+        . 'Höchstens etwa 350 Wörter, keine Einleitung, keine Quellenliste.';
+    return kiLauf($system, $auftrag, $modell, 4);
+}

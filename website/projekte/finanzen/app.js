@@ -62,6 +62,7 @@
       .then(function (html) {
         ziel.innerHTML = html;
         aufbauen(ziel);
+        kiBinden(ziel);
         var logo = $('[data-logo-url]', ziel);
         if (logo) { logoSetzen(logo.getAttribute('data-logo-url')); }
       })
@@ -347,8 +348,9 @@
     });
   });
 
-  // ---------- KI-Einschätzung ----------
-  $$('[data-ki]').forEach(function (bereich) {
+  // ---------- KI-Einschätzung (auch in nachgeladenen Bereichen) ----------
+  function kiBinden(wurzel) {
+  $$('[data-ki]', wurzel).forEach(function (bereich) {
     var knopf = $('[data-ki-start]', bereich);
     var status = $('.ki-status', bereich);
     if (!knopf) { return; }
@@ -376,7 +378,7 @@
           clearInterval(uhr);
           if (j && j.ok) {
             status.textContent = 'Fertig – wird angezeigt …';
-            location.hash = bereich.getAttribute('data-ki-art') === 'szenario' ? 'f-empfehlung' : 'f-ki';
+            location.hash = { szenario: 'f-empfehlung', wettbewerber: 'f-portraet' }[bereich.getAttribute('data-ki-art')] || 'f-ki';
             location.reload();
           } else {
             status.className = 'ki-status fehlerbox';
@@ -392,6 +394,8 @@
         });
     });
   });
+  }
+  kiBinden(document);
 
   // ---------- Logo aus Wikidata (falls vorhanden) ----------
   function logoSetzen(url) {

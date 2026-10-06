@@ -496,3 +496,76 @@ function inEuro(?float $betrag, string $waehrung, array $fx): ?float
     $kurs = $fx[$b] ?? null;
     return $kurs ? $betrag / $kurs : null;
 }
+
+// ---------------------------------------------------------------------------
+// Wikipedia: Einleitung und Geschichte (deutsch, sonst englisch)
+// ---------------------------------------------------------------------------
+
+/** Artikel zur Wikidata-ID: ['sprache', 'titel', 'url', 'einleitung', 'geschichte'] oder null. */
+function wikipediaArtikel(string $qid): ?array
+{
+    if (!preg_match('/^Q\d+$/', $qid)) {
+        return null;
+    }
+    $wert = gecacht('wp:' . $qid, 7 * 86400, function () use ($qid): ?array {
+        $j = httpJson(http('https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&props=sitelinks&sitefilter=dewiki%7Cenwiki&ids=' . $qid, ['zeit' => 15]));
+        $links = $j['entities'][$qid]['sitelinks'] ?? [];
+        foreach (['de' => 'dewiki', 'en' => 'enwiki'] as $sprache => $wiki) {
+            $titel = (string)($links[$wiki]['title'] ?? '');
+            if ($titel === '') {
+                continue;
+            }
+            $a = httpJson(http('https://' . $sprache . '.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&explaintext=1&exsectionformat=wiki&redirects=1&titles='
+                . rawurlencode($titel), ['zeit' => 20]));
+            $seite = is_array($a['query']['pages'] ?? null) ? reset($a['query']['pages']) : null;
+            $text = (string)($seite['extract'] ?? '');
+            if ($text === '') {
+                continue;
+            }
+            // Einleitung = alles vor der ersten Überschrift; Geschichte = passender Abschnitt bis zur nächsten Hauptüberschrift
+            $teile = preg_split('/^(==[^=].*?==)\s*$/m', $text, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$text];
+            $einleitung = trim((string)$teile[0]);
+            $geschichte = '';
+            for ($i = 1; $i < count($teile) - 1; $i += 2) {
+                $kopf = trim($teile[$i], "= \t");
+                if (preg_match('/^(Geschichte|Unternehmensgeschichte|Historie|History|Corporate history)$/iu', $kopf)) {
+                    $geschichte = trim((string)$teile[$i + 1]);
+                    break;
+                }
+            }
+            return ['sprache' => $sprache, 'titel' => $titel, 'url' => 'https://' . $sprache . '.wikipedia.org/wiki/' . rawurlencode(str_replace(' ', '_', $titel)),
+                'einleitung' => mb_substr($einleitung, 0, 4000), 'geschichte' => mb_substr($geschichte, 0, 12000)];
+        }
+        return ['sprache' => '', 'titel' => '', 'url' => '', 'einleitung' => '', 'geschichte' => ''];
+    });
+    return is_array($wert) && $wert['einleitung'] !== '' ? $wert : null;
+}
+
+/** Wikipedia-Klartext mit „=== Unterüberschriften ===“ als HTML-Absätze. */
+function wikiTextHtml(string $text): string
+{
+    $html = '';
+    foreach (preg_split('/\n{1,}/', trim($text)) ?: [] as $absatz) {
+        $absatz = trim($absatz);
+        if ($absatz === '') {
+            continue;
+        }
+        if (preg_match('/^=+\s*(.+?)\s*=+$/u', $absatz, $m)) {
+            $html .= '<h5>' . e($m[1]) . '</h5>';
+        } else {
+            $html .= '<p>' . e($absatz) . '</p>';
+        }
+    }
+    return $html;
+}
+
+/** Vergleichbare Aktien laut Yahoo („Leute schauen sich auch an“). */
+function yahooAehnliche(string $symbol): array
+{
+    $wert = gecacht('aehnlich:' . $symbol, 7 * 86400, function () use ($symbol): ?array {
+        $j = httpJson(http('https://query1.finance.yahoo.com/v6/finance/recommendationsbysymbol/' . rawurlencode($symbol), ['ua' => 'browser', 'zeit' => 15]));
+        $liste = $j['finance']['result'][0]['recommendedSymbols'] ?? null;
+        return is_array($liste) ? array_values(array_filter(array_map(static fn($x): string => (string)($x['symbol'] ?? ''), $liste))) : null;
+    });
+    return is_array($wert) ? array_slice($wert, 0, 8) : [];
+}
