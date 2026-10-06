@@ -546,3 +546,5 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .cl-spanne { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; padding: 8px 10px; background: var(--akzent-hell); border-radius: 12px; }
 .cl-spanne span { flex: 1; min-width: 60%; }
 .cl-spanne button[data-a="uebernehmen"] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+.wikitext p { margin: 0 0 10px; line-height: 1.55; }
+.wikitext h5 { margin: 14px 0 6px; font-size: .95rem; }

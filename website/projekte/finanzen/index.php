@@ -81,6 +81,7 @@ function diagnose(): array
         'yahoo_kennzahlen' => $qs !== null && isset($qs['financialData']) ? 'ok' : 'FEHLER',
         'gleif' => leiZuIsin('DE0007164600') !== '' ? 'ok' : 'FEHLER',
         'wikidata' => wikidataZuIsin('DE0007164600') !== '' ? 'ok' : 'FEHLER',
+        'wikipedia' => wikipediaArtikel('Q552581') !== null ? 'ok' : 'FEHLER',
         'news' => googleNews('SAP', 'de') !== [] ? 'ok' : 'FEHLER',
         'ki_schluessel' => kiSchluessel() !== '' ? 'vorhanden' : 'fehlt',
         'mail' => function_exists('mail') ? 'verfügbar' . (ini_get('sendmail_path') ? '' : ' (kein sendmail_path)') : 'fehlt',
@@ -643,7 +644,14 @@ if (isset($_GET['api'])) {
         session_write_close(); // die Analyse dauert – andere Seiten sollen derweil nicht blockieren
         $d = datenLaden();
         $f = $d['firmen'][$s] ?? firmaNormal(['name' => $p['name']], $s);
-        if ((string)($_POST['art'] ?? '') === 'szenario') {
+        if ((string)($_POST['art'] ?? '') === 'wettbewerber') {
+            $erg = wettbewerberAnalyse($f, $p, kiModell($d));
+            if ($erg['ok']) {
+                firmaAendern($s, function (array &$f) use ($erg): void {
+                    $f['wettbewerb'] = ['text' => $erg['text'], 'quellen' => $erg['quellen'], 'modell' => $erg['modell'], 'zeit' => $erg['zeit']];
+                });
+            }
+        } elseif ((string)($_POST['art'] ?? '') === 'szenario') {
             $erg = szenarioAnalyse($f, $p, kiModell($d));
             if ($erg['ok']) {
                 firmaAendern($s, function (array &$f) use ($erg): void {
@@ -679,7 +687,7 @@ if (isset($_GET['teil'])) {
     session_write_close();
     $f = $d['firmen'][$s] ?? firmaNormal(['name' => $p['name']], $s);
     $teil = (string)$_GET['teil'];
-    if (in_array($teil, ['beteiligungen', 'profil', 'aktionaere'], true)) {
+    if (in_array($teil, ['beteiligungen', 'profil', 'aktionaere', 'portraet'], true)) {
         // ISIN, LEI und Wikidata einmalig ermitteln und an der Firma merken
         if ($f['identitaet'] === 0 && isset($d['firmen'][$s])) {
             $id = identitaetErmitteln($f, $p);
@@ -702,6 +710,7 @@ if (isset($_GET['teil'])) {
         'aktionaere' => teilAktionaere($f, $p, $id),
         'beteiligungen' => teilBeteiligungen($f, $id),
         'profil' => teilProfil($f, $p, $id),
+        'portraet' => teilPortraet($f, $p, $id, kiSchluessel() !== '', kiModell($d)),
         'sec' => teilSec($s),
         default => '',
     };

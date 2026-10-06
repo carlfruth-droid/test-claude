@@ -1069,6 +1069,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
 
 <h2 class="abschnitt">Analyse</h2>
 <?= akk('Auf einen Blick', 'puls', $blick, ['offen' => true, 'id' => 'f-blick']) ?>
+<?= akk('Firmenporträt', 'welt', '', ['teil' => 'portraet', 'symbol' => $s, 'id' => 'f-portraet', 'offen' => true]) ?>
 <?= akk('Meine Empfehlung', 'ziel', empfehlungHtmlKarte($f, $p, $kiVerfuegbar, kiModell($d)), ['id' => 'f-empfehlung', 'offen' => !empty($f['szenario']),
     'meta' => isset($f['szenario']['werte']['crv']) ? 'CRV ' . e(zahl((float)$f['szenario']['werte']['crv'], 1)) : 'Szenario-Modell']) ?>
 <?= akk('Kennzahlen', 'balken', $kz, ['id' => 'f-kennzahlen', 'meta' => $p['kgv'] !== null ? 'KGV ' . e(zahl($p['kgv'], 1)) : '']) ?>
@@ -1186,12 +1187,24 @@ function teilAktionaere(array $f, array $p, array $id): string
         $html .= '<h4>Größte Fonds</h4>' . $fonds;
     }
     if ($p['insider_geschaefte'] !== []) {
-        $html .= '<h4>Insider-Geschäfte</h4><ul class="liste-schlicht">';
+        $html .= '<h4>Insider-Geschäfte</h4><ul class="liste-schlicht insider">';
+        $w = (string)$p['waehrung'];
+        $summe = ['kauf' => 0.0, 'verkauf' => 0.0];
         foreach ($p['insider_geschaefte'] as $t) {
-            $html .= '<li><span>' . e(datum($t['zeit'])) . ' · <strong>' . e(ucwords(mb_strtolower($t['name']))) . '</strong> (' . e($t['rolle']) . ')<br><small>' . e($t['text'] !== '' ? $t['text'] : '–') . '</small></span>'
-                . '<b>' . e($t['aktien'] !== null ? number_format($t['aktien'], 0, ',', '.') . ' St.' : '') . '</b></li>';
+            $a = insiderArt($t['text']);
+            if (isset($summe[$a['art']]) && $t['wert'] !== null) {
+                $summe[$a['art']] += $t['wert'];
+            }
+            $html .= '<li><span><b class="' . e($a['klasse']) . '">' . e($a['zeichen'] . ' ' . $a['titel']) . '</b> ' . e(datum($t['zeit']))
+                . '<br><strong>' . e(ucwords(mb_strtolower($t['name']))) . '</strong>' . ($t['rolle'] !== '' ? ' <small class="leise">(' . e($t['rolle']) . ')</small>' : '')
+                . ($a['preis'] !== '' ? '<br><small class="leise">zu ' . e($a['preis'] . ' ' . $w) . ' je Aktie</small>' : '') . '</span>'
+                . '<span class="rechts"><b>' . e($t['aktien'] !== null ? number_format($t['aktien'], 0, ',', '.') . ' St.' : '') . '</b>'
+                . ($t['wert'] !== null && $t['wert'] > 0 ? '<small>' . e(gross($t['wert'], $w)) . '</small>' : '') . '</span></li>';
         }
         $html .= '</ul>';
+        if ($summe['kauf'] > 0 || $summe['verkauf'] > 0) {
+            $html .= '<p class="klein">In diesen Meldungen: Käufe <b class="plus">' . e(gross($summe['kauf'], $w)) . '</b> · Verkäufe <b class="minus">' . e(gross($summe['verkauf'], $w)) . '</b></p>';
+        }
     } elseif ($p['insider'] !== []) {
         $html .= '<h4>Insider</h4><ul class="liste-schlicht">';
         foreach ($p['insider'] as $t) {
@@ -1954,4 +1967,119 @@ function empfehlungHtmlKarte(array $f, array $p, bool $kiVerfuegbar, string $mod
 </div>
 <?php
     return (string)ob_get_clean();
+}
+
+/** Firmenporträt: was die Firma macht, Größe, Geschichte und Wettbewerber. */
+function teilPortraet(array $f, array $p, array $id, bool $kiVerfuegbar, string $modell): string
+{
+    $wd = $id['wikidata'] !== '' ? wikidataDetails($id['wikidata']) : null;
+    $wp = $id['wikidata'] !== '' ? wikipediaArtikel($id['wikidata']) : null;
+    $w = (string)$p['waehrung'];
+    $bw = (string)($p['bilanzwaehrung'] ?: $w);
+    $html = '';
+
+    // Was die Firma macht
+    $html .= '<h4>Was die Firma macht</h4>';
+    if ($wp !== null) {
+        $html .= '<div class="wikitext">' . wikiTextHtml($wp['einleitung']) . '</div>'
+            . '<p class="klein leise">Quelle: <a href="' . e($wp['url']) . '" target="_blank" rel="noopener noreferrer">Wikipedia' . ($wp['sprache'] === 'en' ? ' (englisch)' : '') . ' ' . ico('extern') . '</a></p>';
+    } elseif ($p['beschreibung'] !== '') {
+        $html .= '<p class="beschreibung">' . e($p['beschreibung']) . '</p><p class="klein leise">Quelle: Yahoo Finance (englisch) – kein Wikipedia-Artikel gefunden.</p>';
+    } else {
+        $html .= leer('Keine Beschreibung gefunden.');
+    }
+
+    // Größe
+    $gegruendet = (string)($wd['gegruendet'] ?? '');
+    $sitz = $wd !== null && $wd['sitz'] !== [] ? $wd['sitz'][0]['name'] : $p['stadt'];
+    $html .= '<h4>Größe und Eckdaten</h4>' . kacheln([
+        ['Börsenwert', e(gross($p['boersenwert'], $w)), '', ''],
+        ['Umsatz', e(gross($p['umsatz'], $bw)), 'letzte 12 Monate', ''],
+        ['Mitarbeiter', $p['mitarbeiter'] > 0 ? e(number_format($p['mitarbeiter'], 0, ',', '.')) : '–', '', ''],
+        ['Gegründet', e($gegruendet !== '' ? $gegruendet : '–'), $gegruendet !== '' && ctype_digit($gegruendet) ? 'vor ' . ((int)date('Y') - (int)$gegruendet) . ' Jahren' : '', ''],
+        ['Sitz', e(trim($sitz . ($p['land'] !== '' ? ', ' . $p['land'] : ''), ', ') ?: '–'), '', ''],
+        ['Branche', e($p['branche'] !== '' ? $p['branche'] : '–'), e($p['sektor']), ''],
+    ]);
+    $leute = [];
+    if ($wd !== null && $wd['gruender'] !== []) {
+        $leute[] = '<li><span>Gründer</span><b>' . e(implode(', ', array_column(array_slice($wd['gruender'], 0, 4), 'name'))) . '</b></li>';
+    }
+    if ($p['vorstand'] !== []) {
+        $leute[] = '<li><span>Führung</span><b>' . e(implode(' · ', array_map(static fn(array $v): string => $v['name'] . ($v['rolle'] !== '' ? ' (' . $v['rolle'] . ')' : ''), array_slice($p['vorstand'], 0, 2)))) . '</b></li>';
+    }
+    if ($leute !== []) {
+        $html .= '<ul class="liste-schlicht">' . implode('', $leute) . '</ul>';
+    }
+
+    // Geschichte
+    if ($wp !== null && $wp['geschichte'] !== '') {
+        $kurz = mb_substr($wp['geschichte'], 0, 1400);
+        $schnitt = mb_strrpos($kurz, "\n");
+        $kurz = mb_strlen($wp['geschichte']) > 1400 && $schnitt > 400 ? mb_substr($kurz, 0, $schnitt) : $kurz;
+        $html .= '<h4>Geschichte</h4><div class="wikitext">' . wikiTextHtml($kurz) . '</div>';
+        if (mb_strlen($wp['geschichte']) > mb_strlen($kurz)) {
+            $html .= '<details class="unterbereich"><summary>' . ico('liste') . ' Ganze Geschichte lesen</summary><div class="wikitext">'
+                . wikiTextHtml(mb_substr($wp['geschichte'], mb_strlen($kurz))) . '</div></details>';
+        }
+    }
+
+    // Wettbewerber
+    $html .= '<h4>Wettbewerber</h4>';
+    $aehnlich = yahooAehnliche((string)$p['symbol']);
+    if ($aehnlich !== []) {
+        $kurse = yahooKurse($aehnlich);
+        $html .= '<p class="klein leise">Vergleichbare Aktien laut Yahoo Finance:</p><ul class="positionen">';
+        foreach ($aehnlich as $a) {
+            $k = $kurse[$a] ?? null;
+            $html .= '<li><a href="' . e(firmaUrl($a)) . '"><span><strong>' . e((string)($k['name'] ?? $a) ?: $a) . '</strong><small>' . e($a) . ((string)($k['boerse'] ?? '') !== '' ? ' · ' . e($k['boerse']) : '') . '</small></span>'
+                . '<span class="rechts"><b>' . e(geld($k['kurs'] ?? null, (string)($k['waehrung'] ?? ''))) . '</b><small class="' . klasse($k['aend_proz'] ?? null) . '">' . e(proz($k['aend_proz'] ?? null, 2, true)) . '</small></span></a></li>';
+        }
+        $html .= '</ul>';
+    }
+    $wb = is_array($f['wettbewerb'] ?? null) ? $f['wettbewerb'] : null;
+    ob_start(); ?>
+<div class="ki-bereich" data-ki="<?= e((string)$p['symbol']) ?>" data-ki-art="wettbewerber">
+  <?php if ($wb !== null): ?>
+    <p class="klein leise">Wettbewerbsanalyse vom <?= e(datum((int)$wb['zeit'])) ?> · <?= e(modellName((string)$wb['modell'])) ?> mit Web-Recherche</p>
+    <div class="ki-text"><?= mdHtml((string)$wb['text']) ?></div>
+    <?php if (!empty($wb['quellen'])): ?><details class="quellen"><summary>Quellen (<?= count($wb['quellen']) ?>)</summary><ul><?php foreach ($wb['quellen'] as $q): ?><li><a href="<?= e($q['url']) ?>" target="_blank" rel="noopener noreferrer"><?= e($q['titel']) ?></a></li><?php endforeach; ?></ul></details><?php endif; ?>
+  <?php endif; ?>
+  <?php if ($kiVerfuegbar): ?>
+    <button class="knopf klein<?= $wb !== null ? ' zweit' : '' ?>" type="button" data-ki-start><?= ico($wb !== null ? 'neu' : 'blitz') ?> <?= $wb !== null ? 'Wettbewerber neu ermitteln' : 'Echte Wettbewerber mit KI ermitteln' ?></button>
+    <span class="klein leise ki-dauer">etwa 1 Minute · <?= e($modell === 'claude-haiku-4-5' ? 'ca. 5 Cent' : 'ca. 15–25 Cent') ?></span>
+    <div class="ki-status" hidden></div>
+  <?php endif; ?>
+</div>
+<?php
+    $html .= (string)ob_get_clean();
+    if ($wd !== null && $wd['logo'] !== '') {
+        $html .= '<span hidden data-logo-url="' . e(preg_replace('~^http://~', 'https://', $wd['logo']) . '?width=160') . '"></span>';
+    }
+    return $html;
+}
+
+/** Art eines Insider-Geschäfts aus dem englischen Yahoo-Text. */
+function insiderArt(string $text): array
+{
+    $t = mb_strtolower($text);
+    $arten = [
+        ['/\bsale\b|\bsold\b|disposition/', 'verkauf', 'Verkauf', '▼', 'minus'],
+        ['/purchase|\bbuy\b|\bbought\b|acquisition \(non open market\)/', 'kauf', 'Kauf', '▲', 'plus'],
+        ['/option exercise|conversion|exercise/', 'optionen', 'Optionsausübung', '◆', ''],
+        ['/award|grant/', 'zuteilung', 'Zuteilung (Vergütung)', '◆', ''],
+        ['/gift/', 'schenkung', 'Schenkung', '◆', ''],
+    ];
+    $erg = ['art' => 'unbekannt', 'titel' => $text === '' ? 'Art nicht gemeldet' : 'Sonstiges', 'zeichen' => '•', 'klasse' => 'leise', 'preis' => ''];
+    foreach ($arten as [$muster, $art, $titel, $zeichen, $klasse]) {
+        if (preg_match($muster, $t)) {
+            $erg = ['art' => $art, 'titel' => $titel, 'zeichen' => $zeichen, 'klasse' => $klasse, 'preis' => ''];
+            break;
+        }
+    }
+    // „at price 233.03 - 237.83 per share“ → „233,03–237,83“
+    if (preg_match('/at price ([\d.,]+)(?:\s*-\s*([\d.,]+))?/', $t, $m) && (float)str_replace(',', '', $m[1]) > 0) {
+        $von = zahl((float)str_replace(',', '', $m[1]), 2);
+        $erg['preis'] = isset($m[2]) && $m[2] !== '' ? $von . '–' . zahl((float)str_replace(',', '', $m[2]), 2) : $von;
+    }
+    return $erg;
 }
