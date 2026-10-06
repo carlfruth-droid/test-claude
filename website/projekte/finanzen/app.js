@@ -510,37 +510,120 @@
         svg.appendChild(p);
       });
     });
-    var senkrecht = document.createElementNS(ns, 'line');
-    senkrecht.setAttribute('class', 'gitter');
-    senkrecht.setAttribute('y1', oben); senkrecht.setAttribute('y2', H - unten);
-    senkrecht.style.display = 'none';
-    svg.appendChild(senkrecht);
-    var punkt = document.createElementNS(ns, 'circle');
-    punkt.setAttribute('r', 4); punkt.setAttribute('fill', farbe); punkt.setAttribute('stroke', '#fff'); punkt.setAttribute('stroke-width', 2);
-    punkt.style.display = 'none';
-    svg.appendChild(punkt);
+    // ---- Bedienung: Zeitpunkt anfahren (wischen), an Käufen/Verkäufen einrasten, Start und Ende setzen ----
+    var opt = arguments[8] || {};
+    var z = chart._zustand || (chart._zustand = {});
+    var el = function (tag, attr) { var e = document.createElementNS(ns, tag); Object.keys(attr).forEach(function (k) { e.setAttribute(k, attr[k]); }); svg.appendChild(e); return e; };
+    var bereich = el('rect', { 'class': 'chart-spanne', y: oben, height: H - oben - unten, x: 0, width: 0 });
+    bereich.style.display = 'none';
+    var startLinie = el('line', { 'class': 'chart-grenze', y1: oben, y2: H - unten });
+    var endLinie = el('line', { 'class': 'chart-grenze', y1: oben, y2: H - unten });
+    var startText = el('text', { 'class': 'achse chart-grenze-text', y: oben + 10, 'text-anchor': 'middle' }); startText.textContent = 'Start';
+    var endText = el('text', { 'class': 'achse chart-grenze-text', y: oben + 10, 'text-anchor': 'middle' }); endText.textContent = 'Ende';
+    var senkrecht = el('line', { 'class': 'chart-cursor', y1: oben, y2: H - unten });
+    var punkt = el('circle', { r: 5, fill: farbe, stroke: '#fff', 'stroke-width': 2 });
     chart.appendChild(svg);
-    var tip = document.createElement('div');
-    tip.className = 'chart-tip';
-    tip.hidden = true;
-    chart.appendChild(tip);
-    var zeigen = function (ev) {
+
+    // Leiste unter dem Chart (statt schwebendem Hinweis)
+    var leiste = chart.nextElementSibling && chart.nextElementSibling.classList.contains('chart-leiste') ? chart.nextElementSibling : null;
+    if (!leiste) { leiste = document.createElement('div'); leiste.className = 'chart-leiste'; chart.parentNode.insertBefore(leiste, chart.nextSibling); }
+    var hatMarken = Object.keys(jePunkt).length > 0;
+    leiste.innerHTML = '<div class="cl-info" aria-live="polite"></div>'
+      + '<div class="cl-knoepfe">'
+      + (hatMarken ? '<button type="button" data-a="handel-zurueck" aria-label="Voriger Kauf oder Verkauf">⏮</button>' : '')
+      + '<button type="button" data-a="zurueck" aria-label="Einen Punkt zurück">◀</button><button type="button" data-a="vor" aria-label="Einen Punkt vor">▶</button>'
+      + (hatMarken ? '<button type="button" data-a="handel-vor" aria-label="Nächster Kauf oder Verkauf">⏭</button>' : '')
+      + '<span class="cl-trenner"></span><button type="button" data-a="start">Start</button><button type="button" data-a="ende">Ende</button>'
+      + '</div><div class="cl-spanne" hidden></div>';
+    var info = leiste.querySelector('.cl-info'), spanneEl = leiste.querySelector('.cl-spanne');
+
+    var indexZu = function (t) {
+      if (t === undefined || t === null) { return null; }
+      var best = 0;
+      for (var k = 0; k < punkte.length; k++) { if (Math.abs(punkte[k][0] - t) < Math.abs(punkte[best][0] - t)) { best = k; } }
+      return best;
+    };
+    var markenIdx = Object.keys(jePunkt).map(Number).sort(function (a2, b2) { return a2 - b2; });
+    var aktuell = indexZu(z.cursor);
+    if (aktuell === null) { aktuell = punkte.length - 1; }
+    var iStart = indexZu(z.start), iEnde = indexZu(z.ende);
+
+    var setzen = function (i) {
+      aktuell = Math.max(0, Math.min(punkte.length - 1, i));
+      z.cursor = punkte[aktuell][0];
+      var xx = x(aktuell);
+      senkrecht.setAttribute('x1', xx); senkrecht.setAttribute('x2', xx);
+      punkt.setAttribute('cx', xx); punkt.setAttribute('cy', y(punkte[aktuell][1]));
+      info.innerHTML = '<b>' + fmt(punkte[aktuell][1]) + '</b> <span>' + datumFmt(punkte[aktuell][0]) + '</span>'
+        + zusatz.map(function (zz) { var v = zz.punkte[aktuell] && zz.punkte[aktuell][1]; return v === null || v === undefined ? '' : '<small style="color:' + zz.farbe + '">' + zz.name + ': ' + fmt(v) + '</small>'; }).join('')
+        + (jePunkt[aktuell] || []).slice(0, 6).map(function (m) { return '<small class="' + (m.typ === 'kauf' ? 'plus' : 'minus') + '">' + m.text + '</small>'; }).join('');
+    };
+    var spanneZeigen = function () {
+      [[iStart, startLinie, startText], [iEnde, endLinie, endText]].forEach(function (g) {
+        var sicht = g[0] !== null;
+        g[1].style.display = sicht ? '' : 'none'; g[2].style.display = sicht ? '' : 'none';
+        if (sicht) { var xx = x(g[0]); g[1].setAttribute('x1', xx); g[1].setAttribute('x2', xx); g[2].setAttribute('x', xx); }
+      });
+      // Beschriftung nach außen, damit sich „Start“ und „Ende“ nicht überlagern
+      if (iStart !== null && iEnde !== null) {
+        var links1 = iStart <= iEnde;
+        startText.setAttribute('text-anchor', links1 ? 'end' : 'start'); startText.setAttribute('x', x(iStart) + (links1 ? -3 : 3));
+        endText.setAttribute('text-anchor', links1 ? 'start' : 'end'); endText.setAttribute('x', x(iEnde) + (links1 ? 3 : -3));
+      } else {
+        startText.setAttribute('text-anchor', 'middle'); endText.setAttribute('text-anchor', 'middle');
+      }
+      if (iStart !== null && iEnde !== null) {
+        var a1 = Math.min(iStart, iEnde), b1 = Math.max(iStart, iEnde);
+        bereich.style.display = ''; bereich.setAttribute('x', x(a1)); bereich.setAttribute('width', Math.max(1, x(b1) - x(a1)));
+        var v0 = punkte[a1][1], v1 = punkte[b1][1];
+        var text = opt.spanne ? opt.spanne(a1, b1) : (fmt(v1 - v0).replace(/^(?!-)/, v1 - v0 > 0 ? '+' : '') + (v0 ? ' (' + ((v1 / v0 - 1) * 100 > 0 ? '+' : '') + ((v1 / v0 - 1) * 100).toLocaleString('de-DE', { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + ' %)' : ''));
+        spanneEl.hidden = false;
+        spanneEl.innerHTML = '<span>' + datumFmt(punkte[a1][0]) + ' → ' + datumFmt(punkte[b1][0]) + ': <b class="' + (v1 >= v0 ? 'plus' : 'minus') + '">' + text + '</b></span>'
+          + (opt.uebernehmen ? '<button type="button" data-a="uebernehmen">Als Zeitraum übernehmen</button>' : '')
+          + '<button type="button" data-a="loeschen" aria-label="Start und Ende entfernen">✕</button>';
+      } else {
+        bereich.style.display = 'none';
+        spanneEl.hidden = iStart === null && iEnde === null;
+        spanneEl.innerHTML = spanneEl.hidden ? '' : '<span class="leise">' + (iStart !== null ? 'Start ' + datumFmt(punkte[iStart][0]) + ' – jetzt den Endpunkt anfahren und „Ende“ tippen' : 'Ende ' + datumFmt(punkte[iEnde][0]) + ' – jetzt den Startpunkt anfahren und „Start“ tippen') + '</span><button type="button" data-a="loeschen" aria-label="Entfernen">✕</button>';
+      }
+    };
+
+    // Fingerposition → Punkt; in der Nähe eines Kaufs/Verkaufs dort einrasten
+    var ausPosition = function (ev) {
       var r = svg.getBoundingClientRect();
       var px = (ev.clientX - r.left) / r.width * B;
-      var i = Math.max(0, Math.min(punkte.length - 1, Math.round((px - links) / (B - links - rechtsRand - prognoseBreite) * (punkte.length - 1))));
-      var xx = x(i), yy2 = y(punkte[i][1]);
-      senkrecht.setAttribute('x1', xx); senkrecht.setAttribute('x2', xx); senkrecht.style.display = '';
-      punkt.setAttribute('cx', xx); punkt.setAttribute('cy', yy2); punkt.style.display = '';
-      tip.hidden = false;
-      tip.innerHTML = '<b>' + fmt(punkte[i][1]) + '</b>' + datumFmt(punkte[i][0])
-        + zusatz.map(function (z) { var v = z.punkte[i] && z.punkte[i][1]; return v === null || v === undefined ? '' : '<small style="color:' + z.farbe + '">' + z.name + ': ' + fmt(v) + '</small>'; }).join('')
-        + (jePunkt[i] || []).slice(0, 4).map(function (m) { return '<small class="' + (m.typ === 'kauf' ? 'plus' : 'minus') + '">' + m.text + '</small>'; }).join('');
-      tip.style.left = Math.max(60, Math.min(r.width - 60, xx / B * r.width)) + 'px';
+      var i = Math.round((px - links) / (B - links - rechtsRand - prognoseBreite) * (punkte.length - 1));
+      i = Math.max(0, Math.min(punkte.length - 1, i));
+      var fang = 14 / r.width * B / ((B - links - rechtsRand - prognoseBreite) / Math.max(1, punkte.length - 1)); // 14 px Fangbereich
+      var naechste = null;
+      markenIdx.forEach(function (m) { if (Math.abs(m - i) <= fang && (naechste === null || Math.abs(m - i) < Math.abs(naechste - i))) { naechste = m; } });
+      return naechste !== null ? naechste : i;
     };
-    var weg = function () { senkrecht.style.display = 'none'; punkt.style.display = 'none'; tip.hidden = true; };
-    svg.addEventListener('pointermove', zeigen);
-    svg.addEventListener('pointerdown', zeigen);
-    svg.addEventListener('pointerleave', weg);
+    var ziehen = false;
+    svg.addEventListener('pointerdown', function (ev) { ziehen = true; setzen(ausPosition(ev)); });
+    svg.addEventListener('pointermove', function (ev) { if (ziehen || ev.pointerType === 'mouse') { setzen(ausPosition(ev)); } });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (n) { svg.addEventListener(n, function () { ziehen = false; }); });
+    svg.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
+
+    leiste.onclick = function (ev) {
+      var k = ev.target.closest('button');
+      if (!k) { return; }
+      var a = k.getAttribute('data-a');
+      if (a === 'zurueck') { setzen(aktuell - 1); }
+      if (a === 'vor') { setzen(aktuell + 1); }
+      if (a === 'handel-zurueck') { var v = markenIdx.filter(function (m) { return m < aktuell; }); if (v.length) { setzen(v[v.length - 1]); } }
+      if (a === 'handel-vor') { var n2 = markenIdx.filter(function (m) { return m > aktuell; }); if (n2.length) { setzen(n2[0]); } }
+      if (a === 'start') { iStart = aktuell; z.start = punkte[aktuell][0]; spanneZeigen(); }
+      if (a === 'ende') { iEnde = aktuell; z.ende = punkte[aktuell][0]; spanneZeigen(); }
+      if (a === 'loeschen') { iStart = iEnde = null; z.start = z.ende = null; spanneZeigen(); }
+      if (a === 'uebernehmen' && iStart !== null && iEnde !== null) {
+        var t0 = punkte[Math.min(iStart, iEnde)][0], t1 = punkte[Math.max(iStart, iEnde)][0];
+        z.start = z.ende = null;
+        opt.uebernehmen(t0, t1);
+      }
+    };
+    setzen(aktuell);
+    spanneZeigen();
   }
 
   // ---------- Kurs-Chart ----------
@@ -701,7 +784,18 @@
         });
       }
       geschaefte.sort(function (a, b) { return a.t - b.t; });
-      linienChart(diagramm, punkte, euro, tag, null, zusatz, geschaefte);
+      linienChart(diagramm, punkte, euro, tag, null, zusatz, geschaefte, null, {
+        // Gewinn zwischen Start und Ende: Wertänderung minus Käufe plus Verkäufe
+        spanne: function (a1, b1) {
+          var g = punkte[b1][1] - punkte[a1][1];
+          auswahl.forEach(function (t) { for (var q = s0 + a1 + 1; q <= s0 + b1; q++) { g -= t.f[q] || 0; } });
+          return (g > 0 ? '+' : '') + euro(g) + ' Gewinn (ohne Dividenden)';
+        },
+        uebernehmen: function (t0, t1) {
+          vZustand.zeitraum = 'frei'; vZustand.von = iso(new Date(t0 * 1000)); vZustand.bis = iso(new Date(t1 * 1000));
+          speichern(); laden();
+        }
+      });
       var gl = $('[data-verlauf-geschaefte]');
       if (gl) {
         if (auswahl.length > 10) {
@@ -791,7 +885,7 @@
       $$('[data-zeitraum]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-zeitraum') === vZustand.zeitraum); });
       $$('[data-quelle]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-quelle') === vZustand.quelle); });
       diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Kurse werden geladen …</p>';
-      kennz.innerHTML = ''; stand.textContent = ''; vDaten = null;
+      kennz.innerHTML = ''; stand.textContent = ''; vDaten = null; diagramm._zustand = {};
       var versuche = 0, nummer = ++ladeNummer;
       var schritt = function () {
         var daten = new FormData();
