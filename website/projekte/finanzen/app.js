@@ -221,6 +221,43 @@
     });
   });
 
+  // ---------- Meine Firmen: an dieselbe Stelle zurückkehren ----------
+  var firmenliste = $('#firmenliste');
+  if (firmenliste) {
+    var filterFeld = $('[data-filter="#firmenliste"]');
+    try {
+      var zurueck = JSON.parse(sessionStorage.getItem('fz-firmenliste') || 'null');
+      if (zurueck && zurueck.url === location.pathname + location.search) {
+        if (filterFeld && zurueck.suche) { filterFeld.value = zurueck.suche; filterFeld.dispatchEvent(new Event('input')); }
+        if ('scrollRestoration' in history) { history.scrollRestoration = 'manual'; }
+        var ziel = zurueck.s ? document.getElementById('fz-' + zurueck.s) : null;
+        requestAnimationFrame(function () {
+          window.scrollTo(0, zurueck.y);
+          // falls sich die Liste inzwischen verschoben hat: die zuletzt geöffnete Firma sichtbar machen
+          if (ziel) { var r = ziel.getBoundingClientRect(); if (r.top < 60 || r.bottom > window.innerHeight) { ziel.scrollIntoView({ block: 'center' }); } }
+        });
+      }
+    } catch (e) { /* ohne sessionStorage einfach oben beginnen */ }
+    firmenliste.addEventListener('click', function (ev) {
+      var a = ev.target.closest('a.zeile');
+      if (!a) { return; }
+      var zeile = a.closest('.filterbar');
+      try {
+        sessionStorage.setItem('fz-firmenliste', JSON.stringify({ url: location.pathname + location.search, y: window.scrollY,
+          suche: filterFeld ? filterFeld.value : '', s: zeile ? zeile.getAttribute('data-symbol') : '' }));
+        sessionStorage.setItem('fz-firmenliste-url', location.href);
+      } catch (e) { /* egal */ }
+    });
+  }
+  // Auf der Firmenseite: „Meine Firmen“ führt zurück in genau diese Liste
+  var zurueckLink = $('[data-zurueck-liste]');
+  if (zurueckLink) {
+    try {
+      var listeUrl = sessionStorage.getItem('fz-firmenliste-url');
+      if (listeUrl) { zurueckLink.href = listeUrl; }
+    } catch (e) { /* egal */ }
+  }
+
   // ---------- Kopieren ----------
   $$('[data-kopieren]').forEach(function (k) {
     k.addEventListener('click', function () {

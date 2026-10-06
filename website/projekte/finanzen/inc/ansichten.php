@@ -502,7 +502,7 @@ function seiteFirmen(array $d, array $kurse, string $filter, string $sortierung,
       $dep = $imDepot[$f['symbol']] ?? null;
       $wo = $woche[$f['symbol']] ?? null;
       $ges = $gesamtProz($f); ?>
-    <div class="filterbar">
+    <div class="filterbar" id="fz-<?= e($f['symbol']) ?>" data-symbol="<?= e($f['symbol']) ?>">
       <?= firmaZeile($f, $kurse[$f['symbol']] ?? null, true) ?>
       <?php if ($seit !== null || $f['bewertung'] > 0 || $dep !== null || $wo !== null || $potenzial($f) !== null || isset($f['szenario']['werte']['crv'])): ?>
         <div class="zeile-extra">
@@ -753,7 +753,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     $f = $d['firmen'][$symbol] ?? null;
     if ($p === null) {
         ob_start(); ?>
-<div class="zurueck"><a href="<?= e(url(['seite' => 'firmen'])) ?>"><?= ico('zurueck') ?> Meine Firmen</a></div>
+<div class="zurueck"><a href="<?= e(url(['seite' => 'firmen'])) ?>" data-zurueck-liste><?= ico('zurueck') ?> Meine Firmen</a></div>
 <section class="karte">
   <h1><?= e($f['name'] ?? $symbol) ?></h1>
   <div class="fehlerbox">Zu „<?= e($symbol) ?>“ sind gerade keine Kursdaten abrufbar. Entweder ist das Kürzel unbekannt oder Yahoo Finance ist kurz nicht erreichbar – bitte später noch einmal versuchen.</div>
@@ -1023,7 +1023,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     $istUs = !str_contains($s, '.') && !str_contains($s, '=');
 
     ob_start(); ?>
-<div class="zurueck"><a href="<?= e(url(['seite' => 'firmen'])) ?>"><?= ico('zurueck') ?> Meine Firmen</a></div>
+<div class="zurueck"><a href="<?= e(url(['seite' => 'firmen'])) ?>" data-zurueck-liste><?= ico('zurueck') ?> Meine Firmen</a></div>
 <section class="karte firmenkopf">
   <div class="fk-oben">
     <span class="fk-logo" data-logo="<?= e($s) ?>"><?= avatar($p['name'], $s) ?></span>
