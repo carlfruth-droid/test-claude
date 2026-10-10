@@ -538,7 +538,7 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .cl-info { min-height: 2.6em; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
 .cl-info b { font-size: 1.05rem; }
 .cl-info span { color: var(--leise); }
-.cl-info small { flex-basis: 100%; }
+.cl-info small { flex: none; }
 .cl-knoepfe { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .cl-knoepfe button, .cl-spanne button { border: 1px solid var(--rand); background: #fff; border-radius: 10px; min-width: 42px; min-height: 38px; padding: 4px 10px; font: inherit; font-size: .9rem; font-weight: 600; color: var(--text); cursor: pointer; touch-action: manipulation; }
 .cl-knoepfe button:active, .cl-spanne button:active { background: var(--akzent-hell); }
@@ -548,3 +548,76 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .cl-spanne button[data-a="uebernehmen"] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
 .wikitext p { margin: 0 0 10px; line-height: 1.55; }
 .wikitext h5 { margin: 14px 0 6px; font-size: .95rem; }
+
+/* ---------- Infoknöpfe ⓘ ---------- */
+.info { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 17px; height: 17px; margin: 0 0 0 6px; padding: 0; border: 1px solid #c3ccda; border-radius: 50%; background: #fff; color: var(--leise); font: italic 700 11px/1 Georgia, "Times New Roman", serif; letter-spacing: 0; text-transform: none; vertical-align: 1px; cursor: pointer; touch-action: manipulation; }
+.info::after { content: ''; position: absolute; inset: -11px; }
+.info:hover, .info:focus-visible { border-color: var(--akzent); color: var(--akzent); outline: none; }
+.info-blase { position: absolute; z-index: 70; background: #1f2937; color: #fff; font-size: .86rem; font-weight: 400; line-height: 1.45; letter-spacing: 0; text-transform: none; text-align: left; white-space: pre-line; padding: 10px 13px; border-radius: 11px; box-shadow: var(--schatten-hoch); }
+.info-blase::before { content: ''; position: absolute; top: -6px; left: var(--pfeil, 50%); margin-left: -6px; border: 6px solid transparent; border-top: 0; border-bottom-color: #1f2937; }
+.info-blase.oben::before { top: auto; bottom: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: #1f2937; }
+.urteil-crv span .info { margin-left: 4px; }
+.szenarien-titel { display: flex; align-items: center; margin: 4px 0 2px; font-size: .95rem; }
+
+/* ---------- Zurück ---------- */
+.zurueck-leiste { margin: -6px 0 8px; }
+.zurueck-leiste a { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 0; color: var(--leise); font-size: .95rem; font-weight: 550; }
+.zurueck-leiste a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zurueck-leiste a:hover { color: var(--akzent); text-decoration: none; }
+
+/* ---------- Chart: Linien, Vergleich, Messen ---------- */
+.chart .band { opacity: .1; stroke: none; }
+.chart .linie.band-rand { stroke-width: 1; opacity: .75; }
+.chart .linie.waagrecht { stroke-width: 1.2; stroke-dasharray: 6 4; }
+.chart .linien-text { font-weight: 600; }
+.chart .linie.vergleich { stroke-width: 1.8; }
+.chart .null-linie { stroke: #94a3b8; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart .griff-marke { fill: #fff; stroke: var(--akzent); stroke-width: 1.5; }
+.chart .griff-text { font-size: 11px; font-weight: 700; fill: var(--akzent); }
+.chart .chart-griff.aktiv .griff-marke { fill: var(--akzent); }
+.chart .chart-griff.aktiv .griff-text { fill: #fff; }
+.chart .chart-griff.aktiv .chart-grenze { stroke-width: 2.2; }
+.chart .griff-punkt { stroke: #fff; stroke-width: 2; }
+.cl-griff-name { font-style: normal; font-weight: 700; font-size: .78rem; color: #fff; background: var(--akzent); border-radius: 99px; padding: 1px 7px; }
+.cl-knoepfe button.aktiv { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+.cl-mess { margin-top: 8px; padding: 10px 12px; background: var(--akzent-hell); border-radius: 12px; }
+.cl-mess-kopf { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: .9rem; margin-bottom: 8px; }
+.cl-griff { width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--akzent); background: #fff; color: var(--akzent); font: inherit; font-size: .85rem; font-weight: 700; cursor: pointer; touch-action: manipulation; padding: 0; }
+.cl-griff.aktiv { background: var(--akzent); color: #fff; }
+.cl-mess-werte { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px 14px; margin: 0; }
+.cl-mess-werte div { min-width: 0; }
+.cl-mess-werte div:first-child { grid-column: 1 / -1; }
+.chips.schnitte .chip { padding: 5px 10px; font-size: .84rem; }
+.cl-mess-werte dt { font-size: .74rem; font-weight: 600; color: var(--leise); }
+.cl-mess-werte dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+.cl-mess-werte dd.plus { color: var(--plus); }
+.cl-mess-werte dd.minus { color: var(--minus); }
+.cl-mess-knoepfe { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cl-mess-knoepfe button { border: 1px solid var(--rand); background: #fff; border-radius: 10px; min-height: 36px; padding: 4px 12px; font: inherit; font-size: .88rem; font-weight: 600; color: var(--text); cursor: pointer; touch-action: manipulation; }
+.cl-mess-knoepfe button[data-a="uebernehmen"] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+.cl-mess-hinweis { margin: 0; font-size: .88rem; color: var(--leise); }
+.chips-titel { display: inline-flex; align-items: center; margin-right: 2px; font-size: .76rem; font-weight: 650; color: var(--leise); text-transform: uppercase; letter-spacing: .06em; }
+.vergleich-feld { margin: 0 0 12px; }
+.vgl-kopf { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.vgl-name { display: inline-flex; align-items: center; gap: 6px; font-size: .92rem; }
+.vgl-name i { width: 12px; height: 3px; border-radius: 2px; background: #2563eb; }
+.vgl-modus { display: inline-flex; border: 1px solid var(--rand-stark); border-radius: 99px; overflow: hidden; }
+.vgl-modus button { border: 0; background: #fff; color: var(--text); font: inherit; font-size: .84rem; padding: 6px 12px; cursor: pointer; touch-action: manipulation; }
+.vgl-modus button.aktiv { background: var(--akzent); color: #fff; }
+.vgl-rechts { margin-left: auto; display: inline-flex; gap: 14px; }
+.vgl-rechts .knopf-text { padding: 4px 0; }
+.vgl-panel { margin-top: 8px; padding: 10px; border: 1px solid var(--rand); border-radius: 12px; background: #fbfcfe; }
+.vgl-panel .chips { margin-bottom: 8px; }
+.vgl-treffer { list-style: none; margin: 6px 0 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.vgl-treffer button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; border: 0; border-bottom: 1px solid #eef1f6; background: none; color: var(--text); padding: 8px 4px; font: inherit; text-align: left; cursor: pointer; }
+.vgl-treffer button:hover { background: var(--akzent-hell); }
+.vgl-treffer small { color: var(--leise); font-size: .8rem; }
+.vgl-status { margin: 6px 0 0; }
+
+/* ---------- Links auf börsennotierte Firmen ---------- */
+a.firmenlink { color: inherit; text-decoration: underline; text-decoration-color: #b8c4d6; text-underline-offset: 2px; }
+a.firmenlink:hover { color: var(--akzent); text-decoration-color: currentColor; }
+.aehnliche li { gap: 4px; }
+.aehnliche li > button { flex: none; font-size: 1.15rem; padding: 6px 2px 6px 12px; }
+.vl-knoepfe { display: flex; flex-direction: column; align-items: center; flex: none; }
+.vl-knoepfe a.knopf-text { font-size: 1rem; }

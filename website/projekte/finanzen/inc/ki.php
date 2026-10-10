@@ -120,8 +120,57 @@ function kiAuftrag(array $firma, array $p): array
         . "## Bewertung – Einordnung der Bewertung im Vergleich zur eigenen Historie und zu Wettbewerbern.\n"
         . "## Worauf achten – anstehende Termine und Kennzahlen, die man beobachten sollte.\n\n"
         . 'Nutze Stichpunkte mit „- “ und hebe wichtige Zahlen mit **…** hervor. Insgesamt höchstens etwa 700 Wörter. '
-        . 'Keine Einleitung vor dem ersten Abschnitt und keine Quellenliste am Ende – die Quellen werden separat angezeigt.';
+        . 'Keine Einleitung vor dem ersten Abschnitt und keine Quellenliste am Ende – die Quellen werden separat angezeigt. '
+        . kiLinkRegel();
     return [$system, $auftrag];
+}
+
+/** Bitte an die KI, börsennotierte Firmen anklickbar zu schreiben (wird in mdInline zum Link auf die Firmenseite). */
+function kiLinkRegel(): string
+{
+    return 'Andere börsennotierte Firmen (z. B. Wettbewerber, Großaktionäre, Beteiligungen) schreibst du bei der ersten Nennung als Link '
+        . 'mit ihrem Kürzel bei Yahoo Finance: [Name](aktie:KÜRZEL), etwa [Rheinmetall](aktie:RHM.DE), [Lockheed Martin](aktie:LMT) '
+        . 'oder [Toyota](aktie:7203.T) – nur, wenn du das Kürzel sicher kennst; sonst einfach den Namen.';
+}
+
+/**
+ * Börsenkürzel aus einer Tabellenzelle im Yahoo-Format: „LMT“, „RHM.DE“,
+ * „NYSE: LMT“, „HO (Euronext Paris)“ → HO.PA. Leer, wenn nicht börsennotiert.
+ */
+function tickerAusText(string $z): string
+{
+    $z = trim((string)preg_replace('/[*_`]|\[|\]|\(aktie:[^)]*\)/u', '', $z));
+    if ($z === '' || preg_match('/nicht|privat|keine?|staat|unlisted|n\/a|^[–—\-]+$/iu', $z)) {
+        return '';
+    }
+    $z = trim((string)(preg_split('/\s*[\/,;]\s*|\s+(?:und|bzw\.?|oder)\s+/u', $z)[0] ?? ''));
+    $boerse = '';
+    if (preg_match('/^([^:]+):\s*(\S+)$/u', $z, $m)) {
+        [$boerse, $z] = [$m[1], $m[2]];
+    } elseif (preg_match('/^(\S+)\s*\(([^)]+)\)$/u', $z, $m)) {
+        [$z, $boerse] = [$m[1], $m[2]];
+    }
+    $z = strtoupper($z);
+    if (!str_contains(rtrim($z, '.'), '.') && $boerse !== '') {
+        $endungen = ['xetra' => 'DE', 'frankfurt' => 'DE', 'etr' => 'DE', 'fra' => 'F', 'paris' => 'PA', 'epa' => 'PA', 'london' => 'L', 'lse' => 'L', 'lon' => 'L',
+            'tokio' => 'T', 'tokyo' => 'T', 'tse' => 'T', 'tyo' => 'T', 'mailand' => 'MI', 'milan' => 'MI', 'milano' => 'MI', 'bit' => 'MI', 'madrid' => 'MC', 'bme' => 'MC',
+            'amsterdam' => 'AS', 'ams' => 'AS', 'brüssel' => 'BR', 'brussels' => 'BR', 'zürich' => 'SW', 'zurich' => 'SW', 'six' => 'SW', 'swx' => 'SW',
+            'stockholm' => 'ST', 'sto' => 'ST', 'oslo' => 'OL', 'osl' => 'OL', 'kopenhagen' => 'CO', 'copenhagen' => 'CO', 'cph' => 'CO', 'helsinki' => 'HE', 'hel' => 'HE',
+            'wien' => 'VI', 'vienna' => 'VI', 'hongkong' => 'HK', 'hong kong' => 'HK', 'hkex' => 'HK', 'hkg' => 'HK', 'seoul' => 'KS', 'krx' => 'KS', 'kospi' => 'KS',
+            'toronto' => 'TO', 'tsx' => 'TO', 'sydney' => 'AX', 'asx' => 'AX', 'shanghai' => 'SS', 'shenzhen' => 'SZ', 'taiwan' => 'TW', 'twse' => 'TW',
+            'mumbai' => 'BO', 'bse' => 'BO', 'nse' => 'NS', 'são paulo' => 'SA', 'sao paulo' => 'SA', 'b3' => 'SA', 'warschau' => 'WA', 'warsaw' => 'WA',
+            'lissabon' => 'LS', 'lisbon' => 'LS', 'dublin' => 'IR', 'tel aviv' => 'TA', 'singapur' => 'SI', 'singapore' => 'SI', 'sgx' => 'SI',
+            'borsa italiana' => 'MI', 'deutsche börse' => 'DE', 'korea' => 'KS', 'taipei' => 'TW', 'wiener' => 'VI', 'johannesburg' => 'JO', 'jse' => 'JO',
+            'mexiko' => 'MX', 'mexico' => 'MX', 'bmv' => 'MX', 'nzx' => 'NZ', 'istanbul' => 'IS', 'tadawul' => 'SR'];
+        foreach ($endungen as $name => $endung) {
+            if (preg_match('/(?<![\p{L}])' . preg_quote($name, '/') . '(?![\p{L}])/iu', $boerse)) {
+                $z = rtrim($z, '.') . '.' . $endung;
+                break;
+            }
+        }
+    }
+    $z = rtrim($z, '.');
+    return preg_match('/^[A-Z0-9][A-Z0-9.\-^=]{0,23}$/', $z) ? $z : '';
 }
 
 /**
@@ -250,7 +299,19 @@ function mdInline(string $s): string
     $s = (string)preg_replace('/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $s);
     $s = (string)preg_replace('/(?<![\w*])_(.+?)_(?![\w*])/u', '<em>$1</em>', $s);
     $s = (string)preg_replace('/(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])/u', '<em>$1</em>', $s);
+    // [Name](aktie:KÜRZEL) → Link auf die Firmenseite (siehe kiLinkRegel)
+    $s = (string)preg_replace_callback('~\[([^\]]+)\]\(aktie:([A-Za-z0-9.\-^=]{1,24})\)~u', static fn(array $m): string => firmenLink($m[1], strtoupper($m[2])), $s);
     return (string)preg_replace('~\[([^\]]+)\]\((https?://[^\s)]+)\)~u', '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>', $s);
+}
+
+/**
+ * Link auf die Firmenseite. $html ist fertiges HTML (das Sichtbare); der Name
+ * (ebenfalls HTML) wird mitgegeben, damit ein unbekanntes Kürzel per Suche aufgelöst werden kann.
+ */
+function firmenLink(string $html, string $symbol, ?string $nameHtml = null): string
+{
+    $name = trim(html_entity_decode(strip_tags($nameHtml ?? $html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    return '<a class="firmenlink" href="' . e(url(['seite' => 'firma', 's' => $symbol, 'n' => mb_substr($name, 0, 80)])) . '">' . $html . '</a>';
 }
 
 function mdHtml(string $md): string
@@ -259,6 +320,7 @@ function mdHtml(string $md): string
     $absatz = [];
     $liste = '';
     $tabelle = [];
+    $kuerzelSpalte = -1;
     $absatzZu = static function () use (&$absatz, &$html): void {
         if ($absatz !== []) {
             $html .= '<p>' . mdInline(implode(' ', $absatz)) . '</p>';
@@ -298,9 +360,27 @@ function mdHtml(string $md): string
                 continue;
             }
             if ($tabelle === []) {
+                // Spalte mit Börsenkürzeln? Dann Kürzel und Firmenname (erste Spalte) verlinken.
+                $kuerzelSpalte = -1;
+                foreach ($zellen as $i => $z) {
+                    if (preg_match('/kürzel|ticker|symbol/iu', $z)) {
+                        $kuerzelSpalte = $i;
+                        break;
+                    }
+                }
                 $html .= '<div class="tabelle-rahmen"><table class="tabelle"><thead><tr>' . implode('', array_map(static fn(string $z): string => '<th>' . mdInline($z) . '</th>', $zellen)) . '</tr></thead><tbody>';
             } else {
-                $html .= '<tr>' . implode('', array_map(static fn(string $z): string => '<td>' . mdInline($z) . '</td>', $zellen)) . '</tr>';
+                $symbol = $kuerzelSpalte >= 0 ? tickerAusText((string)($zellen[$kuerzelSpalte] ?? '')) : '';
+                $html .= '<tr>';
+                foreach ($zellen as $i => $z) {
+                    $inhalt = mdInline($z);
+                    if ($symbol !== '' && ($i === $kuerzelSpalte || $i === 0) && !str_contains($inhalt, '<a ')) {
+                        // der Firmenname aus der ersten Spalte hilft, falls Yahoo das Kürzel anders führt
+                        $inhalt = firmenLink($inhalt, $symbol, mdInline((string)$zellen[0]));
+                    }
+                    $html .= '<td>' . $inhalt . '</td>';
+                }
+                $html .= '</tr>';
             }
             $tabelle[] = $zellen;
             continue;

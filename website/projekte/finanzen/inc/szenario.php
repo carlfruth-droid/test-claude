@@ -147,7 +147,7 @@ function szenarioAuftrag(array $firma, array $p, array $fakten): array
         . "## Fazit: Chance-Risiko-Verhältnis\n"
         . "Berechne das Chance-Risiko-Verhältnis (CRV) basierend auf dem Bullen- und Bären-Szenario. Lohnt sich ein Einstieg mathematisch (ist das Aufwärtspotenzial mindestens doppelt so groß wie das Abwärtsrisiko)?\n\n"
         . 'Format: Verwende genau diese vier Überschriften (##), Stichpunkte mit „- “ und **…** für wichtige Zahlen. Kursziele in ' . $w
-        . ' bezogen auf den aktuellen Kurs von ' . geld($p['kurs'], $w) . '. Höchstens etwa 900 Wörter, keine Einleitung, keine Quellenliste.' . "\n"
+        . ' bezogen auf den aktuellen Kurs von ' . geld($p['kurs'], $w) . '. Höchstens etwa 900 Wörter, keine Einleitung, keine Quellenliste. ' . kiLinkRegel() . "\n"
         . 'Schließe mit einem JSON-Block in ```json … ``` ab, exakt in dieser Form (Zahlen ohne Einheiten, Rendite in Prozent):' . "\n"
         . '{"baer":{"kurs":0,"rendite":0,"unterstuetzung":0},"basis":{"kurs":0,"rendite":0},"bulle":{"kurs":0,"rendite":0},'
         . '"crv":0,"bewertung":"unterbewertet|fair|teuer","einstieg":"ja|nein|grenzwertig","kurz":"ein Satz Fazit"}';
@@ -202,7 +202,8 @@ function wettbewerberAnalyse(array $firma, array $p, string $modell): array
     $auftrag = 'Firma: ' . $p['name'] . ' (' . $p['symbol'] . ($firma['isin'] !== '' ? ', ISIN ' . $firma['isin'] : '') . ($p['branche'] !== '' ? ', Branche ' . $p['branche'] : '') . ")\n\n"
         . "Nenne die 4 bis 8 wichtigsten direkten Wettbewerber – nach Geschäftsbereichen, falls die Firma mehrere hat.\n"
         . "Gib eine Markdown-Tabelle mit den Spalten: Wettbewerber | Land | Börsenkürzel | Umsatz (letztes Geschäftsjahr) | Überschneidung / Marktstellung.\n"
+        . "In der Spalte Börsenkürzel steht das Kürzel bei Yahoo Finance (z. B. RHM.DE, LMT, HO.PA, 7011.T) oder „–“, wenn die Firma nicht börsennotiert ist.\n"
         . "Danach unter ## Marktstellung 3 bis 5 Stichpunkte: Marktanteile, wo die Firma führt, wo sie hinterherläuft, und welche neuen Konkurrenten oder Ersatzprodukte drohen.\n"
-        . 'Höchstens etwa 350 Wörter, keine Einleitung, keine Quellenliste.';
+        . 'Höchstens etwa 350 Wörter, keine Einleitung, keine Quellenliste. ' . kiLinkRegel();
     return kiLauf($system, $auftrag, $modell, 4);
 }
