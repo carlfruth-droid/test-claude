@@ -608,6 +608,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
 // ---------------------------------------------------------------------------
 if (isset($_GET['api'])) {
     header('Content-Type: application/json; charset=utf-8');
+    if ($_GET['api'] === 'suche' && ($_GET['typ'] ?? '') === 'alle') {
+        // für den Chart-Vergleich: auch Indizes, ETFs und Fonds
+        $q = trim((string)($_GET['q'] ?? ''));
+        $treffer = mb_strlen($q) >= 2 ? array_slice(yahooSuche($q, ['EQUITY', 'ETF', 'INDEX', 'MUTUALFUND', 'CRYPTOCURRENCY']), 0, 10) : [];
+        $arten = ['EQUITY' => 'Aktie', 'ETF' => 'ETF', 'INDEX' => 'Index', 'MUTUALFUND' => 'Fonds', 'CRYPTOCURRENCY' => 'Krypto'];
+        echo json_encode(array_map(static fn(array $t): array => ['name' => $t['name'], 'symbol' => $t['symbol'], 'boerse' => $t['boerse'],
+            'art' => $arten[$t['typ']] ?? ''], $treffer), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($_GET['api'] === 'kursverlauf') {
+        $s = symbolAusAnfrage();
+        $v = $s !== '' ? kursverlaufLaden($s) : null;
+        echo json_encode($v ?? ['fehler' => 'Zu „' . $s . '“ gibt es keinen Kursverlauf.'], JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        exit;
+    }
     if ($_GET['api'] === 'suche') {
         $treffer = array_slice(firmenSuchen((string)($_GET['q'] ?? '')), 0, 8);
         echo json_encode(array_map(static fn(array $t): array => ['name' => $t['name'], 'symbol' => $t['symbol'], 'boerse' => $t['boerse'],
@@ -625,8 +640,10 @@ if (isset($_GET['api'])) {
             exit;
         }
         $bis = min($bis, date('Y-m-d'));
-        $vorlauf = max(0, min(100, (int)($_POST['vorlauf'] ?? 0)));
-        echo json_encode(depotVerlauf(datenLaden(), $von, $bis, 8.0, $vorlauf), JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        $vorlauf = max(0, min(300, (int)($_POST['vorlauf'] ?? 0))); // Vorlauf für gleitende Durchschnitte (bis Ø 200 Tage)
+        $vergleich = strtoupper(trim((string)($_POST['vergleich'] ?? '')));
+        $vergleich = preg_match('/^[A-Z0-9.\-^=]{1,24}$/', $vergleich) ? $vergleich : '';
+        echo json_encode(depotVerlauf(datenLaden(), $von, $bis, 8.0, $vorlauf, $vergleich), JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
         exit;
     }
     if ($_GET['api'] === 'zuordnen' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {
@@ -737,12 +754,33 @@ if (in_array($seite, ['', 'alarme', 'firmen'], true)
 }
 
 switch ($seite) {
+    case 'isin':
+        // Link auf eine börsennotierte Firma, von der nur die ISIN bekannt ist (z. B. Großaktionäre laut Wikidata)
+        $isin = strtoupper(trim((string)($_GET['isin'] ?? '')));
+        $name = trim((string)($_GET['n'] ?? ''));
+        $z = istIsin($isin) ? symbolZuIsin($isin, $name) : ['symbol' => ''];
+        if ($z['symbol'] !== '') {
+            weiter(firmaUrl($z['symbol'], $isin));
+        }
+        // ältere ISIN (z. B. nach Umfirmierung): über den Namen, wenn der Treffer eindeutig passt
+        $ziel = $name !== '' ? symbolAusName($name) : '';
+        weiter($ziel !== '' ? firmaUrl($ziel) : url(['seite' => 'suche', 'q' => $name !== '' ? $name : $isin]));
+        break;
+
     case 'firma':
         $s = symbolAusAnfrage();
         if ($s === '') {
             weiter(url(['seite' => 'suche']));
         }
         $p = firmaProfil($s);
+        $linkName = trim((string)($_GET['n'] ?? ''));
+        if ($p === null && $linkName !== '' && !isset($d['firmen'][$s])) {
+            // Link aus einem Text (z. B. KI-Analyse) mit unbekanntem Kürzel: über den Namen suchen
+            $ziel = symbolAusName($linkName, $s);
+            if ($ziel !== '' && $ziel !== $s) {
+                weiter(firmaUrl($ziel));
+            }
+        }
         if ($p !== null && !isset($d['firmen'][$s])) {
             // Jede geprüfte Firma automatisch merken – mit Kurs und Kennzahlen von heute
             $isin = strtoupper(trim((string)($_GET['isin'] ?? '')));

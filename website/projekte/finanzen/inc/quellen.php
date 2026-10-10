@@ -61,6 +61,34 @@ function firmenSuchen(string $q): array
     return $treffer;
 }
 
+/**
+ * Yahoo-Kürzel zu einem Firmennamen (für Links aus Texten, deren Kürzel Yahoo
+ * anders führt, oder veraltete ISINs). Nur eindeutige Treffer: dasselbe
+ * Grundkürzel (LMT ↔ LMT) oder genau derselbe Name – sonst leer.
+ */
+function symbolAusName(string $name, string $kuerzel = ''): string
+{
+    $treffer = yahooSuche(nameKurz($name));
+    if ($treffer === []) {
+        $treffer = yahooSuche($name);
+    }
+    $basis = strtoupper((string)preg_replace('/\..*$/', '', $kuerzel));
+    foreach ($treffer as $t) {
+        if ($basis !== '' && strtoupper((string)preg_replace('/\..*$/', '', $t['symbol'])) === $basis) {
+            return $t['symbol'];
+        }
+    }
+    foreach ($treffer as $t) {
+        // Reihenfolge von Yahoo (Heimatbörse meist zuerst); Freiverkehr und Auslandssegmente
+        // wie „0R3E.L“ oder „1BLK.MI“ haben oft lückenhafte Daten – dann lieber die Suche zeigen
+        $nebenplatz = preg_match('/otc|pink/i', $t['boerse']) || preg_match('/^(\d[A-Z0-9]{3}\.(IL|L)|1[A-Z0-9]+\.MI)$/', $t['symbol']);
+        if (!$nebenplatz && nameNormal($t['name']) !== '' && nameNormal($t['name']) === nameNormal($name)) {
+            return $t['symbol'];
+        }
+    }
+    return '';
+}
+
 // ---------------------------------------------------------------------------
 // GLEIF: offizielles Register der Unternehmenskennungen (LEI) mit Konzernstruktur
 // ---------------------------------------------------------------------------
@@ -226,9 +254,9 @@ function wikidataDetails(string $qid): ?array
     if (!preg_match('/^Q\d+$/', $qid)) {
         return null;
     }
-    $wert = gecacht('wd-details:' . $qid, 7 * 86400, function () use ($qid): ?array {
+    $wert = gecacht('wd-details2:' . $qid, 7 * 86400, function () use ($qid): ?array {
         $ohneEnde = 'FILTER NOT EXISTS { ?s pq:P582 [] }';
-        $abfrage = 'SELECT ?art ?wert ?wertLabel ?anteil WHERE { VALUES ?f { wd:' . $qid . ' } '
+        $abfrage = 'SELECT ?art ?wert ?wertLabel ?anteil ?isin WHERE { VALUES ?f { wd:' . $qid . ' } { '
             . '{ ?f p:P355 ?s . ?s ps:P355 ?wert . ' . $ohneEnde . ' FILTER NOT EXISTS { ?wert wdt:P576 [] } BIND("tochter" AS ?art) } '
             . 'UNION { ?f p:P1830 ?s . ?s ps:P1830 ?wert . ' . $ohneEnde . ' OPTIONAL { ?s pq:P1107 ?anteil } BIND("beteiligung" AS ?art) } '
             . 'UNION { ?f p:P127 ?s . ?s ps:P127 ?wert . ' . $ohneEnde . ' OPTIONAL { ?s pq:P1107 ?anteil } BIND("eigentuemer" AS ?art) } '
@@ -238,8 +266,9 @@ function wikidataDetails(string $qid): ?array
             . 'UNION { ?f wdt:P571 ?wert . BIND("gegruendet" AS ?art) } '
             . 'UNION { ?f wdt:P159 ?wert . BIND("sitz" AS ?art) } '
             . 'UNION { ?f wdt:P154 ?wert . BIND("logo" AS ?art) } '
-            . 'UNION { ?f wdt:P856 ?wert . BIND("website" AS ?art) } '
-            . 'SERVICE wikibase:label { bd:serviceParam wikibase:language "de,en". } } LIMIT 500';
+            . 'UNION { ?f wdt:P856 ?wert . BIND("website" AS ?art) } } '
+            . 'OPTIONAL { ?wert wdt:P946 ?isin } ' // börsennotiert? Dann wird der Name in der Ansicht anklickbar
+            . 'SERVICE wikibase:label { bd:serviceParam wikibase:language "de,en". } } LIMIT 800';
         $b = wikidataSparql($abfrage);
         if ($b === null) {
             return null;
@@ -261,7 +290,10 @@ function wikidataDetails(string $qid): ?array
                     continue; // Eintrag ohne Namen
                 }
                 $anteil = isset($z['anteil']['value']) && is_numeric($z['anteil']['value']) ? (float)$z['anteil']['value'] : null;
-                $erg[$art][$label] = ['name' => $label, 'anteil' => $anteil];
+                $isin = strtoupper((string)($z['isin']['value'] ?? ''));
+                $vorher = $erg[$art][$label] ?? null;
+                $erg[$art][$label] = ['name' => $label, 'anteil' => $anteil ?? ($vorher['anteil'] ?? null),
+                    'isin' => ($vorher['isin'] ?? '') !== '' ? $vorher['isin'] : (istIsin($isin) ? $isin : '')];
             }
         }
         foreach ($erg as $k => $v) {

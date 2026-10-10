@@ -63,6 +63,20 @@ function firmaUrl(string $symbol, string $isin = ''): string
     return url(['seite' => 'firma', 's' => $symbol, 'isin' => $isin]);
 }
 
+/** Kleiner Infoknopf ⓘ – der Text erscheint beim Antippen in einer Sprechblase. */
+function info(string $text): string
+{
+    return '<button type="button" class="info" data-info="' . e($text) . '" aria-label="Erklärung anzeigen">i</button>';
+}
+
+/** Firmenname; mit ISIN (also börsennotiert) als Link auf die Firmenseite. */
+function firmenName(string $name, string $isin = ''): string
+{
+    return istIsin($isin)
+        ? '<a class="firmenlink" href="' . e(url(['seite' => 'isin', 'isin' => strtoupper($isin), 'n' => $name])) . '">' . e($name) . '</a>'
+        : e($name);
+}
+
 function assetVersion(string $datei): string
 {
     $t = @filemtime(FZ_APP . '/' . $datei);
@@ -196,6 +210,10 @@ function seite(string $titel, string $inhalt, string $aktiv = '', ?array $d = nu
 <?php foreach ($meldungen as [$art, $text]): ?>
   <div class="meldung <?= e($art) ?>" role="status"><?= ico($art === 'fehler' ? 'warnung' : 'haken') ?><span><?= e($text) ?></span><button type="button" class="meldung-zu" aria-label="Schließen"><?= ico('x') ?></button></div>
 <?php endforeach; ?>
+<?php if ($d !== null && $aktiv !== ''):
+    $ersatz = ['firma' => ['./?seite=firmen', 'Meine Firmen'], 'verlauf' => ['./?seite=depot', 'Depot']][$aktiv] ?? ['', '']; ?>
+<nav class="zurueck-leiste" data-zurueck data-zurueck-ersatz="<?= e($ersatz[0]) ?>" data-zurueck-ersatz-titel="<?= e($ersatz[1]) ?>" aria-label="Zurück" hidden><a href="./"><?= ico('zurueck') ?> <span>Zurück</span></a></nav>
+<?php endif; ?>
 <?= $inhalt ?>
 </main>
 <?php if ($d !== null): ?>
@@ -653,8 +671,10 @@ function kennzahlWert(array $p, string $schluessel, string $format): string
 function kacheln(array $kacheln): string
 {
     $html = '<div class="raster">';
-    foreach ($kacheln as [$titel, $wert, $unter, $ampel]) {
-        $html .= '<div class="kachel"><span class="k-titel">' . e($titel) . '</span><span class="k-wert">'
+    foreach ($kacheln as $kachel) {
+        [$titel, $wert, $unter, $ampel] = $kachel;
+        $erklaerung = (string)($kachel[4] ?? '');
+        $html .= '<div class="kachel"><span class="k-titel">' . e($titel) . ($erklaerung !== '' ? info($erklaerung) : '') . '</span><span class="k-wert">'
             . ($ampel !== '' ? '<i class="ampel ' . e($ampel) . '"></i>' : '') . $wert . '</span>'
             . ($unter !== '' ? '<span class="k-unter">' . $unter . '</span>' : '') . '</div>';
     }
@@ -753,10 +773,11 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     $f = $d['firmen'][$symbol] ?? null;
     if ($p === null) {
         ob_start(); ?>
-<div class="zurueck"><a href="<?= e(url(['seite' => 'firmen'])) ?>" data-zurueck-liste><?= ico('zurueck') ?> Meine Firmen</a></div>
 <section class="karte">
   <h1><?= e($f['name'] ?? $symbol) ?></h1>
   <div class="fehlerbox">Zu „<?= e($symbol) ?>“ sind gerade keine Kursdaten abrufbar. Entweder ist das Kürzel unbekannt oder Yahoo Finance ist kurz nicht erreichbar – bitte später noch einmal versuchen.</div>
+  <?php $suchName = trim((string)($_GET['n'] ?? '')); ?>
+  <p><a class="knopf klein zweit" href="<?= e(url(['seite' => 'suche', 'q' => $suchName !== '' ? $suchName : $symbol])) ?>"><?= ico('suche') ?> Nach „<?= e($suchName !== '' ? $suchName : $symbol) ?>“ suchen</a></p>
   <?php if ($f !== null): ?><p>Deine Notizen und Limits zu dieser Firma bleiben natürlich gespeichert.</p><?php endif; ?>
 </section>
 <?php
@@ -1015,7 +1036,8 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
                 . ($g['quelle'] === 'etoro' ? ' (eToro)' : ' (TR)')];
         }
     }
-    $chartDaten = json_encode(['j1' => $p['verlauf_1j'], 'j5' => $p['verlauf_5j'], 'w' => $w, 'k' => $marken,
+    $chartDaten = json_encode(['j1' => $p['verlauf_2j'], 'j5' => $p['verlauf_5j'], 'w' => $w, 'k' => $marken,
+        'symbol' => $s, 'name' => $p['name'],
         'ziel' => $p['kursziel'] !== null ? ['mittel' => $p['kursziel'], 'hoch' => $p['kursziel_hoch'], 'tief' => $p['kursziel_tief'], 'anzahl' => (int)$p['analysten']] : null,
         'szenario' => $szWerte !== null ? ['mittel' => $szWerte['basis']['kurs'], 'hoch' => $szWerte['bulle']['kurs'], 'tief' => $szWerte['baer']['kurs'], 'art' => 'szenario', 'name' => 'Basis'] : null],
         JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES);
@@ -1023,7 +1045,6 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
     $istUs = !str_contains($s, '.') && !str_contains($s, '=');
 
     ob_start(); ?>
-<div class="zurueck"><a href="<?= e(url(['seite' => 'firmen'])) ?>" data-zurueck-liste><?= ico('zurueck') ?> Meine Firmen</a></div>
 <section class="karte firmenkopf">
   <div class="fk-oben">
     <span class="fk-logo" data-logo="<?= e($s) ?>"><?= avatar($p['name'], $s) ?></span>
@@ -1055,11 +1076,12 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
 
 <section class="karte chart-karte">
   <div class="chart-tabs" role="tablist">
-    <?php foreach (['1m' => '1 M', '6m' => '6 M', '1j' => '1 J', '5j' => '5 J'] as $k => $t): ?><button type="button" data-spanne="<?= $k ?>"<?= $k === '1j' ? ' class="aktiv"' : '' ?>><?= $t ?></button><?php endforeach; ?>
+    <?php foreach (['1m' => '1 M', '6m' => '6 M', '1j' => '1 J', '2j' => '2 J', '5j' => '5 J'] as $k => $t): ?><button type="button" data-spanne="<?= $k ?>"<?= $k === '1j' ? ' class="aktiv"' : '' ?>><?= $t ?></button><?php endforeach; ?>
     <span class="chart-aend"></span>
   </div>
   <div class="chart" data-chart></div>
-  <div class="chips schnitte"><button type="button" class="chip" data-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button><?php if ($p['kursziel'] !== null): ?><button type="button" class="chip" data-schnitt="ziel"><i style="background:#0e7490"></i>Analysten-Prognose</button><?php endif; ?><?php if ($szWerte !== null): ?><button type="button" class="chip" data-schnitt="szenario"><i style="background:#9333ea"></i>Meine Szenarien</button><?php endif; ?><?php if ($marken !== []): ?><button type="button" class="chip" data-schnitt="marken"><i style="background:#13814a"></i>Käufe/Verkäufe</button><?php endif; ?></div>
+  <div class="chips schnitte" data-linien="kurs"></div>
+  <div class="vergleich-feld" data-vergleich="kurs"></div>
   <script type="application/json" id="chart-daten"><?= $chartDaten ?></script>
 </section>
 <?php if ($positionHtml !== ''): ?>
@@ -1143,9 +1165,9 @@ function lesbarerName(string $name): string
 function teilAktionaere(array $f, array $p, array $id): string
 {
     $html = kacheln([
-        ['Insider', e(proz($p['insider_anteil'])), 'Vorstand, Gründer, Großaktionäre', ''],
-        ['Institutionen', e(proz($p['institutionen_anteil'])), $p['institutionen_anzahl'] > 0 ? e(number_format($p['institutionen_anzahl'], 0, ',', '.')) . ' Institutionen' : '', ''],
-        ['Streubesitz (grob)', e(proz($p['insider_anteil'] !== null ? max(0, 1 - $p['insider_anteil']) : null)), 'ohne Insider', ''],
+        ['Insider', e(proz($p['insider_anteil'])), 'Vorstand, Gründer, Großaktionäre', '', "Anteil der Aktien, den Vorstand, Aufsichtsrat und andere Insider (z. B. Gründer) halten."],
+        ['Institutionen', e(proz($p['institutionen_anteil'])), $p['institutionen_anzahl'] > 0 ? e(number_format($p['institutionen_anzahl'], 0, ',', '.')) . ' Institutionen' : '', '', "Anteil der Aktien bei Fonds, Versicherungen, Pensionskassen und anderen Großanlegern."],
+        ['Streubesitz (grob)', e(proz($p['insider_anteil'] !== null ? max(0, 1 - $p['insider_anteil']) : null)), 'ohne Insider', '', "Grobe Schätzung: alles, was nicht bei Insidern liegt. Ein hoher Streubesitz heißt meist gute Handelbarkeit."],
     ]);
     $html .= '<h4>Großaktionäre mit Namen</h4>';
     $ki = kiAbschnitt($f['ki'], 'großaktionäre');
@@ -1154,7 +1176,7 @@ function teilAktionaere(array $f, array $p, array $id): string
     if ($eigentuemer !== []) {
         $html .= '<ul class="liste-schlicht">';
         foreach (array_slice($eigentuemer, 0, 12) as $x) {
-            $html .= '<li><span>' . e($x['name']) . '</span><b>' . e($x['anteil'] !== null ? proz($x['anteil'], 1) : '') . '</b></li>';
+            $html .= '<li><span>' . firmenName($x['name'], (string)($x['isin'] ?? '')) . '</span><b>' . e($x['anteil'] !== null ? proz($x['anteil'], 1) : '') . '</b></li>';
         }
         $html .= '</ul><p class="klein leise">Laut Wikidata – Stand kann älter sein.</p>';
     }
@@ -1222,7 +1244,17 @@ function teilBeteiligungen(array $f, array $id): string
     $wd = $id['wikidata'] !== '' ? wikidataDetails($id['wikidata']) : null;
     $mutter = $gleif['oberste'] ?? ($gleif['mutter'] ?? null);
     if ($mutter !== null && $mutter['lei'] !== $id['lei']) {
-        $html .= '<div class="hinweis">' . ico('netz') . ' Gehört zum Konzern <strong>' . e($mutter['name']) . '</strong>' . ($mutter['land'] !== '' ? ' (' . e($mutter['land']) . ')' : '') . '.</div>';
+        // börsennotierte Mutter (ISIN aus Wikidata) anklickbar machen
+        $isinMutter = '';
+        foreach (array_merge($wd['mutter'] ?? [], $wd['eigentuemer'] ?? []) as $x) {
+            if (($x['isin'] ?? '') !== '' && namenAehnlich($x['name'], $mutter['name'])) {
+                $isinMutter = $x['isin'];
+                break;
+            }
+        }
+        $html .= '<div class="hinweis">' . ico('netz') . ' Gehört zum Konzern <strong>' . firmenName($mutter['name'], $isinMutter) . '</strong>' . ($mutter['land'] !== '' ? ' (' . e($mutter['land']) . ')' : '') . '.</div>';
+    } elseif (($wd['mutter'] ?? []) !== []) {
+        $html .= '<div class="hinweis">' . ico('netz') . ' Gehört zu <strong>' . implode(', ', array_map(static fn(array $x): string => firmenName($x['name'], (string)($x['isin'] ?? '')), array_slice($wd['mutter'], 0, 3))) . '</strong> (laut Wikidata).</div>';
     }
     $ki = kiAbschnitt($f['ki'], 'beteiligungen');
     if ($ki !== '') {
@@ -1236,7 +1268,7 @@ function teilBeteiligungen(array $f, array $id): string
         ksort($bekannt, SORT_NATURAL | SORT_FLAG_CASE);
         $html .= '<h4>Bekannte Töchter und Beteiligungen <small class="leise">(' . count($bekannt) . ', Wikidata)</small></h4><ul class="spalten-liste">';
         foreach (array_slice($bekannt, 0, 80) as $x) {
-            $html .= '<li>' . e($x['name']) . ($x['anteil'] !== null ? ' <b>' . e(proz($x['anteil'], 0)) . '</b>' : '') . '</li>';
+            $html .= '<li>' . firmenName($x['name'], (string)($x['isin'] ?? '')) . ($x['anteil'] !== null ? ' <b>' . e(proz($x['anteil'], 0)) . '</b>' : '') . '</li>';
         }
         $html .= '</ul>';
     }
@@ -1345,7 +1377,7 @@ function positionsTabelle(array $positionen, array $d): string
     }
     $html = '<ul class="positionen" data-sortieren>';
     foreach ($positionen as $pos) {
-        $verlinkt = $pos['symbol'] !== '' && isset($d['firmen'][$pos['symbol']]);
+        $verlinkt = $pos['symbol'] !== '';
         $name = e($pos['name']);
         $art = ['etf' => 'ETF', 'fonds' => 'Fonds', 'krypto' => 'Krypto', 'devisen' => 'Devisen', 'rohstoff' => 'Rohstoff', 'index' => 'Index', 'cfd' => 'CFD'][$pos['art']] ?? '';
         if (!empty($pos['cfd']) && $pos['art'] !== 'cfd') {
@@ -1452,7 +1484,7 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
               continue;
           }
           $k = $pos['symbol'] !== '' ? $pos['symbol'] : $pos['name'];
-          $jeTitel[$k] ??= ['name' => $pos['name'], 'wert' => 0.0];
+          $jeTitel[$k] ??= ['name' => $pos['name'], 'symbol' => (string)$pos['symbol'], 'isin' => (string)($pos['isin'] ?? ''), 'wert' => 0.0];
           $jeTitel[$k]['wert'] += (float)$pos['wert'];
       }
       $mitWert = array_values($jeTitel);
@@ -1464,7 +1496,7 @@ function seiteDepot(array $d, array $depot, bool $etoroVerbunden, ?array $vorsch
         <?php $rest = array_sum(array_map(static fn(array $p): float => (float)$p['wert'], array_slice($mitWert, 10))); if ($rest > 0): ?><span class="rest" style="flex:<?= round($rest / $summe * 1000) ?>" title="Rest"></span><?php endif; ?>
       </div>
       <ul class="verteilung-legende">
-        <?php foreach (array_slice($mitWert, 0, 10) as $i => $pos): ?><li><i style="--h:<?= (int)($i * 37 + 200) % 360 ?>"></i><?= e($pos['name']) ?> <b><?= e(proz($pos['wert'] / $summe, 1)) ?></b></li><?php endforeach; ?>
+        <?php foreach (array_slice($mitWert, 0, 10) as $i => $pos): ?><li><i style="--h:<?= (int)($i * 37 + 200) % 360 ?>"></i><?= $pos['symbol'] !== '' ? '<a class="firmenlink" href="' . e(firmaUrl($pos['symbol'], $pos['isin'])) . '">' . e($pos['name']) . '</a>' : e($pos['name']) ?> <b><?= e(proz($pos['wert'] / $summe, 1)) ?></b></li><?php endforeach; ?>
       </ul>
     <?php endif; ?>
   <?php endif; ?>
@@ -1781,13 +1813,14 @@ function seiteVerlauf(array $d): string
   </div>
 </section>
 <section class="karte" data-verlauf data-beginn="<?= e(verlaufBeginn($d)) ?>">
-  <span class="karten-titel"><?= ico('kurve') ?> Wert der Auswahl</span>
+  <span class="karten-titel"><?= ico('kurve') ?> <span data-verlauf-titel>Wert der Auswahl</span></span>
   <div class="chart verlauf-chart" data-verlauf-chart></div>
-  <div class="chips schnitte"><button type="button" class="chip" data-verlauf-schnitt="s30"><i style="background:#d97706"></i>Ø 30 Tage</button><button type="button" class="chip" data-verlauf-schnitt="s100"><i style="background:#7c3aed"></i>Ø 100 Tage</button><button type="button" class="chip" data-verlauf-schnitt="einsatz"><i style="background:#64748b"></i>Eingesetzt</button></div>
+  <div class="chips schnitte" data-linien="verlauf"></div>
+  <div class="vergleich-feld" data-vergleich="verlauf"></div>
   <div class="raster" data-verlauf-kennzahlen></div>
   <p class="klein leise" data-verlauf-stand></p>
   <div data-verlauf-geschaefte></div>
-  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
+  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Die zeitgewichtete Rendite rechnet Käufe und Verkäufe heraus – damit ist der Vergleich mit einem Index fair. „⟷ Messen“: zwei Punkte antippen und Unterschied, Rendite und Dauer ablesen. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
 </section>
 <section class="karte">
   <span class="karten-titel"><?= ico('liste') ?> Titel auswählen</span>
@@ -1824,12 +1857,12 @@ function positionHtml(array $pos, string $symbol): string
     $quelle = static fn(array $x): string => $x['quelle'] === 'etoro' ? 'eToro' . (!empty($x['short']) ? ' · Short' : '') . (($x['hebel'] ?? 1) > 1 ? ' · Hebel ' . zahl($x['hebel'], 0) : '') : 'Trade Republic';
     ob_start(); ?>
 <?= kacheln([
-    ['Wert heute', e(geld($pos['wert'])), e(zahl($pos['bestand'], $pos['bestand'] < 10 ? 4 : 2)) . ' Stück', ''],
-    ['Offener Gewinn', $farbe($pos['offen_gewinn']) . e($vz($pos['offen_gewinn'])) . '</span>', $farbe($pos['offen_rendite']) . e(proz($pos['offen_rendite'], 1, true)) . '</span> auf ' . e(geld($pos['einstand'])), ''],
-    ['Realisiert (Verkäufe)', $farbe($pos['realisiert']) . e($vz($pos['realisiert'])) . '</span>', (int)$pos['anzahl_verkaeufe'] . ' Verkäufe', ''],
-    ['Dividenden', e(geld($pos['dividenden'])), '', ''],
-    ['Gesamtergebnis', $farbe($pos['gesamt']) . e($vz($pos['gesamt'])) . '</span>', $farbe($pos['gesamt_rendite']) . e(proz($pos['gesamt_rendite'], 1, true)) . '</span> auf ' . e(geld($pos['gekauft'])) . ' gekauft', ''],
-    ['Rendite pro Jahr', $farbe($pos['xirr']) . e(proz($pos['xirr'], 1, true)) . '</span>', 'berücksichtigt, wann Geld floss', ''],
+    ['Wert heute', e(geld($pos['wert'])), e(zahl($pos['bestand'], $pos['bestand'] < 10 ? 4 : 2)) . ' Stück', '', "Aktueller Wert aller Stücke, die du in deinen Depots noch hältst."],
+    ['Offener Gewinn', $farbe($pos['offen_gewinn']) . e($vz($pos['offen_gewinn'])) . '</span>', $farbe($pos['offen_rendite']) . e(proz($pos['offen_rendite'], 1, true)) . '</span> auf ' . e(geld($pos['einstand'])), '', "Gewinn oder Verlust der noch gehaltenen Stücke gegenüber ihrem Kaufpreis inklusive Gebühren. Die Prozentzahl bezieht sich auf diesen Kaufpreis."],
+    ['Realisiert (Verkäufe)', $farbe($pos['realisiert']) . e($vz($pos['realisiert'])) . '</span>', (int)$pos['anzahl_verkaeufe'] . ' Verkäufe', '', "Gewinn oder Verlust aus Verkäufen: Verkaufserlös minus Kaufpreis der verkauften Stücke. Gerechnet wird nach FIFO – die zuerst gekauften Stücke gelten als zuerst verkauft, wie beim Finanzamt."],
+    ['Dividenden', e(geld($pos['dividenden'])), '', '', "Alle erhaltenen Ausschüttungen, soweit im Export gemeldet nach Quellensteuer."],
+    ['Gesamtergebnis', $farbe($pos['gesamt']) . e($vz($pos['gesamt'])) . '</span>', $farbe($pos['gesamt_rendite']) . e(proz($pos['gesamt_rendite'], 1, true)) . '</span> auf ' . e(geld($pos['gekauft'])) . ' gekauft', '', "Offener Gewinn plus realisierte Gewinne plus Dividenden. Die Prozentzahl bezieht sich auf alles, was du je für diese Aktie ausgegeben hast."],
+    ['Rendite pro Jahr', $farbe($pos['xirr']) . e(proz($pos['xirr'], 1, true)) . '</span>', 'berücksichtigt, wann Geld floss', '', "Interner Zinsfuß (XIRR): die jährliche Verzinsung, die alle Käufe, Verkäufe, Dividenden und den heutigen Wert mit ihren Zeitpunkten berücksichtigt – vergleichbar mit einem Sparzins. Früh gekaufte Stücke zählen dadurch stärker als kürzlich gekaufte."],
     ['Erster Kauf', e($pos['erster'] ? datum((int)$pos['erster']) : '–'), $pos['erster'] ? 'vor ' . e($dauer((int)floor((time() - $pos['erster']) / 86400), true)) : '', ''],
     ['Käufe', (string)(int)$pos['anzahl_kaeufe'], '', ''],
 ]) ?>
@@ -1888,16 +1921,18 @@ function empfehlungHtmlKarte(array $f, array $p, bool $kiVerfuegbar, string $mod
     $seit = $sz['kurs'] && $p['kurs'] && ($sz['waehrung'] ?? $w) === $w ? $p['kurs'] / $sz['kurs'] - 1 : null;
   ?>
   <div class="urteil">
-    <div class="urteil-crv <?= e($crvKlasse) ?>"><span>CRV</span><b><?= e($crv !== null ? zahl($crv, 1) : '–') ?></b><small><?= $crv !== null ? ($crv >= 2 ? 'Einstieg lohnt sich mathematisch' : 'unter 2 – lohnt sich mathematisch nicht') : '' ?></small></div>
+    <div class="urteil-crv <?= e($crvKlasse) ?>"><span>CRV <?= info("CRV heißt Chance-Risiko-Verhältnis: die mögliche Rendite im Bullen-Szenario geteilt durch den möglichen Verlust im Bären-Szenario. Beispiel: +60 % Chance und −20 % Risiko ergeben ein CRV von 3 – die Chance ist dreimal so groß wie das Risiko. Faustregel: Ab 2 lohnt sich ein Einstieg mathematisch, unter 1 überwiegt das Risiko. Wie wahrscheinlich die Szenarien sind, steckt nicht im CRV – es hängt ganz an den Annahmen der Analyse.") ?></span><b><?= e($crv !== null ? zahl($crv, 1) : '–') ?></b><small><?= $crv !== null ? ($crv >= 2 ? 'Einstieg lohnt sich mathematisch' : 'unter 2 – lohnt sich mathematisch nicht') : '' ?></small></div>
     <div class="urteil-text">
       <?php if ($werte['bewertung'] !== ''): ?><span class="abzeichen <?= e(['unterbewertet' => 'gruen', 'fair' => 'gelb', 'teuer' => 'rot'][$werte['bewertung']]) ?>"><?= e(ucfirst($werte['bewertung'])) ?> bewertet</span><?php endif; ?>
       <?php if ($werte['einstieg'] !== ''): ?><span class="abzeichen <?= e(['ja' => 'gruen', 'grenzwertig' => 'gelb', 'nein' => 'rot'][$werte['einstieg']]) ?>">Einstieg: <?= e($werte['einstieg']) ?></span><?php endif; ?>
+      <?= info("„… bewertet“ ist die Einordnung aus Schritt 2: aktuelles und erwartetes KGV im Vergleich zum eigenen Durchschnitt der letzten Jahre. „Einstieg“ ist das Fazit der KI aus dem Chance-Risiko-Verhältnis (Faustregel: CRV mindestens 2).") ?>
       <?php if ($werte['kurz'] !== ''): ?><p><?= e($werte['kurz']) ?></p><?php endif; ?>
     </div>
   </div>
   <?php
     $max = max(1.0, ...array_map(static fn(string $k): float => abs((float)($werte[$k]['rendite'] ?? 0)), ['baer', 'basis', 'bulle']));
   ?>
+  <p class="szenarien-titel"><strong>Drei Szenarien für 12–24 Monate</strong> <?= info("Mögliche Kursentwicklung in 12 bis 24 Monaten in drei Fällen: Bär = Enttäuschung oder Rezession, Basis = die Firma erfüllt genau die heutigen Erwartungen, Bulle = die Erwartungen werden deutlich übertroffen. Die Unterstützung ist eine Kursmarke, an der der Kurs im Bären-Fall Halt finden könnte.") ?></p>
   <ul class="szenarien">
     <?php foreach (['bulle' => ['Bullen-Szenario', 'Best Case'], 'basis' => ['Basis-Szenario', 'Likely Case'], 'baer' => ['Bären-Szenario', 'Worst Case']] as $k => [$titel, $unter]):
         $r = $werte[$k]['rendite']; ?>
@@ -1922,10 +1957,10 @@ function empfehlungHtmlKarte(array $f, array $p, bool $kiVerfuegbar, string $mod
   </table></div>
 <?php endif; ?>
 <?= kacheln([
-    ['Bruttomarge', e(proz($fk['bruttomarge'])), 'letzte 12 Monate', ''],
-    ['Nettomarge', e(proz($fk['nettomarge'])), 'operativ ' . e(proz($fk['opmarge'])), ampel($fk['nettomarge'], [0.15, 0.05, true], 'nettomarge')],
-    ['Nettoverschuldung / EBITDA', e(zahl($fk['schulden_ebitda'], 2)), $fk['schulden_ebitda'] !== null ? ($fk['schulden_ebitda'] < 0 ? 'Nettocash' : ($fk['schulden_ebitda'] < 3 ? 'gesund (unter 3)' : 'hoch (über 3)')) : '', ampel($fk['schulden_ebitda'], [1.5, 3, false], 'verschuldung')],
-    ['Nettoverschuldung', e(gross($fk['netto_schulden'], $bw)), 'EBITDA ' . e(gross($fk['ebitda'], $bw)), ''],
+    ['Bruttomarge', e(proz($fk['bruttomarge'])), 'letzte 12 Monate', '', "Anteil des Umsatzes, der nach den direkten Herstellungskosten übrig bleibt. Steigt sie über die Jahre, spricht das für Preismacht, fällt sie, für Margendruck."],
+    ['Nettomarge', e(proz($fk['nettomarge'])), 'operativ ' . e(proz($fk['opmarge'])), ampel($fk['nettomarge'], [0.15, 0.05, true], 'nettomarge'), "Anteil des Umsatzes, der nach allen Kosten, Zinsen und Steuern als Gewinn bleibt. Die operative Marge ist der Gewinn aus dem Kerngeschäft vor Zinsen und Steuern."],
+    ['Nettoverschuldung / EBITDA', e(zahl($fk['schulden_ebitda'], 2)), $fk['schulden_ebitda'] !== null ? ($fk['schulden_ebitda'] < 0 ? 'Nettocash' : ($fk['schulden_ebitda'] < 3 ? 'gesund (unter 3)' : 'hoch (über 3)')) : '', ampel($fk['schulden_ebitda'], [1.5, 3, false], 'verschuldung'), "Wie viele Jahre die Firma mit ihrem operativen Ergebnis vor Abschreibungen (EBITDA) bräuchte, um ihre Schulden abzüglich Bargeld zurückzuzahlen. Unter 3 gilt als gesund, über 3 als hoch; ein negativer Wert heißt: mehr Bargeld als Schulden."],
+    ['Nettoverschuldung', e(gross($fk['netto_schulden'], $bw)), 'EBITDA ' . e(gross($fk['ebitda'], $bw)), '', "Finanzschulden minus Bargeld und kurzfristige Geldanlagen. EBITDA ist das operative Ergebnis vor Zinsen, Steuern und Abschreibungen der letzten 12 Monate."],
 ]) ?>
 
 <h4>Schritt 2 · Die Erwartungshaltung (Zahlen)</h4>
@@ -1933,14 +1968,14 @@ function empfehlungHtmlKarte(array $f, array $p, bool $kiVerfuegbar, string $mod
     $fwdNaechstes = $fk['kgv_fwd']['+1y']['kgv'] ?? ($fk['kgv_fwd']['0y']['kgv'] ?? $fk['kgv_erw']);
     $vergleich = $fwdNaechstes !== null && $fk['kgv_schnitt'] ? $fwdNaechstes / $fk['kgv_schnitt'] : null;
     $einordnung = $vergleich === null ? '' : ($vergleich < 0.85 ? 'unter dem eigenen Durchschnitt – eher günstig' : ($vergleich > 1.15 ? 'über dem eigenen Durchschnitt – viel Wachstum eingepreist' : 'nahe am eigenen Durchschnitt – eher fair'));
-    $kacheln = [['KGV aktuell', e(zahl($fk['kgv'], 1)), 'letzte 12 Monate', ampel($fk['kgv'], [15, 25, false], 'kgv')]];
+    $kacheln = [['KGV aktuell', e(zahl($fk['kgv'], 1)), 'letzte 12 Monate', ampel($fk['kgv'], [15, 25, false], 'kgv'), "Kurs-Gewinn-Verhältnis: Aktienkurs geteilt durch den Gewinn je Aktie der letzten 12 Monate – so viele Jahresgewinne kostet die Aktie heute."]];
     foreach ($fk['kgv_fwd'] as $x) {
-        $kacheln[] = ['KGV ' . $x['titel'], e(zahl($x['kgv'], 1)), 'Konsens-EPS ' . e(zahl($x['eps'], 2)) . ' ' . e($w), ampel($x['kgv'], [15, 25, false], 'kgv')];
+        $kacheln[] = ['KGV ' . $x['titel'], e(zahl($x['kgv'], 1)), 'Konsens-EPS ' . e(zahl($x['eps'], 2)) . ' ' . e($w), ampel($x['kgv'], [15, 25, false], 'kgv'), "Erwartetes KGV: aktueller Kurs geteilt durch den Gewinn je Aktie, den die Analysten im Schnitt für dieses bzw. das nächste Geschäftsjahr erwarten (Konsens)."];
     }
     if ($fk['kgv_fwd'] === []) {
-        $kacheln[] = ['KGV erwartet', e(zahl($fk['kgv_erw'], 1)), 'laut Yahoo', ''];
+        $kacheln[] = ['KGV erwartet', e(zahl($fk['kgv_erw'], 1)), 'laut Yahoo', '', "Erwartetes KGV: aktueller Kurs geteilt durch den Gewinn je Aktie, den die Analysten im Schnitt für dieses bzw. das nächste Geschäftsjahr erwarten (Konsens)."];
     }
-    $kacheln[] = ['Ø-KGV der letzten Jahre', e(zahl($fk['kgv_schnitt'], 1)), $fk['kgv_hist'] !== [] ? e(implode(' · ', array_map(static fn($j, $k): string => $j . ': ' . zahl($k, 0), array_keys($fk['kgv_hist']), $fk['kgv_hist']))) : 'nicht berechenbar', ''];
+    $kacheln[] = ['Ø-KGV der letzten Jahre', e(zahl($fk['kgv_schnitt'], 1)), $fk['kgv_hist'] !== [] ? e(implode(' · ', array_map(static fn($j, $k): string => $j . ': ' . zahl($k, 0), array_keys($fk['kgv_hist']), $fk['kgv_hist']))) : 'nicht berechenbar', '', "Durchschnittliches KGV der vergangenen Geschäftsjahre (Näherung aus Jahresendkurs, heutiger Aktienzahl und Jahresgewinn). Liegt das erwartete KGV deutlich darüber, ist schon viel Wachstum im Kurs eingepreist."];
 ?>
 <?= kacheln($kacheln) ?>
 <?php if ($einordnung !== ''): ?><p>Aus den Zahlen: Das erwartete KGV liegt <strong><?= e($einordnung) ?></strong> (<?= e(proz($vergleich - 1, 0, true)) ?> gegenüber dem Durchschnitt).</p><?php endif; ?>
@@ -2028,11 +2063,13 @@ function teilPortraet(array $f, array $p, array $id, bool $kiVerfuegbar, string 
     $aehnlich = yahooAehnliche((string)$p['symbol']);
     if ($aehnlich !== []) {
         $kurse = yahooKurse($aehnlich);
-        $html .= '<p class="klein leise">Vergleichbare Aktien laut Yahoo Finance:</p><ul class="positionen">';
+        $html .= '<p class="klein leise">Vergleichbare Aktien laut Yahoo Finance – antippen öffnet die Firma, ⇄ legt sie zum Vergleich in den Kurs-Chart:</p><ul class="positionen aehnliche">';
         foreach ($aehnlich as $a) {
             $k = $kurse[$a] ?? null;
-            $html .= '<li><a href="' . e(firmaUrl($a)) . '"><span><strong>' . e((string)($k['name'] ?? $a) ?: $a) . '</strong><small>' . e($a) . ((string)($k['boerse'] ?? '') !== '' ? ' · ' . e($k['boerse']) : '') . '</small></span>'
-                . '<span class="rechts"><b>' . e(geld($k['kurs'] ?? null, (string)($k['waehrung'] ?? ''))) . '</b><small class="' . klasse($k['aend_proz'] ?? null) . '">' . e(proz($k['aend_proz'] ?? null, 2, true)) . '</small></span></a></li>';
+            $name = (string)($k['name'] ?? $a) ?: $a;
+            $html .= '<li><a href="' . e(firmaUrl($a)) . '"><span><strong>' . e($name) . '</strong><small>' . e($a) . ((string)($k['boerse'] ?? '') !== '' ? ' · ' . e($k['boerse']) : '') . '</small></span>'
+                . '<span class="rechts"><b>' . e(geld($k['kurs'] ?? null, (string)($k['waehrung'] ?? ''))) . '</b><small class="' . klasse($k['aend_proz'] ?? null) . '">' . e(proz($k['aend_proz'] ?? null, 2, true)) . '</small></span></a>'
+                . '<button type="button" class="knopf-text klein" data-vergleiche="' . e($a) . '" data-vergleiche-name="' . e($name) . '" aria-label="Im Kurs-Chart vergleichen">⇄</button></li>';
         }
         $html .= '</ul>';
     }

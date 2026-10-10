@@ -277,7 +277,11 @@ function betragInEuro(?float $betrag, string $waehrung, ?float $fx): ?float
  * Bereitet den Verlauf vor (Kurse nachladen) und berechnet ihn, sobald alles da ist.
  * ['fertig' => bool, 'offen' => n, 'gesamt' => n] oder ['fertig' => true, 'punkte' => [...], 'titel' => [...]]
  */
-function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, int $vorlaufTage = 0): array
+/**
+ * $vergleich: optional ein Yahoo-Kürzel (Index, ETF, Aktie), dessen Kurs in Euro
+ * je Rasterpunkt mitgeliefert wird – für den Vergleich im Chart.
+ */
+function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, int $vorlaufTage = 0, string $vergleich = ''): array
 {
     $vonTs = (int)strtotime($von . ' 00:00:00');
     $bisTs = (int)strtotime($bis . ' 23:59:59');
@@ -295,10 +299,11 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
     // Kursverläufe nur für Titel, die im Zeitraum im Bestand waren
     $titel = array_filter(verlaufTitel($d), static fn(array $t): bool => titelImZeitraum($t, $vonTs, $bisTs));
     $symbole = array_keys($titel);
-    $offen = historienLaden($symbole, $ab, $budget);
+    $offen = historienLaden($vergleich !== '' ? array_merge($symbole, [$vergleich]) : $symbole, $ab, $budget);
     if ($offen > 0) {
-        return ['fertig' => false, 'offen' => $offen, 'gesamt' => count($symbole)];
+        return ['fertig' => false, 'offen' => $offen, 'gesamt' => count($symbole) + ($vergleich !== '' ? 1 : 0)];
     }
+    $hVergleich = $vergleich !== '' ? historieGecacht($vergleich, $ab) : null;
     // Währungen der Titel und eToro-Einsätze (USD) → Devisenverläufe
     $waehrungen = ['USD' => true];
     $verlaeufe = [];
@@ -311,6 +316,9 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
         foreach ($titel[$s]['et'] as $seg) {
             $waehrungen[waehrungBasis($seg['waehrung'])] = true;
         }
+    }
+    if ($hVergleich !== null && waehrungBasis((string)$hVergleich['w']) !== '') {
+        $waehrungen[waehrungBasis((string)$hVergleich['w'])] = true;
     }
     unset($waehrungen['EUR']);
     $fxSymbole = array_map(static fn(string $w): string => 'EUR' . $w . '=X', array_keys($waehrungen));
@@ -377,6 +385,7 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
         $fluesse = [];
         $luecke = false;
         $div = 0.0;
+        $divPunkte = [];
         $idx = 0;
         $fxIdx = [];
         $vorher = PHP_INT_MIN;
@@ -410,6 +419,7 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
                         $dt = strtotime($dv[0] . ' 12:00:00');
                         if ($dt > $vorher && $dt <= $ts) {
                             $div += (float)$dv[1];
+                            $divPunkte[$n] = ($divPunkte[$n] ?? 0.0) + (float)$dv[1];
                         }
                     }
                 }
@@ -461,13 +471,36 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
         $ergebnis[] = [
             'id' => $s, 'name' => $t['name'], 'symbol' => $s, 'art' => $t['art'], 'quellen' => array_keys($t['quellen']),
             'w' => $werte, 'f' => $fluesse, 'div' => round($div, 2), 'luecke' => $luecke,
+            'dv' => array_map(static fn(int $n, float $b): array => [$n, round($b, 2)], array_keys($divPunkte), array_values($divPunkte)),
             'k' => array_slice($geschaefte, -300),
             'pot' => isset($d['firmen'][$s]['analysten']['potenzial']) ? round((float)$d['firmen'][$s]['analysten']['potenzial'], 4) : null,
         ];
     }
     usort($ergebnis, static fn(array $a, array $b): int => end($b['w']) <=> end($a['w']));
-    return ['fertig' => true, 'von' => $von, 'bis' => date('Y-m-d', $bisTs), 'punkte' => $raster, 'start' => $start, 'titel' => $ergebnis,
+    $erg = ['fertig' => true, 'von' => $von, 'bis' => date('Y-m-d', $bisTs), 'punkte' => $raster, 'start' => $start, 'titel' => $ergebnis,
         'katalog' => titelKatalog($d)];
+    if ($vergleich !== '') {
+        $erg['vergleich'] = vergleichInEuro($vergleich, $hVergleich, $raster, $fx);
+    }
+    return $erg;
+}
+
+/** Kurs des Vergleichswerts in Euro je Rasterpunkt (null, wo es noch keinen Kurs gab). */
+function vergleichInEuro(string $symbol, ?array $h, array $raster, array $fx): array
+{
+    if ($h === null || $h['t'] === []) {
+        return ['symbol' => $symbol, 'fehler' => 'Zu „' . $symbol . '“ gibt es keinen Kursverlauf.'];
+    }
+    $w = (string)$h['w'];
+    $idx = 0;
+    $fxIdx = [];
+    $eur = [];
+    foreach ($raster as $ts) {
+        $k = kursZum($h, $ts, $idx);
+        $wert = betragInEuro($k, $w, fxZum($fx, $fxIdx, $w, $ts));
+        $eur[] = $wert !== null ? round($wert, 4) : null;
+    }
+    return ['symbol' => $symbol, 'w' => $w, 'eur' => $eur];
 }
 
 /** Alle Titel, die je im Depot waren, mit Haltedauer – auch außerhalb des gewählten Zeitraums. */

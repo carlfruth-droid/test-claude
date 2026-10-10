@@ -370,15 +370,15 @@ function verlaufUrl(string $symbol, string $spanne): string
 // ---------------------------------------------------------------------------
 
 /**
- * Lädt Kennzahlen (6 Std.), Kurs (4 Min.), 1-Jahres-Verlauf (1 Std.) und
- * 5-Jahres-Verlauf (1 Tag) – nur das, was nicht mehr frisch ist, und parallel.
+ * Lädt Kennzahlen (6 Std.), Kurs (4 Min.), 2-Jahres-Verlauf täglich (1 Std.) und
+ * 5-Jahres-Verlauf wöchentlich (1 Tag) – nur das, was nicht mehr frisch ist, und parallel.
  */
 function yahooBuendel(string $symbol): array
 {
     $teile = [
         'qs' => ['cache' => 'qs:' . $symbol, 'alter' => 6 * 3600],
         'kurs' => ['cache' => 'kurs:' . $symbol, 'alter' => 240],
-        'v1' => ['cache' => 'verlauf:' . $symbol . ':1y', 'alter' => 3600],
+        'v1' => ['cache' => 'verlauf:' . $symbol . ':2y', 'alter' => 3600],
         'v5' => ['cache' => 'verlauf:' . $symbol . ':5y', 'alter' => 86400],
     ];
     $erg = [];
@@ -402,7 +402,7 @@ function yahooBuendel(string $symbol): array
                 : 'https://query1.finance.yahoo.com/v7/finance/quote?symbols=' . rawurlencode($symbol);
             $anfragen[$k] = ['url' => mitCrumb($url, $crumb), 'ua' => 'browser', 'cookies' => yahooCookieDatei(), 'zeit' => 20];
         } else {
-            $anfragen[$k] = ['url' => verlaufUrl($symbol, $k === 'v5' ? '5y' : '1y'), 'ua' => 'browser', 'zeit' => 20];
+            $anfragen[$k] = ['url' => verlaufUrl($symbol, $k === 'v5' ? '5y' : '2y'), 'ua' => 'browser', 'zeit' => 20];
         }
     }
     $antworten = httpViele($anfragen);
@@ -451,6 +451,44 @@ function yahooBuendel(string $symbol): array
         }
     }
     return $erg;
+}
+
+/**
+ * Nur der Kursverlauf (2 Jahre täglich, 5 Jahre wöchentlich) – für den Vergleich
+ * im Kurs-Chart. Nutzt dieselben Zwischenspeicher wie der Steckbrief.
+ */
+function kursverlaufLaden(string $symbol): ?array
+{
+    $teile = ['j1' => ['verlauf:' . $symbol . ':2y', 3600, '2y'], 'j5' => ['verlauf:' . $symbol . ':5y', 86400, '5y']];
+    $erg = [];
+    $alt = [];
+    $anfragen = [];
+    foreach ($teile as $k => [$cache, $alter, $spanne]) {
+        $c = cacheLesen($cache, $alter);
+        if ($c !== null && $c['frisch']) {
+            $erg[$k] = $c['wert'];
+            continue;
+        }
+        $alt[$k] = $c['wert'] ?? null;
+        $anfragen[$k] = ['url' => verlaufUrl($symbol, $spanne), 'ua' => 'browser', 'zeit' => 15];
+    }
+    foreach (httpViele($anfragen) as $k => $r) {
+        $j = httpJson($r);
+        $wert = $j !== null ? verlaufAuswerten($j) : null;
+        if ($wert !== null) {
+            cacheSchreiben($teile[$k][0], $wert);
+            $erg[$k] = $wert;
+        } elseif ($alt[$k] !== null) {
+            $erg[$k] = $alt[$k];
+        }
+    }
+    $j1 = (array)($erg['j1']['punkte'] ?? []);
+    $j5 = (array)($erg['j5']['punkte'] ?? []);
+    if ($j1 === [] && $j5 === []) {
+        return null;
+    }
+    $meta = (array)($erg['j1']['meta'] ?? ($erg['j5']['meta'] ?? []));
+    return ['symbol' => $symbol, 'name' => (string)($meta['name'] ?? '') ?: $symbol, 'w' => (string)($meta['waehrung'] ?? ''), 'j1' => $j1, 'j5' => $j5];
 }
 
 /** Nur die Kennzahlen (z. B. für Termin-Aktualisierung im Hintergrund). */
@@ -635,7 +673,7 @@ function firmaProfil(string $symbol, bool $heimErgaenzen = true): ?array
         }
     }
     $p['termine'] = termineAus($r);
-    $p['verlauf_1j'] = $v1['punkte'] ?? [];
+    $p['verlauf_2j'] = $v1['punkte'] ?? [];
     $p['verlauf_5j'] = $v5['punkte'] ?? [];
     $p['dividenden'] = $v5['div'] ?? ($v1['div'] ?? []);
     $p['daten_von'] = '';
@@ -713,7 +751,7 @@ function heimatErgaenzen(array $p): array
     $betraege = ['kursziel', 'kursziel_hoch', 'kursziel_tief', 'boersenwert', 'div_je_aktie', 'gd200', 'gd50'];
     foreach ($h as $k => $v) {
         if (in_array($k, ['symbol', 'name', 'kurzname', 'waehrung', 'boerse', 'kurs', 'aend', 'aend_proz', 'kurszeit', 'marktstatus',
-            'hoch52', 'tief52', 'verlauf_1j', 'verlauf_5j', 'dividenden', 'daten_von', 'kennzahlen_da'], true)) {
+            'hoch52', 'tief52', 'verlauf_2j', 'verlauf_5j', 'dividenden', 'daten_von', 'kennzahlen_da'], true)) {
             continue;
         }
         $leer = $p[$k] === null || $p[$k] === '' || $p[$k] === [] || $p[$k] === 0;
