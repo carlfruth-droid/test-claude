@@ -578,6 +578,8 @@ input[type="file"] { font: inherit; font-size: .92rem; }
 .chart .chart-griff.aktiv .griff-text { fill: #fff; }
 .chart .chart-griff.aktiv .chart-grenze { stroke-width: 2.2; }
 .chart .griff-punkt { stroke: #fff; stroke-width: 2; }
+.chart .hilfsgerade { stroke: var(--akzent); stroke-width: 1.8; stroke-dasharray: 7 4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.chart .hilfsgerade-weiter { stroke: var(--akzent); stroke-width: 1.2; stroke-dasharray: 1 5; stroke-linecap: round; opacity: .7; vector-effect: non-scaling-stroke; }
 .cl-griff-name { font-style: normal; font-weight: 700; font-size: .78rem; color: #fff; background: var(--akzent); border-radius: 99px; padding: 1px 7px; }
 .cl-knoepfe button.aktiv { background: var(--akzent); border-color: var(--akzent); color: #fff; }
 .cl-mess { margin-top: 8px; padding: 10px 12px; background: var(--akzent-hell); border-radius: 12px; }

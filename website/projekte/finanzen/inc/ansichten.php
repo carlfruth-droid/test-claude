@@ -1820,7 +1820,7 @@ function seiteVerlauf(array $d): string
   <div class="raster" data-verlauf-kennzahlen></div>
   <p class="klein leise" data-verlauf-stand></p>
   <div data-verlauf-geschaefte></div>
-  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Die zeitgewichtete Rendite rechnet Käufe und Verkäufe heraus – damit ist der Vergleich mit einem Index fair. „⟷ Messen“: zwei Punkte antippen und Unterschied, Rendite und Dauer ablesen. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
+  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Die zeitgewichtete Rendite rechnet Käufe und Verkäufe heraus – damit ist der Vergleich mit einem Index fair. „⟷ Messen“: zwei Punkte antippen – eine Hilfsgerade verbindet sie – und Unterschied, Rendite und Dauer ablesen. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
 </section>
 <section class="karte">
   <span class="karten-titel"><?= ico('liste') ?> Titel auswählen</span>

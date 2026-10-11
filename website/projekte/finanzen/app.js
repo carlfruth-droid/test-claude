@@ -656,8 +656,9 @@
       return d;
     };
     var achsZahl = function (v) { return v.toLocaleString('de-DE', { maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 2 }); };
-    var gid = 'fz-fl-' + Math.random().toString(36).slice(2, 9);
-    el('defs', {}).innerHTML = '<linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + farbe + '" stop-opacity=".16"/><stop offset="1" stop-color="' + farbe + '" stop-opacity="0"/></linearGradient>';
+    var gid = 'fz-fl-' + Math.random().toString(36).slice(2, 9), cid = gid + '-clip';
+    el('defs', {}).innerHTML = '<linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + farbe + '" stop-opacity=".16"/><stop offset="1" stop-color="' + farbe + '" stop-opacity="0"/></linearGradient>'
+      + '<clipPath id="' + cid + '"><rect x="' + links + '" y="' + oben + '" width="' + breite + '" height="' + hoehe + '"/></clipPath>';
     for (var g = 0; g <= 3; g++) {
       var gw = min + (max - min) * g / 3, gy = y(gw);
       el('line', { x1: links, x2: B - rechtsRand + 4, y1: gy, y2: gy, 'class': 'gitter' });
@@ -729,6 +730,9 @@
 
     // ---- Bedienung: Zeitpunkt anfahren; im Messmodus zwei Punkte A und B setzen ----
     var spanne = el('rect', { 'class': 'chart-spanne', y: oben, height: hoehe, x: 0, width: 0 });
+    // Hilfsgerade durch A und B: zwischen den Punkten kräftig, davor und danach fein bis an den Rand
+    var geradeWeiter = el('line', { 'class': 'hilfsgerade-weiter', 'clip-path': 'url(#' + cid + ')' });
+    var gerade = el('line', { 'class': 'hilfsgerade' });
     var cursorLinie = el('line', { 'class': 'chart-cursor', y1: oben, y2: H - unten });
     var cursorPunkt = el('circle', { r: 5, fill: farbe, stroke: '#fff', 'stroke-width': 2 });
     var cursorVgl = vgl ? el('circle', { r: 4, fill: vgl.farbe, stroke: '#fff', 'stroke-width': 2 }) : null;
@@ -816,6 +820,14 @@
       var beide = messen && ia !== null && ib !== null;
       spanne.style.display = beide ? '' : 'none';
       if (beide) { var sx0 = x(Math.min(ia, ib)), sx1 = x(Math.max(ia, ib)); spanne.setAttribute('x', sx0); spanne.setAttribute('width', Math.max(1, sx1 - sx0)); }
+      var mitGerade = beide && ia !== ib;
+      gerade.style.display = geradeWeiter.style.display = mitGerade ? '' : 'none';
+      if (mitGerade) {
+        var gx0 = x(ia), gy0 = y(punkte[ia][1]), gx1 = x(ib), gy1 = y(punkte[ib][1]);
+        var steigung = (gy1 - gy0) / (gx1 - gx0), xl = x(0), xr = x(n - 1);
+        [['x1', gx0], ['y1', gy0], ['x2', gx1], ['y2', gy1]].forEach(function (w) { gerade.setAttribute(w[0], w[1].toFixed(1)); });
+        [['x1', xl], ['y1', gy0 + steigung * (xl - gx0)], ['x2', xr], ['y2', gy0 + steigung * (xr - gx0)]].forEach(function (w) { geradeWeiter.setAttribute(w[0], w[1].toFixed(1)); });
+      }
       messKnopf.classList.toggle('aktiv', messen);
       messKnopf.setAttribute('aria-pressed', messen ? 'true' : 'false');
       var welcher = messen ? z.griff : '';
@@ -837,7 +849,7 @@
           + '<dl class="cl-mess-werte">' + (o.messung || messungStandard)(i0, i1).map(function (r) { return '<div><dt>' + esc(r[0]) + '</dt><dd class="' + (r[2] || '') + '">' + r[1] + '</dd></div>'; }).join('') + '</dl>'
           + '<div class="cl-mess-knoepfe">' + (o.uebernehmen ? '<button type="button" data-a="uebernehmen">Als Zeitraum übernehmen</button>' : '') + '<button type="button" data-a="loeschen">✕ Punkte löschen</button></div>';
       } else if (ia === null && ib === null) {
-        messEl.innerHTML = '<p class="cl-mess-hinweis">Tippe auf den ersten Punkt (A) und dann auf den zweiten (B). Ziehen verschiebt den nächstgelegenen Punkt, ◀ ▶ fahren ihn genau.</p>';
+        messEl.innerHTML = '<p class="cl-mess-hinweis">Tippe auf den ersten Punkt (A) und dann auf den zweiten (B) – eine Hilfsgerade verbindet beide. Ziehen verschiebt den nächstgelegenen Punkt, ◀ ▶ fahren ihn genau.</p>';
       } else {
         messEl.innerHTML = '<p class="cl-mess-hinweis">Punkt ' + (ia !== null ? 'A' : 'B') + ' steht am ' + esc(datumFmt(punkte[ia !== null ? ia : ib][0])) + ' – jetzt den zweiten Punkt antippen.</p>'
           + '<div class="cl-mess-knoepfe"><button type="button" data-a="loeschen">✕ Löschen</button></div>';
