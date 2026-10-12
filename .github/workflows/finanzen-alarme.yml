@@ -23,6 +23,8 @@ jobs:
           import json, urllib.request
           d = json.load(open('antwort.json'))
           print('ok' if d.get('ok') else 'Fehler', '– geprüft:', d.get('geprueft'), '– ausgelöst:', d.get('ausgeloest'))
+          # nur Zähler (fehlende Verläufe, vorgerechnete Zeiträume, Dauer) – keine Beträge
+          print('Depot-Verlauf vorgewärmt:', d.get('verlauf'))
           # Push-Meldungen, die ntfy vom Webhosting nicht angenommen hat (Drosselung), von hier aus schicken
           gesendet = 0
           for p in d.get('ntfy') or []:
