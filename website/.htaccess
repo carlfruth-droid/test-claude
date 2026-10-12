@@ -4,6 +4,13 @@ RewriteEngine On
 RewriteCond %{HTTPS} !=on
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
+# Texte gepackt ausliefern (falls das Modul auf dem Server aktiv ist)
+<IfModule mod_deflate.c>
+  <IfModule mod_filter.c>
+    AddOutputFilterByType DEFLATE text/html text/css text/javascript application/javascript application/json image/svg+xml
+  </IfModule>
+</IfModule>
+
 # Sinnvolle Sicherheits-Header
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"

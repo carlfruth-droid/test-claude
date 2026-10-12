@@ -98,14 +98,100 @@ function historieSchluessel(string $symbol): string
     return 'hist:' . $symbol;
 }
 
-/** Kursverlauf aus dem Zwischenspeicher, wenn er weit genug zurückreicht und frisch ist. */
+/**
+ * Kursverlauf aus dem Zwischenspeicher, wenn er weit genug zurückreicht – auch wenn er
+ * schon älter ist: Vergangene Kurse ändern sich nicht, die letzten Tage werden nebenher
+ * ergänzt (historienLaden) und der heutige Kurs kommt aus den aktuellen Kursen.
+ */
 function historieGecacht(string $symbol, int $ab): ?array
 {
-    $c = cacheLesen(historieSchluessel($symbol), 12 * 3600);
-    if ($c === null || !$c['frisch'] || !is_array($c['wert']) || (int)($c['wert']['v'] ?? 0) !== 2 || (int)($c['wert']['ab'] ?? PHP_INT_MAX) > $ab) {
+    $c = cacheLesen(historieSchluessel($symbol), PHP_INT_MAX);
+    if ($c === null || !is_array($c['wert']) || (int)($c['wert']['v'] ?? 0) !== 2 || (int)($c['wert']['ab'] ?? PHP_INT_MAX) > $ab) {
         return null;
     }
     return $c['wert'];
+}
+
+/** Neue Tageskurse an einen gespeicherten Verlauf anhängen; null bei einem neuen Split (dann ganz neu laden). */
+function historieAnhaengen(array $alt, array $neu): ?array
+{
+    $bekannt = array_map(static fn(array $sp): int => (int)$sp[0], (array)$alt['sp']);
+    foreach ((array)$neu['sp'] as $sp) {
+        if (!in_array((int)$sp[0], $bekannt, true)) {
+            return null; // Yahoo rechnet ältere Kurse nach einem Split um – die gespeicherten passen nicht mehr
+        }
+    }
+    if ($neu['t'] === []) {
+        return $alt;
+    }
+    $abTag = intdiv((int)$neu['t'][0], 86400);
+    $t = [];
+    $c = [];
+    foreach ($alt['t'] as $i => $ts) {
+        if (intdiv((int)$ts, 86400) < $abTag) {
+            $t[] = (int)$ts;
+            $c[] = $alt['c'][$i];
+        }
+    }
+    return ['v' => 2, 'ab' => (int)$alt['ab'], 't' => array_merge($t, $neu['t']), 'c' => array_merge($c, $neu['c']),
+        'sp' => $alt['sp'], 'w' => $neu['w'] !== '' ? $neu['w'] : $alt['w']];
+}
+
+/** Aktuellen Kurs als jüngsten Punkt anhängen (bzw. den heutigen Tageskurs ersetzen), wenn er neuer ist als der Verlauf. */
+function historieMitKurs(array $h, ?array $k): array
+{
+    if ($k === null || $h['t'] === [] || !isset($k['kurs'], $k['zeit']) || (float)$k['kurs'] <= 0) {
+        return $h;
+    }
+    if ((string)($k['waehrung'] ?? '') !== '' && (string)$h['w'] !== '' && $k['waehrung'] !== $h['w']) {
+        return $h; // andere Währung als der Verlauf – lieber nichts mischen
+    }
+    $letzter = (int)end($h['t']);
+    $zeit = (int)$k['zeit'];
+    if ($zeit <= $letzter) {
+        return $h;
+    }
+    if (intdiv($zeit, 86400) === intdiv($letzter, 86400)) {
+        $h['c'][count($h['c']) - 1] = (float)$k['kurs'];
+    } else {
+        $h['t'][] = $zeit;
+        $h['c'][] = (float)$k['kurs'];
+    }
+    return $h;
+}
+
+/** Zuletzt abgerufene Kurse aus dem Zwischenspeicher, ohne neue Abfrage. */
+function kurseAusCache(array $symbole, int $maxAlter): array
+{
+    $erg = [];
+    foreach (array_unique($symbole) as $s) {
+        $c = cacheLesen('kurs:' . $s, $maxAlter);
+        if ($c !== null && $c['frisch'] && is_array($c['wert']) && ($c['wert']['kurs'] ?? null) !== null) {
+            $erg[(string)$s] = $c['wert'];
+        }
+    }
+    return $erg;
+}
+
+/** Erster Kauf eines Titels (Zeitstempel). */
+function titelBeginn(array $t): int
+{
+    $erster = PHP_INT_MAX;
+    foreach ($t['tr'] as $v) {
+        if (!empty($v['e'])) {
+            $erster = min($erster, (int)strtotime($v['e'][0][0] . ' 00:00:00'));
+        }
+    }
+    foreach ($t['et'] as $seg) {
+        $erster = min($erster, (int)$seg['auf']);
+    }
+    return $erster === PHP_INT_MAX ? time() : $erster;
+}
+
+/** Ab wann Devisen und Vergleichswerte geladen werden: erste Buchung minus Vorlauf (Ø 200 Tage bei „Max“). */
+function verlaufBoden(array $d): int
+{
+    return (int)strtotime(verlaufBeginn($d) . ' 00:00:00') - 330 * 86400;
 }
 
 /** Antwort von Yahoo auswerten: Schlusskurse (von Yahoo split-bereinigt) und gemeldete Splits. */
@@ -200,35 +286,86 @@ function splitsPruefen(array $h, array $handel, callable $inEur): array
 }
 
 /**
- * Lädt fehlende Kursverläufe parallel nach, solange das Zeitbudget reicht.
- * Rückgabe: Anzahl noch fehlender Verläufe.
+ * Lädt fehlende Kursverläufe parallel nach, solange das Zeitbudget reicht, und ergänzt
+ * ältere um die letzten Tage (höchstens $auffrischen Sekunden, die ältesten zuerst).
+ * $bedarf: [Symbol => [nötig ab, laden ab]] – geladen wird gleich ab „laden ab“ (z. B. ab dem
+ * ersten Kauf), damit ein längerer Zeitraum später nicht noch einmal alles laden muss.
+ * Rückgabe: Anzahl noch fehlender Verläufe; ältere, aber ausreichende zählen nicht.
  */
-function historienLaden(array $symbole, int $ab, float $budget): int
+function historienLaden(array $bedarf, float $budget, float $auffrischen = 0.0): int
 {
     $start = microtime(true);
-    $fehlend = array_values(array_filter(array_unique($symbole), static fn(string $s): bool => historieGecacht($s, $ab) === null));
-    foreach (array_chunk($fehlend, 12) as $teil) {
+    $fehlend = [];
+    $alt = [];
+    foreach ($bedarf as $s => [$noetig, $laden]) {
+        $s = (string)$s;
+        $c = cacheLesen(historieSchluessel($s), PHP_INT_MAX);
+        $h = $c !== null && is_array($c['wert']) && (int)($c['wert']['v'] ?? 0) === 2 ? $c['wert'] : null;
+        if ($h === null || (int)$h['ab'] > $noetig) {
+            $fehlend[$s] = (int)min($noetig, $laden);
+        } elseif (time() - (int)$c['zeit'] > 6 * 3600) {
+            $alt[$s] = ['h' => $h, 'zeit' => (int)$c['zeit']];
+        }
+    }
+    $url = static fn(string $s, int $von): string => 'https://query1.finance.yahoo.com/v8/finance/chart/' . rawurlencode($s)
+        . '?period1=' . $von . '&period2=' . (time() + 86400) . '&interval=1d&events=split&includePrePost=false';
+    // 1. Fehlende ganz laden – ohne sie lässt sich nichts rechnen
+    foreach (array_chunk(array_keys($fehlend), 12) as $teil) {
         if (microtime(true) - $start > $budget) {
             break;
         }
         $anfragen = [];
         foreach ($teil as $s) {
-            $anfragen[$s] = ['url' => 'https://query1.finance.yahoo.com/v8/finance/chart/' . rawurlencode($s)
-                . '?period1=' . $ab . '&period2=' . (time() + 86400) . '&interval=1d&events=split&includePrePost=false',
-                'ua' => 'browser', 'zeit' => 20];
+            $anfragen[$s] = ['url' => $url((string)$s, $fehlend[$s]), 'ua' => 'browser', 'zeit' => 20];
         }
         foreach (httpViele($anfragen) as $s => $r) {
-            $j = $r['code'] === 200 ? json_decode($r['body'], true) : null;
-            $h = is_array($j) ? historieAuswerten($j, $ab) : null;
+            $s = (string)$s;
+            $j = $r['code'] === 200 ? json_decode((string)$r['body'], true) : null;
+            $h = is_array($j) ? historieAuswerten($j, $fehlend[$s]) : null;
             if ($h === null && in_array($r['code'], [200, 404, 400], true)) {
-                $h = ['v' => 2, 'ab' => $ab, 't' => [], 'c' => [], 'sp' => [], 'w' => '']; // unbekannt – nicht bei jedem Aufruf erneut fragen
+                $h = ['v' => 2, 'ab' => $fehlend[$s], 't' => [], 'c' => [], 'sp' => [], 'w' => '']; // unbekannt – nicht bei jedem Aufruf erneut fragen
             }
             if ($h !== null) {
-                cacheSchreiben(historieSchluessel((string)$s), $h);
+                cacheSchreiben(historieSchluessel($s), $h);
+                unset($fehlend[$s]);
             }
         }
     }
-    return count(array_filter($fehlend, static fn(string $s): bool => historieGecacht($s, $ab) === null));
+    // 2. Ältere nur um die letzten Tage ergänzen – die Anzeige wartet darauf nicht
+    if ($auffrischen > 0 && $alt !== []) {
+        uasort($alt, static fn(array $a, array $b): int => $a['zeit'] <=> $b['zeit']);
+        $beginn = microtime(true);
+        foreach (array_chunk(array_keys($alt), 12) as $teil) {
+            if (microtime(true) - $beginn > $auffrischen) {
+                break;
+            }
+            $anfragen = [];
+            foreach ($teil as $s) {
+                $h = $alt[$s]['h'];
+                $letzter = $h['t'] !== [] ? (int)end($h['t']) : (int)$h['ab'];
+                $anfragen[$s] = ['url' => $url((string)$s, max((int)$h['ab'], $letzter - 7 * 86400)), 'ua' => 'browser', 'zeit' => 15];
+            }
+            foreach (httpViele($anfragen) as $s => $r) {
+                $s = (string)$s;
+                $h = $alt[$s]['h'];
+                $j = $r['code'] === 200 ? json_decode((string)$r['body'], true) : null;
+                $neu = is_array($j) ? historieAuswerten($j, (int)$h['ab']) : null;
+                if ($neu === null) {
+                    if (in_array($r['code'], [200, 404, 400], true)) {
+                        cacheSchreiben(historieSchluessel($s), $h); // nichts Neues – erst beim nächsten Durchgang wieder fragen
+                    }
+                    continue;
+                }
+                $zusammen = historieAnhaengen($h, $neu);
+                if ($zusammen === null) {
+                    @unlink(cacheDatei(historieSchluessel($s))); // neuer Split: beim nächsten Mal ganz neu laden
+                } else {
+                    cacheSchreiben(historieSchluessel($s), $zusammen);
+                }
+            }
+        }
+    }
+    return count($fehlend);
 }
 
 /** Kurs zum Zeitpunkt (letzter Schlusskurs davor; kurz vor dem ersten Kurs der erste). */
@@ -281,7 +418,7 @@ function betragInEuro(?float $betrag, string $waehrung, ?float $fx): ?float
  * $vergleich: optional ein Yahoo-Kürzel (Index, ETF, Aktie), dessen Kurs in Euro
  * je Rasterpunkt mitgeliefert wird – für den Vergleich im Chart.
  */
-function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, int $vorlaufTage = 0, string $vergleich = ''): array
+function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, int $vorlaufTage = 0, string $vergleich = '', float $auffrischen = 0.0): array
 {
     $vonTs = (int)strtotime($von . ' 00:00:00');
     $bisTs = (int)strtotime($bis . ' 23:59:59');
@@ -299,16 +436,32 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
     // Kursverläufe nur für Titel, die im Zeitraum im Bestand waren
     $titel = array_filter(verlaufTitel($d), static fn(array $t): bool => titelImZeitraum($t, $vonTs, $bisTs));
     $symbole = array_keys($titel);
-    $offen = historienLaden($vergleich !== '' ? array_merge($symbole, [$vergleich]) : $symbole, $ab, $budget);
-    if ($offen > 0) {
-        return ['fertig' => false, 'offen' => $offen, 'gesamt' => count($symbole) + ($vergleich !== '' ? 1 : 0)];
+    // Kursverläufe je Titel gleich ab dem ersten Kauf – dann passt derselbe Verlauf für jeden Zeitraum
+    $boden = verlaufBoden($d);
+    $bedarf = [];
+    foreach ($titel as $s => $t) {
+        $erster = titelBeginn($t) - 20 * 86400;
+        $bedarf[$s] = [max($ab, $erster), max($boden, $erster)];
     }
+    if ($vergleich !== '') {
+        $bedarf[$vergleich] = [$ab, min($ab, $boden)];
+    }
+    $offen = historienLaden($bedarf, $budget, $auffrischen);
+    if ($offen > 0) {
+        return ['fertig' => false, 'offen' => $offen, 'gesamt' => count($bedarf)];
+    }
+    // heute: der zuletzt abgerufene Kurs statt des letzten Schlusskurses
+    $live = $bisTs >= strtotime('today') ? kurseAusCache(array_keys($bedarf), 6 * 3600) : [];
+    $leer = ['v' => 2, 'ab' => $ab, 't' => [], 'c' => [], 'sp' => [], 'w' => ''];
     $hVergleich = $vergleich !== '' ? historieGecacht($vergleich, $ab) : null;
+    if ($hVergleich !== null) {
+        $hVergleich = historieMitKurs($hVergleich, $live[$vergleich] ?? null);
+    }
     // Währungen der Titel und eToro-Einsätze (USD) → Devisenverläufe
     $waehrungen = ['USD' => true];
     $verlaeufe = [];
     foreach ($symbole as $s) {
-        $verlaeufe[$s] = historieGecacht($s, $ab);
+        $verlaeufe[$s] = historieMitKurs(historieGecacht($s, $bedarf[$s][0]) ?? $leer, $live[$s] ?? null);
         $w = waehrungBasis((string)($verlaeufe[$s]['w'] ?? ''));
         if ($w !== '') {
             $waehrungen[$w] = true;
@@ -321,14 +474,18 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
         $waehrungen[waehrungBasis((string)$hVergleich['w'])] = true;
     }
     unset($waehrungen['EUR']);
-    $fxSymbole = array_map(static fn(string $w): string => 'EUR' . $w . '=X', array_keys($waehrungen));
-    $offenFx = historienLaden($fxSymbole, $ab, max(2.0, $budget - 2));
-    if ($offenFx > 0) {
-        return ['fertig' => false, 'offen' => $offenFx, 'gesamt' => count($symbole) + count($fxSymbole)];
+    $fxBedarf = [];
+    foreach (array_keys($waehrungen) as $w) {
+        $fxBedarf['EUR' . $w . '=X'] = [$ab, min($ab, $boden)];
     }
+    $offenFx = historienLaden($fxBedarf, max(2.0, $budget - 2), $auffrischen > 0 ? 1.0 : 0.0);
+    if ($offenFx > 0) {
+        return ['fertig' => false, 'offen' => $offenFx, 'gesamt' => count($bedarf) + count($fxBedarf)];
+    }
+    $liveFx = $bisTs >= strtotime('today') ? kurseAusCache(array_keys($fxBedarf), 6 * 3600) : [];
     $fx = [];
     foreach (array_keys($waehrungen) as $w) {
-        $fx[$w] = historieGecacht('EUR' . $w . '=X', $ab);
+        $fx[$w] = historieMitKurs(historieGecacht('EUR' . $w . '=X', $ab) ?? $leer, $liveFx['EUR' . $w . '=X'] ?? null);
     }
 
     $ergebnis = [];
@@ -389,41 +546,50 @@ function depotVerlauf(array $d, string $von, string $bis, float $budget = 8.0, i
         $idx = 0;
         $fxIdx = [];
         $vorher = PHP_INT_MIN;
+        // Buchungen einmal in Zeitstempel umrechnen; je Rasterpunkt nur die neu hinzugekommenen abarbeiten
+        $trListe = [];
+        foreach ($t['tr'] as $v) {
+            $ev = [];
+            foreach ($v['e'] as $e) {
+                $ev[] = [(int)strtotime($e[0] . ' 12:00:00'), (float)$e[1], (float)$e[2]];
+            }
+            $dv = [];
+            foreach ($v['d'] as $x) {
+                $dv[] = [(int)strtotime($x[0] . ' 12:00:00'), (float)$x[1]];
+            }
+            usort($dv, static fn(array $a, array $b): int => $a[0] <=> $b[0]);
+            $trListe[] = ['e' => $ev, 'd' => $dv, 'ie' => 0, 'id' => 0, 'stueck' => 0.0];
+        }
         foreach ($raster as $n => $ts) {
             $kurs = kursZum($h, $ts, $idx);
             $kursEur = betragInEuro($kurs, $w, fxZum($fx, $fxIdx, $w, $ts));
             $usd = fxZum($fx, $fxIdx, 'USD', $ts);
             $wert = 0.0;
             $fluss = 0.0;
-            foreach ($t['tr'] as $v) {
-                $stueck = 0.0;
-                foreach ($v['e'] as $e) {
-                    $et = strtotime($e[0] . ' 12:00:00');
-                    if ($et > $ts) {
-                        break;
-                    }
-                    $stueck += (float)$e[1];
-                    if ($n > 0 && $et > $vorher) {
-                        $fluss += (float)$e[2];
+            foreach ($trListe as &$tv) {
+                while ($tv['ie'] < count($tv['e']) && $tv['e'][$tv['ie']][0] <= $ts) {
+                    $e = $tv['e'][$tv['ie']++];
+                    $tv['stueck'] += $e[1];
+                    if ($n > 0) {
+                        $fluss += $e[2]; // Käufe/Verkäufe seit dem letzten Rasterpunkt
                     }
                 }
-                if ($stueck > 1e-6) {
+                if ($tv['stueck'] > 1e-6) {
                     if ($kursEur === null) {
                         $luecke = true;
                     } else {
-                        $wert += $stueck * $kursEur;
+                        $wert += $tv['stueck'] * $kursEur;
                     }
                 }
-                if ($n > $start) {
-                    foreach ($v['d'] as $dv) {
-                        $dt = strtotime($dv[0] . ' 12:00:00');
-                        if ($dt > $vorher && $dt <= $ts) {
-                            $div += (float)$dv[1];
-                            $divPunkte[$n] = ($divPunkte[$n] ?? 0.0) + (float)$dv[1];
-                        }
+                while ($tv['id'] < count($tv['d']) && $tv['d'][$tv['id']][0] <= $ts) {
+                    $x = $tv['d'][$tv['id']++];
+                    if ($n > $start) {
+                        $div += $x[1];
+                        $divPunkte[$n] = ($divPunkte[$n] ?? 0.0) + $x[1];
                     }
                 }
             }
+            unset($tv);
             foreach ($t['et'] as $seg) {
                 $auf = (int)$seg['auf'];
                 $zu = (int)$seg['zu'];
@@ -565,4 +731,213 @@ function verlaufHinweise(array $d): array
         $h[] = 'Die Kurse der importierten Titel werden noch zugeordnet – öffne kurz die Depotseite und warte, bis sie fertig ist.';
     }
     return $h;
+}
+
+// ---------------------------------------------------------------------------
+// Sofort anzeigen: fertige Ergebnisse zwischenspeichern und im Hintergrund vorwärmen
+// ---------------------------------------------------------------------------
+
+const FZ_VERLAUF_ZEITRAEUME = ['1t', '1w', '1m', '3m', '6m', 'ytd', '1j', '3j', '5j', 'max'];
+
+/** Kennung des Depotstands – ändert sich mit jedem Import und jeder Zuordnung. */
+function verlaufStand(array $d): string
+{
+    $tr = (array)($d['broker']['traderepublic'] ?? []);
+    $et = (array)($d['broker']['etoro_auszug'] ?? []);
+    $symbole = [];
+    foreach ((array)($tr['positionen'] ?? []) as $k => $p) {
+        $symbole[] = $k . '=' . ($p['symbol'] ?? '');
+    }
+    foreach ((array)($et['symbole'] ?? []) as $k => $x) {
+        $symbole[] = $k . '=' . ($x['symbol'] ?? '');
+    }
+    return md5((string)json_encode([(int)($tr['zeit'] ?? 0), (int)($et['zeit'] ?? 0), $symbole, !empty($d['broker']['etoro']['positionen'])]));
+}
+
+/** Zeitraum-Kürzel → [von, bis], genau wie im Browser gerechnet. */
+function verlaufGrenzen(string $zeitraum, string $beginn): array
+{
+    $heute = new DateTimeImmutable('today');
+    $v = $heute;
+    $monate = ['1m' => 1, '3m' => 3, '6m' => 6, '1j' => 12, '3j' => 36, '5j' => 60][$zeitraum] ?? null;
+    if ($monate !== null) {
+        $v = $heute->modify('-' . $monate . ' months');
+    } elseif ($zeitraum === '1t') {
+        // letzter Handelstag davor (am Montag also Freitag)
+        $v = $heute->modify('-1 day');
+        while ((int)$v->format('N') >= 6) {
+            $v = $v->modify('-1 day');
+        }
+    } elseif ($zeitraum === '1w') {
+        $v = $heute->modify('-7 days');
+    } elseif ($zeitraum === 'ytd') {
+        $v = $heute->setDate((int)$heute->format('Y'), 1, 1);
+    }
+    $von = $zeitraum === 'max' ? $beginn : $v->format('Y-m-d');
+    return [max($von, $beginn), $heute->format('Y-m-d')];
+}
+
+/** Fürs Netz: Werte gerundet und ohne lange Null-Strecken, Zahlungen nur dort, wo es welche gab. */
+function verlaufSchlank(array $v): array
+{
+    foreach ($v['titel'] as &$t) {
+        $n = count($t['w']);
+        $a = 0;
+        while ($a < $n && abs((float)$t['w'][$a]) < 0.005) {
+            $a++;
+        }
+        $e = $n - 1;
+        while ($e >= $a && abs((float)$t['w'][$e]) < 0.005) {
+            $e--;
+        }
+        $t['w0'] = $a;
+        $t['w'] = array_map(static fn($x): int|float => abs((float)$x) >= 100 ? (int)round((float)$x) : round((float)$x, 2), array_slice($t['w'], $a, max(0, $e - $a + 1)));
+        $fluesse = [];
+        foreach ($t['f'] as $i => $x) {
+            if (abs((float)$x) >= 0.005) {
+                $fluesse[] = [$i, round((float)$x, 2)];
+            }
+        }
+        $t['f'] = $fluesse;
+    }
+    unset($t);
+    $v['schlank'] = 1;
+    return $v;
+}
+
+/** Kurzfassung für die Übersicht: Summe aller Titel ab dem sichtbaren Start, Zahlungen und Dividenden dünn besetzt. */
+function verlaufKurz(array $v): array
+{
+    $n = count($v['punkte']);
+    $s0 = (int)$v['start'];
+    $summe = array_fill(0, $n, 0.0);
+    $fluss = array_fill(0, $n, 0.0);
+    $div = array_fill(0, $n, 0.0);
+    foreach ($v['titel'] as $t) {
+        foreach ($t['w'] as $i => $x) {
+            $summe[$i] += (float)$x;
+        }
+        foreach ($t['f'] as $i => $x) {
+            $fluss[$i] += (float)$x;
+        }
+        foreach ($t['dv'] as [$i, $b]) {
+            $div[$i] += (float)$b;
+        }
+    }
+    $duenn = static function (array $reihe) use ($s0): array {
+        $erg = [];
+        foreach ($reihe as $i => $x) {
+            if ($i > $s0 && abs($x) >= 0.005) {
+                $erg[] = [$i - $s0, round($x, 2)];
+            }
+        }
+        return $erg;
+    };
+    return ['von' => $v['von'], 'bis' => $v['bis'], 'zeit' => time(), 'punkte' => array_slice($v['punkte'], $s0),
+        'wert' => array_map(static fn(float $x): int => (int)round($x), array_slice($summe, $s0)), 'fluss' => $duenn($fluss), 'div' => $duenn($div)];
+}
+
+/**
+ * Depot-Verlauf mit Zwischenspeicher. Ein gespeichertes Ergebnis kommt sofort – auch ein
+ * älteres oder eines von gestern ('veraltet': dann rechnet der Browser im Hintergrund neu).
+ * Je Zeitraum, Vorlauf und Vergleich gibt es genau einen Eintrag.
+ */
+function verlaufBerechnen(array $d, string $zeitraum, string $von, string $bis, int $vorlauf, string $vergleich, bool $neu,
+    float $budget = 8.0, float $auffrischen = 1.5): array
+{
+    $stand = verlaufStand($d);
+    $frei = !in_array($zeitraum, FZ_VERLAUF_ZEITRAEUME, true);
+    $schluessel = 'verlauf-erg:' . md5((string)json_encode([$frei ? $von . '|' . $bis : $zeitraum, $vorlauf, $vergleich]));
+    $kennung = md5((string)json_encode([$von, $bis, $vorlauf, $vergleich, $stand]));
+    if (!$neu) {
+        $c = cacheLesen($schluessel, 900);
+        if ($c !== null && is_array($c['wert']) && !empty($c['wert']['fertig'])) {
+            $passt = ($c['wert']['kennung'] ?? '') === $kennung;
+            return ['alter' => time() - (int)$c['zeit'], 'veraltet' => !$passt || !$c['frisch']] + $c['wert'];
+        }
+    }
+    $v = depotVerlauf($d, $von, $bis, $budget, $vorlauf, $vergleich, $auffrischen);
+    if (!$v['fertig']) {
+        return $v;
+    }
+    if (!$frei) {
+        $kurz = verlaufKurz($v);
+        $kurz['kennung'] = md5((string)json_encode([$von, $bis, $stand]));
+        cacheSchreiben('verlauf-kurz:' . $zeitraum, $kurz);
+    }
+    $v = verlaufSchlank($v);
+    $v['kennung'] = $kennung;
+    cacheSchreiben($schluessel, $v);
+    return ['alter' => 0, 'veraltet' => false] + $v;
+}
+
+/** Kurzfassung für die Übersicht aus dem Zwischenspeicher (sofort, ohne zu rechnen). */
+function verlaufFuerUebersicht(array $d): ?array
+{
+    if (empty($d['broker']['traderepublic']['verlauf']) && empty($d['broker']['etoro_auszug']['segmente'])) {
+        return null;
+    }
+    $z = (string)($d['einstellungen']['uebersicht_zeitraum'] ?? '1j');
+    $z = in_array($z, FZ_VERLAUF_ZEITRAEUME, true) ? $z : '1j';
+    [$von, $bis] = verlaufGrenzen($z, verlaufBeginn($d));
+    $c = cacheLesen('verlauf-kurz:' . $z, 900);
+    $daten = $c !== null && is_array($c['wert']) ? $c['wert'] : null;
+    $passt = $daten !== null && ($daten['kennung'] ?? '') === md5((string)json_encode([$von, $bis, verlaufStand($d)]));
+    return ['zeitraum' => $z, 'daten' => $daten, 'veraltet' => !$passt || !$c['frisch']];
+}
+
+/**
+ * Für den Cron: aktuelle Kurse holen, Kursverläufe um die letzten Tage ergänzen und die
+ * Ansichten der Übersicht und des Depot-Verlaufs vorrechnen – damit beim Öffnen nichts lädt.
+ */
+function verlaufAufwaermen(float $budget): array
+{
+    $start = microtime(true);
+    $d = datenLaden();
+    if (empty($d['broker']['traderepublic']['verlauf']) && empty($d['broker']['etoro_auszug']['segmente'])) {
+        return ['verlauf' => 'keine Buchungen'];
+    }
+    $titel = verlaufTitel($d);
+    $boden = verlaufBoden($d);
+    $bedarf = [];
+    foreach ($titel as $s => $t) {
+        $erster = max($boden, titelBeginn($t) - 20 * 86400);
+        $bedarf[$s] = [$erster, $erster];
+    }
+    $zuletzt = (array)($d['einstellungen']['verlauf_zuletzt'] ?? []);
+    $vergleich = (string)($zuletzt['vergleich'] ?? '');
+    if ($vergleich !== '') {
+        $bedarf[$vergleich] = [$boden, $boden];
+    }
+    $rest = static fn(): float => $budget - (microtime(true) - $start);
+    $offen = historienLaden($bedarf, max(5.0, $rest() * 0.4), max(5.0, $rest() * 0.5));
+    // Devisen der Titel (aus den gespeicherten Verläufen)
+    $fx = ['EURUSD=X' => [$boden, $boden]];
+    foreach (array_keys($bedarf) as $s) {
+        $w = waehrungBasis((string)(historieGecacht((string)$s, PHP_INT_MAX)['w'] ?? ''));
+        if ($w !== '' && $w !== 'EUR') {
+            $fx['EUR' . $w . '=X'] = [$boden, $boden];
+        }
+    }
+    historienLaden($fx, 5.0, 5.0);
+    // aktuelle Kurse – daraus kommt der heutige Wert
+    if ($rest() > 15) {
+        yahooKurse(array_merge(array_keys($bedarf), array_keys($fx)));
+    }
+    $gerechnet = [];
+    $d = datenLaden();
+    $z = (string)($d['einstellungen']['uebersicht_zeitraum'] ?? '1j');
+    $ansichten = [[in_array($z, FZ_VERLAUF_ZEITRAEUME, true) ? $z : '1j', 0, '']];
+    if (in_array((string)($zuletzt['zeitraum'] ?? ''), FZ_VERLAUF_ZEITRAEUME, true)) {
+        $ansichten[] = [(string)$zuletzt['zeitraum'], (int)($zuletzt['vorlauf'] ?? 100), $vergleich];
+    }
+    foreach ($ansichten as [$zr, $vl, $vg]) {
+        if ($rest() < 8) {
+            break;
+        }
+        [$von, $bis] = verlaufGrenzen($zr, verlaufBeginn($d));
+        $v = verlaufBerechnen($d, $zr, $von, $bis, $vl, $vg, true, max(3.0, $rest() - 5), 0.0);
+        $gerechnet[] = $zr . ($v['fertig'] ? '' : ' (fehlt noch)');
+    }
+    return ['verlauf' => ['fehlend' => $offen, 'gerechnet' => $gerechnet, 'sekunden' => round(microtime(true) - $start, 1)]];
 }

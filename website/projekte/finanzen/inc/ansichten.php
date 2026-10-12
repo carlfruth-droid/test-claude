@@ -359,7 +359,7 @@ function suchfeld(string $wert = '', bool $gross = false): string
 // Übersicht
 // ---------------------------------------------------------------------------
 
-function seiteUebersicht(array $d, array $kurse, ?array $depot): string
+function seiteUebersicht(array $d, array $kurse, ?array $depot, ?array $verlaufKurz = null): string
 {
     $heute = date('Y-m-d');
     $hinweise = [];
@@ -410,6 +410,21 @@ function seiteUebersicht(array $d, array $kurse, ?array $depot): string
       <span>Gesamt <b class="<?= klasse($g['gv']) ?>"><?= e(($g['gv'] > 0 ? '+' : '') . geld($g['gv'])) ?></b> <?= $g['einstand'] > 0 ? '(' . proz($g['gv'] / $g['einstand'], 1, true) . ')' : '' ?></span>
     </span>
   </a>
+<?php endif; ?>
+<?php if ($verlaufKurz !== null): ?>
+  <section class="karte depot-verlauf-kurz" data-depot-kurz>
+    <div class="dvk-kopf">
+      <span class="karten-titel"><?= ico('kurve') ?> Depot-Verlauf</span>
+      <a class="knopf-text klein" href="<?= e(url(['seite' => 'verlauf'])) ?>">Ganzer Verlauf →</a>
+    </div>
+    <div class="chips klein-chips" role="group" aria-label="Zeitraum">
+      <?php foreach (['1w' => '1 W', '1m' => '1 M', '6m' => '6 M', '1j' => '1 J', '3j' => '3 J', 'max' => 'Max'] as $k => $t): ?><button type="button" class="chip<?= $k === $verlaufKurz['zeitraum'] ? ' aktiv' : '' ?>" data-dvk-zeitraum="<?= e($k) ?>"><?= e($t) ?></button><?php endforeach; ?>
+    </div>
+    <div class="chart dvk-chart" data-dvk-chart><?= $verlaufKurz['daten'] === null ? '<p class="leer"><span class="kreisel"></span> Verlauf wird berechnet …</p>' : '' ?></div>
+    <div class="raster" data-dvk-zahlen></div>
+    <p class="klein leise" data-dvk-stand></p>
+    <script type="application/json" id="dvk-daten"><?= json_encode($verlaufKurz, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
+  </section>
 <?php endif; ?>
 <?php if ($d['firmen'] === []): ?>
   <section class="karte willkommen">
