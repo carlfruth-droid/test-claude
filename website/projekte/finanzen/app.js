@@ -1396,11 +1396,19 @@
     var sichtbar = function () {
       return vDaten.titel.filter(function (t) { return vZustand.quelle === 'alle' || t.quellen.indexOf(vZustand.quelle) >= 0; });
     };
-    var gewaehlt = function () { return sichtbar().filter(function (t) { return !vZustand.aus[t.id]; }); };
+    // Auswahl: entweder „alle außer …“ (aus) oder „nur diese …“ (nurIds) – Letzteres bleibt auch in
+    // anderen Zeiträumen eindeutig, wenn dort weitere Titel dazukommen
+    var istGewaehlt = function (id) { return vZustand.nurIds ? !!vZustand.nurIds[id] : !vZustand.aus[id]; };
+    var waehlen = function (id, an) {
+      if (vZustand.nurIds) { if (an) { vZustand.nurIds[id] = 1; } else { delete vZustand.nurIds[id]; } }
+      else if (an) { delete vZustand.aus[id]; } else { vZustand.aus[id] = 1; }
+    };
+    var gewaehlt = function () { return sichtbar().filter(function (t) { return istGewaehlt(t.id); }); };
 
     var nurDiesen = function (id) {
       vZustand.aus = {};
-      vDaten.titel.forEach(function (x) { if (x.id !== id) { vZustand.aus[x.id] = 1; } });
+      vZustand.nurIds = {};
+      vZustand.nurIds[id] = 1;
       speichern(); zeigen();
     };
     var kachel = function (titel, wert, unter, erklaerung) {
@@ -1483,7 +1491,18 @@
       }
       geschaefte.sort(function (a, b) { return a.t - b.t; });
       if (titelEl) {
-        titelEl.textContent = normiert ? 'Zeitgewichtete Rendite gegen ' + vName : (P ? 'Wert der Auswahl gegen gleiche Zahlungen in ' + vName : 'Wert der Auswahl');
+        var wasWert = auswahl.length === alle.length ? 'Wert aller Titel' : (auswahl.length === 1 ? 'Wert: ' + auswahl[0].name : 'Wert von ' + auswahl.length + ' Titeln');
+        titelEl.textContent = normiert ? 'Zeitgewichtete Rendite gegen ' + vName : (P ? wasWert + ' gegen gleiche Zahlungen in ' + vName : wasWert);
+      }
+      // Hinweis, wenn nicht alle Titel gezeigt werden – sonst wirkt der Wert unerklärlich klein
+      var hinweisEl = $('[data-verlauf-auswahl]', vb);
+      if (!hinweisEl) { hinweisEl = document.createElement('div'); hinweisEl.setAttribute('data-verlauf-auswahl', ''); diagramm.parentNode.insertBefore(hinweisEl, diagramm); }
+      if (auswahl.length < alle.length) {
+        hinweisEl.className = 'hinweis verlauf-auswahl';
+        hinweisEl.innerHTML = '<span>Gezeigt werden nur <b>' + auswahl.length + ' von ' + alle.length + '</b> Titeln' + (auswahl.length && auswahl.length <= 3 ? ': ' + esc(auswahl.map(function (t) { return t.name; }).join(', ')) : '') + '.</span> <button type="button" class="knopf-text klein">Alle Titel zeigen</button>';
+        $('button', hinweisEl).onclick = function () { vZustand.nurIds = null; vZustand.aus = {}; speichern(); zeigen(); };
+      } else {
+        hinweisEl.className = ''; hinweisEl.innerHTML = '';
       }
       linienChips($('[data-linien="verlauf"]'), 'verlauf', VERLAUF_LINIEN.filter(function (d) { return !(normiert && d.k === 'einsatz'); }), vLinien, linienNeu);
       linienChart(diagramm, {
@@ -1545,13 +1564,13 @@
       var zeile = function (t) {
         var e = auswerten([t]);
         var li = document.createElement('li');
-        li.innerHTML = '<label><input type="checkbox"' + (vZustand.aus[t.id] ? '' : ' checked') + '><span><strong></strong><small></small></span></label>'
+        li.innerHTML = '<label><input type="checkbox"' + (istGewaehlt(t.id) ? ' checked' : '') + '><span><strong></strong><small></small></span></label>'
           + '<span class="rechts"><b>' + euro(e.v1) + '</b><small class="' + klasseVon(e.gewinn) + '">' + vorz(e.gewinn) + ' (' + prozent(e.rendite) + ')</small></span>'
           + '<span class="vl-knoepfe"><button type="button" class="knopf-text klein" title="Nur diesen Titel zeigen">nur</button>'
           + '<a class="knopf-text klein" href="' + esc(firmaLink(t.symbol)) + '" title="Firma öffnen" aria-label="' + esc(t.name) + ' öffnen">↗</a></span>';
         $('strong', li).textContent = t.name;
         $('small', li).textContent = t.symbol + ' · ' + t.quellen.map(function (x) { return x === 'etoro' ? 'eToro' : 'Trade Republic'; }).join(' + ') + (t.luecke ? ' · Kurse lückenhaft' : '');
-        $('input', li).addEventListener('change', function (ev) { if (ev.target.checked) { delete vZustand.aus[t.id]; } else { vZustand.aus[t.id] = 1; } speichern(); zeigen(); });
+        $('input', li).addEventListener('change', function (ev) { waehlen(t.id, ev.target.checked); speichern(); zeigen(); });
         $('button', li).addEventListener('click', function () { nurDiesen(t.id); vb.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
         liste.appendChild(li);
       };
@@ -1647,7 +1666,7 @@
                 speichern(); history.replaceState(null, '', '?seite=verlauf'); laden(); return;
               }
             }
-            if (vZustand.nur) { var nur = vZustand.nur; delete vZustand.nur; if (j.titel.some(function (t) { return t.id === nur; })) { vZustand.aus = {}; j.titel.forEach(function (t) { if (t.id !== nur) { vZustand.aus[t.id] = 1; } }); speichern(); } }
+            if (vZustand.nur) { var nur = vZustand.nur; delete vZustand.nur; if (j.titel.some(function (t) { return t.id === nur; })) { vZustand.aus = {}; vZustand.nurIds = {}; vZustand.nurIds[nur] = 1; speichern(); } }
             if (!j.titel.length) { diagramm.innerHTML = '<p class="leer">In diesem Zeitraum waren keine Titel im Depot.</p>'; kennz.innerHTML = ''; liste.innerHTML = ''; stand.textContent = ''; return; }
             zeigen();
           })
@@ -1677,7 +1696,7 @@
     $$('[data-verlauf-alle]').forEach(function (k) {
       k.addEventListener('click', function () {
         var an = k.getAttribute('data-verlauf-alle') === '1';
-        sichtbar().forEach(function (t) { if (an) { delete vZustand.aus[t.id]; } else { vZustand.aus[t.id] = 1; } });
+        if (an) { vZustand.nurIds = null; vZustand.aus = {}; } else { vZustand.aus = {}; vZustand.nurIds = {}; }
         speichern(); zeigen();
       });
     });
