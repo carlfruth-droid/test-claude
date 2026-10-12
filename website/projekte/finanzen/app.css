@@ -623,3 +623,14 @@ a.firmenlink:hover { color: var(--akzent); text-decoration-color: currentColor; 
 .aehnliche li > button { flex: none; font-size: 1.15rem; padding: 6px 2px 6px 12px; }
 .vl-knoepfe { display: flex; flex-direction: column; align-items: center; flex: none; }
 .vl-knoepfe a.knopf-text { font-size: 1rem; }
+
+/* ---------- Übersicht: Depot-Verlauf ---------- */
+.dvk-kopf { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.dvk-kopf .karten-titel { margin-bottom: 0; }
+.dvk-kopf .knopf-text { padding: 4px 0; }
+.depot-verlauf-kurz .chips { margin: 4px 0 6px; }
+.chart.dvk-chart { height: 170px; }
+.depot-verlauf-kurz .chart-leiste { margin-top: 4px; }
+.depot-verlauf-kurz .cl-info { min-height: 1.6em; }
+.depot-verlauf-kurz .raster { margin-top: 6px; }
+.depot-verlauf-kurz [data-dvk-stand] { margin: 6px 0 0; }

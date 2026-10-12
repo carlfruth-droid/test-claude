@@ -490,8 +490,10 @@
   var vorzeichen = function (z) { return z > 0 ? '+' : (z < 0 ? '−' : ''); };
   // Anteil 0,123 → „+12,3 %“
   // geschützte Leerzeichen und Bindestriche: „+12,3 %“ und „%‑Punkte“ brechen nicht um
-  var anteilText = function (z, stellen) { return hat(z) ? vorzeichen(z) + zahlDe(Math.abs(z) * 100, stellen === undefined ? 1 : stellen) + '\u00a0%' : '–'; };
-  var punkteText = function (z) { return hat(z) ? vorzeichen(z) + zahlDe(Math.abs(z) * 100, 1) + '\u00a0%\u2011Punkte' : '–'; };
+  // Vorzeichen nur, wenn die gerundete Zahl nicht 0 ist (kein „−0 %“)
+  var mitZeichen = function (z, stellen) { var t = zahlDe(Math.abs(z) * 100, stellen); return (/[1-9]/.test(t) ? vorzeichen(z) : '') + t; };
+  var anteilText = function (z, stellen) { return hat(z) ? mitZeichen(z, stellen === undefined ? 1 : stellen) + '\u00a0%' : '–'; };
+  var punkteText = function (z) { return hat(z) ? mitZeichen(z, 1) + '\u00a0%\u2011Punkte' : '–'; };
   var klasseZahl = function (z) { return !hat(z) ? '' : (z > 1e-9 ? 'plus' : (z < -1e-9 ? 'minus' : '')); };
   var mitVorzeichen = function (fmt, z) { return vorzeichen(z) + fmt(Math.abs(z)); };
   var dauerText = function (sek) {
@@ -562,6 +564,34 @@
     var b = (m * sxy - sx * sy) / nenner, a = (sy - b * sx) / m;
     return { punkte: punkte.map(function (p) { return [p[0], Math.exp(a + b * jahr(p[0]))]; }), proJahr: Math.exp(b) - 1 };
   }
+  // Zeitgewichtete Rendite als Index (Start = 1): je Abschnitt die Wertänderung ohne Käufe/Verkäufe, Dividenden als Ertrag
+  function twrIndex(summe, fl, dvP, s0) {
+    var n = summe.length, idx = new Array(n).fill(null);
+    idx[s0] = 1;
+    for (var i = s0 + 1; i < n; i++) {
+      var v0 = summe[i - 1], f = fl[i] || 0, r = 0;
+      var nenner = v0 > 1 ? v0 + Math.max(f, 0) / 2 : (f > 1 ? f : 0);
+      if (nenner > 1) { r = (summe[i] - v0 - f + (dvP[i] || 0)) / nenner; }
+      if (!isFinite(r) || r < -0.95 || r > 10) { r = 0; }
+      idx[i] = idx[i - 1] * (1 + r);
+    }
+    return idx;
+  }
+  var euroFmt = function (z) { return z.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: Math.abs(z) >= 1000 ? 0 : 2 }); };
+  // Antwort mit dünn besetzten Werten (verlaufSchlank) wieder auf volle Länge bringen
+  function verlaufAufblasen(j) {
+    if (!j.schlank) { return j; }
+    var n = j.punkte.length;
+    j.titel.forEach(function (t) {
+      var w = new Array(n).fill(0), f = new Array(n).fill(0);
+      for (var i = 0; i < t.w.length; i++) { w[t.w0 + i] = t.w[i]; }
+      (t.f || []).forEach(function (x) { f[x[0]] = x[1]; });
+      t.w = w; t.f = f;
+    });
+    j.schlank = 0;
+    return j;
+  }
+
   // Höchster und tiefster Schlusskurs der letzten 365 Tage
   function hochTief(reihe) {
     if (!reihe.length) { return null; }
@@ -749,14 +779,14 @@
     if (!leiste) { leiste = document.createElement('div'); leiste.className = 'chart-leiste'; chart.parentNode.insertBefore(leiste, chart.nextSibling); }
     var markenIdx = Object.keys(jePunkt).map(Number).sort(function (p, q) { return p - q; });
     var hatMarken = markenIdx.length > 0;
-    leiste.innerHTML = '<div class="cl-info" aria-live="polite"></div>'
+    leiste.innerHTML = '<div class="cl-info" aria-live="polite"></div>' + (o.kompakt ? '' : ''
       + '<div class="cl-knoepfe">'
       + (hatMarken ? '<button type="button" data-a="handel-zurueck" aria-label="Voriger Kauf oder Verkauf">⏮</button>' : '')
       + '<button type="button" data-a="zurueck" aria-label="Einen Punkt zurück">◀</button><button type="button" data-a="vor" aria-label="Einen Punkt vor">▶</button>'
       + (hatMarken ? '<button type="button" data-a="handel-vor" aria-label="Nächster Kauf oder Verkauf">⏭</button>' : '')
       + '<span class="cl-trenner"></span>'
       + '<button type="button" data-a="messen" aria-pressed="false">⟷ Messen</button>'
-      + '</div><div class="cl-mess" hidden></div>';
+      + '</div><div class="cl-mess" hidden></div>');
     var info = $('.cl-info', leiste), messEl = $('.cl-mess', leiste), messKnopf = $('[data-a="messen"]', leiste);
 
     // Zeitpunkt → nächster Punkt (null, wenn außerhalb des Zeitraums)
@@ -828,15 +858,17 @@
         [['x1', gx0], ['y1', gy0], ['x2', gx1], ['y2', gy1]].forEach(function (w) { gerade.setAttribute(w[0], w[1].toFixed(1)); });
         [['x1', xl], ['y1', gy0 + steigung * (xl - gx0)], ['x2', xr], ['y2', gy0 + steigung * (xr - gx0)]].forEach(function (w) { geradeWeiter.setAttribute(w[0], w[1].toFixed(1)); });
       }
-      messKnopf.classList.toggle('aktiv', messen);
-      messKnopf.setAttribute('aria-pressed', messen ? 'true' : 'false');
+      if (messKnopf) {
+        messKnopf.classList.toggle('aktiv', messen);
+        messKnopf.setAttribute('aria-pressed', messen ? 'true' : 'false');
+      }
       var welcher = messen ? z.griff : '';
       var aktivIdx = messen ? (welcher === 'a' ? ia : ib) : ic;
       if (messen && aktivIdx === null) { welcher = ia !== null ? 'a' : 'b'; aktivIdx = ia !== null ? ia : ib; }
       info.innerHTML = aktivIdx === null ? '<span>Tippe in den Chart, um Punkt A zu setzen.</span>'
         : (messen ? '<em class="cl-griff-name">' + welcher.toUpperCase() + '</em> ' : '') + wertInfo(aktivIdx);
-      messEl.hidden = !messen;
-      if (!messen) { return; }
+      if (messEl) { messEl.hidden = !messen; }
+      if (!messen || !messEl) { return; }
       if (beide) {
         var i0 = Math.min(ia, ib), i1 = Math.max(ia, ib);
         // A/B antippen wählt den Punkt, den ◀ ▶ und ⏮ ⏭ verschieben
@@ -1184,6 +1216,82 @@
     chart.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
+  // ---------- Übersicht: Depot-Verlauf sofort sichtbar ----------
+  var dvk = $('[data-depot-kurz]');
+  if (dvk) {
+    var dvkStart = null;
+    try { dvkStart = JSON.parse(($('#dvk-daten') || {}).textContent || 'null'); } catch (e) { dvkStart = null; }
+    var dvkChart = $('[data-dvk-chart]', dvk), dvkZahlen = $('[data-dvk-zahlen]', dvk), dvkStand = $('[data-dvk-stand]', dvk);
+    var dvkZeitraum = (dvkStart && dvkStart.zeitraum) || '1j', dvkNummer = 0, dvkLetzte = null;
+    var dvkKachel = function (titel, wert, unter) { return '<div class="kachel"><span class="k-titel">' + esc(titel) + '</span><span class="k-wert">' + wert + '</span>' + (unter ? '<span class="k-unter">' + unter + '</span>' : '') + '</div>'; };
+    var dvkZeigen = function (k, veraltet) {
+      dvkLetzte = [k, veraltet];
+      var n = k.punkte.length;
+      if (n < 2) { dvkChart.innerHTML = '<p class="leer">In diesem Zeitraum gab es keine Depotwerte.</p>'; dvkZahlen.innerHTML = ''; dvkStand.textContent = ''; return; }
+      var fl = new Array(n).fill(0), dv = new Array(n).fill(0);
+      (k.fluss || []).forEach(function (x) { fl[x[0]] = x[1]; });
+      (k.div || []).forEach(function (x) { dv[x[0]] = x[1]; });
+      var idx = twrIndex(k.wert, fl, dv, 0), eingesetzt = [], summe = k.wert[0], fluss = 0, div = 0;
+      for (var i = 0; i < n; i++) {
+        if (i > 0) { summe += fl[i]; fluss += fl[i]; div += dv[i]; }
+        eingesetzt.push([k.punkte[i], Math.round(summe)]);
+      }
+      var gewinn = k.wert[n - 1] - k.wert[0] - fluss + div, rendite = idx[n - 1] - 1, pj = proJahr(rendite, k.punkte[n - 1] - k.punkte[0]);
+      linienChart(dvkChart, { punkte: k.punkte.map(function (t, q) { return [t, k.wert[q]]; }), fmt: euroFmt, datumFmt: datumKurz, titel: 'Depotwert',
+        linien: [{ name: 'Eingesetzt', farbe: '#64748b', punkte: eingesetzt }], kompakt: true });
+      var farbig = function (z, text) { return '<span class="' + klasseZahl(z) + '">' + text + '</span>'; };
+      dvkZahlen.innerHTML = dvkKachel('Wert ' + datumKurz(k.punkte[n - 1]), euroFmt(k.wert[n - 1]), 'am ' + datumKurz(k.punkte[0]) + ': ' + euroFmt(k.wert[0]))
+        + dvkKachel('Gewinn im Zeitraum', farbig(gewinn, mitVorzeichen(euroFmt, gewinn)), 'Käufe − Verkäufe ' + mitVorzeichen(euroFmt, fluss))
+        + dvkKachel('Zeitgewichtete Rendite', farbig(rendite, anteilText(rendite)), pj !== null ? farbig(pj, anteilText(pj)) + ' pro Jahr' : '');
+      dvkStand.textContent = 'Stand ' + new Date(k.zeit * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' Uhr' + (veraltet ? ' · wird aktualisiert …' : '');
+    };
+    var dvkLaden = function (zeitraum, frisch) {
+      var nummer = ++dvkNummer, versuche = 0;
+      var schritt = function () {
+        var daten = new FormData();
+        daten.append('csrf', csrf); daten.append('zeitraum', zeitraum);
+        if (frisch) { daten.append('frisch', '1'); }
+        fetch('?api=verlauf_kurz' + (versuche ? '&roh=1' : ''), { method: 'POST', body: daten, credentials: 'same-origin' })
+          .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+          .then(function (j) {
+            if (nummer !== dvkNummer) { return; }
+            versuche = 0;
+            if (!j.fertig) {
+              if (!$('svg', dvkChart)) { dvkChart.innerHTML = '<p class="leer"><span class="kreisel"></span> Neue Kurse werden geladen … ' + Math.max(0, j.gesamt ? Math.round((1 - j.offen / j.gesamt) * 100) : 0) + ' %</p>'; }
+              schritt();
+              return;
+            }
+            if (j.leer || !j.daten) { dvkChart.innerHTML = '<p class="leer">Noch keine Buchungen importiert.</p>'; return; }
+            dvkZeigen(j.daten, j.veraltet && !frisch);
+            if (j.veraltet && !frisch) { dvkLaden(zeitraum, true); }
+          })
+          .catch(function () {
+            if (nummer !== dvkNummer) { return; }
+            if (++versuche < 3) { setTimeout(schritt, 2500); return; }
+            if (dvkLetzte) { dvkStand.textContent = dvkStand.textContent.replace(' · wird aktualisiert …', ''); } else { dvkChart.innerHTML = '<p class="leer">Der Verlauf konnte gerade nicht geladen werden.</p>'; }
+          });
+      };
+      schritt();
+    };
+    $$('[data-dvk-zeitraum]', dvk).forEach(function (k) {
+      k.addEventListener('click', function () {
+        dvkZeitraum = k.getAttribute('data-dvk-zeitraum');
+        $$('[data-dvk-zeitraum]', dvk).forEach(function (x) { x.classList.toggle('aktiv', x === k); });
+        dvkChart._zustand = {};
+        if (!$('svg', dvkChart)) { dvkChart.innerHTML = '<p class="leer"><span class="kreisel"></span> Verlauf wird berechnet …</p>'; }
+        dvkLaden(dvkZeitraum, false);
+      });
+    });
+    if (dvkStart && dvkStart.daten) {
+      dvkZeigen(dvkStart.daten, dvkStart.veraltet);
+      if (dvkStart.veraltet) { dvkLaden(dvkZeitraum, true); }
+    } else {
+      dvkLaden(dvkZeitraum, true);
+    }
+    var dvkBreite = dvkChart.clientWidth;
+    window.addEventListener('resize', function () { if (dvkLetzte && Math.abs(dvkChart.clientWidth - dvkBreite) > 20) { dvkBreite = dvkChart.clientWidth; dvkZeigen(dvkLetzte[0], dvkLetzte[1]); } });
+  }
+
   // ---------- Depot-Verlauf: Zeitraum und Titel frei wählen ----------
   var vb = $('[data-verlauf]');
   if (vb) {
@@ -1274,19 +1382,6 @@
       var basis = gewicht > 0 ? kapital / gewicht : Math.max(v0, eingesetzt);
       return { summe: summe, v0: v0, v1: v1, fluss: fluss, div: div, gewinn: gewinn, rendite: basis > 1 ? gewinn / basis : null };
     };
-    // Zeitgewichtete Rendite als Index (Start = 1): je Abschnitt die Wertänderung ohne Käufe/Verkäufe, Dividenden als Ertrag
-    var zeitgewichtet = function (summe, fl, dvP, s0) {
-      var n = summe.length, idx = new Array(n).fill(null);
-      idx[s0] = 1;
-      for (var i = s0 + 1; i < n; i++) {
-        var v0 = summe[i - 1], f = fl[i], r = 0;
-        var nenner = v0 > 1 ? v0 + Math.max(f, 0) / 2 : (f > 1 ? f : 0);
-        if (nenner > 1) { r = (summe[i] - v0 - f + dvP[i]) / nenner; }
-        if (!isFinite(r) || r < -0.95 || r > 10) { r = 0; }
-        idx[i] = idx[i - 1] * (1 + r);
-      }
-      return idx;
-    };
     // Musterdepot: dieselben Zahlungen zu denselben Zeitpunkten im Vergleichswert (Kurse P in Euro), ab Punkt ab
     var gleicheZahlungen = function (summe, fl, P, ab, bis) {
       var werte = new Array(summe.length).fill(null), preis = P[ab], stueck = summe[ab] / preis;
@@ -1325,7 +1420,7 @@
         for (var i = 1; i < n; i++) { if (t.f[i]) { fl[i] += t.f[i]; } }
         (t.dv || []).forEach(function (x) { if (x[0] < n) { dvP[x[0]] += x[1]; } });
       });
-      var twr = zeitgewichtet(k.summe, fl, dvP, s0);
+      var twr = twrIndex(k.summe, fl, dvP, s0);
       // Vergleichswert in Euro je Rasterpunkt
       var vz = vVergleich ? vVergleich.zustand() : null;
       var vgl = vDaten.vergleich && !vDaten.vergleich.fehler && vz && vz.s === vDaten.vergleich.symbol ? vDaten.vergleich : null;
@@ -1441,7 +1536,8 @@
           + kachel('Gleiche Zahlungen in ' + vName, farbig(ev.sim, vorz(ev.sim)), 'Unterschied zu dir ' + farbig(ev.gewinn - ev.sim, vorz(ev.gewinn - ev.sim)), INFO.sim);
       }
       kennz.innerHTML = kacheln;
-      stand.textContent = (auswahl.length === 1 ? auswahl[0].name + ' – ' : '') + auswahl.length + ' von ' + alle.length + ' Titeln ausgewählt · ' + tag(zeiten[s0]) + ' bis ' + tag(zeiten[n - 1]);
+      stand.textContent = (auswahl.length === 1 ? auswahl[0].name + ' – ' : '') + auswahl.length + ' von ' + alle.length + ' Titeln ausgewählt · ' + tag(zeiten[s0]) + ' bis ' + tag(zeiten[n - 1])
+        + (vDaten.veraltet ? ' · wird aktualisiert …' : '');
       var q = (sucheFeld && sucheFeld.value || '').toLowerCase();
       liste.innerHTML = '';
       var passt = function (t) { return !q || (t.name + ' ' + t.symbol).toLowerCase().indexOf(q) >= 0; };
@@ -1503,36 +1599,44 @@
       if (!liste.children.length) { liste.innerHTML = '<li class="leer">Keine Titel gefunden.</li>'; }
     };
 
-    var laden = function () {
+    // still: im Hintergrund neu rechnen und die Anzeige danach austauschen (ohne „wird geladen“)
+    var laden = function (still) {
       var g = vZustand.zeitraum === 'frei' ? [vZustand.von, vZustand.bis] : zeitraumGrenzen(vZustand.zeitraum);
       vonFeld.value = g[0]; bisFeld.value = g[1];
       $$('[data-zeitraum]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-zeitraum') === vZustand.zeitraum); });
       $$('[data-quelle]').forEach(function (k) { k.classList.toggle('aktiv', k.getAttribute('data-quelle') === vZustand.quelle); });
-      diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Kurse werden geladen …</p>';
-      kennz.innerHTML = ''; stand.textContent = ''; vDaten = null;
-      // Messmodus und Messpunkte bleiben stehen, sofern sie im neuen Zeitraum liegen
-      var bisher = diagramm._zustand || {};
-      diagramm._zustand = { messen: bisher.messen, a: bisher.a, b: bisher.b, griff: bisher.griff };
+      if (!still) {
+        diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Verlauf wird geladen …</p>';
+        kennz.innerHTML = ''; stand.textContent = ''; vDaten = null;
+        // Messmodus und Messpunkte bleiben stehen, sofern sie im neuen Zeitraum liegen
+        var bisher = diagramm._zustand || {};
+        diagramm._zustand = { messen: bisher.messen, a: bisher.a, b: bisher.b, griff: bisher.griff };
+      }
       var vergleichSymbol = vVergleich ? (vVergleich.zustand().s || '') : '';
       var vorlauf = vorlaufTage();
       var versuche = 0, nummer = ++ladeNummer;
       var schritt = function () {
         var daten = new FormData();
         daten.append('csrf', csrf); daten.append('von', g[0]); daten.append('bis', g[1]); daten.append('vorlauf', String(vorlauf)); daten.append('vergleich', vergleichSymbol);
-        fetch('?api=verlauf', { method: 'POST', body: daten, credentials: 'same-origin' })
+        daten.append('zeitraum', vZustand.zeitraum);
+        if (still) { daten.append('frisch', '1'); }
+        // nach einem Fehlschlag ungepackt anfordern
+        fetch('?api=verlauf' + (versuche ? '&roh=1' : ''), { method: 'POST', body: daten, credentials: 'same-origin' })
           .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
           .then(function (j) {
             if (nummer !== ladeNummer) { return; } // inzwischen anderer Zeitraum gewählt
             versuche = 0;
             if (!j.fertig) {
               var proz = j.gesamt ? Math.round((1 - j.offen / j.gesamt) * 100) : 0;
-              diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Historische Kurse werden geladen … ' + Math.max(0, proz) + ' %</p>';
+              if (!still || !vDaten) { diagramm.innerHTML = '<p class="leer"><span class="kreisel"></span> Neue Kurse werden geladen … ' + Math.max(0, proz) + ' %</p>'; }
               schritt();
               return;
             }
+            verlaufAufblasen(j);
             j.vorlaufTage = vorlauf;
             j.vergleichSymbol = vergleichSymbol;
             vDaten = j;
+            if (j.veraltet && !still) { setTimeout(function () { if (nummer === ladeNummer) { laden(true); } }, 50); }
             if (vVergleich) { vVergleich.status(j.vergleich && j.vergleich.fehler ? j.vergleich.fehler : '', true); }
             if (vZustand.titelSprung) {
               var ziel = (j.katalog || []).filter(function (t) { return t.id === vZustand.titelSprung; })[0];

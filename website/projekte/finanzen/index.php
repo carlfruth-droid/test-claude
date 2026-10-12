@@ -42,6 +42,7 @@ if (isset($_GET['cron'])) {
         exit;
     }
     if (function_exists('set_time_limit')) { @set_time_limit(170); }
+    $cronStart = microtime(true);
     if (isset($_GET['diagnose'])) {
         echo json_encode(diagnose(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
@@ -56,6 +57,8 @@ if (isset($_GET['cron'])) {
         // Falls die Depotseite während der Zuordnung geschlossen wurde
         $erg['zuordnung_offen'] = depotZuordnen(60.0);
     }
+    // Depot-Verlauf vorwärmen: Kurse ergänzen und Übersicht/Verlauf vorrechnen, damit beim Öffnen nichts lädt
+    $erg += verlaufAufwaermen(min(70.0, max(10.0, 150.0 - (microtime(true) - $cronStart))));
     cacheAufraeumen();
     // Push-Meldungen, die ntfy vom Webserver nicht angenommen hat, verschickt der Aufrufer (GitHub)
     $erg['ntfy'] = ntfyWarteschlangeHolen();
@@ -176,6 +179,20 @@ function symbolAusAnfrage(): string
 {
     $s = strtoupper(trim((string)($_POST['s'] ?? $_GET['s'] ?? '')));
     return preg_match('/^[A-Z0-9.\-^=]{1,24}$/', $s) ? $s : '';
+}
+
+/** JSON ausgeben – gepackt, wenn der Browser das kann (der Webserver selbst komprimiert nicht). */
+function jsonAusgeben(array $daten): void
+{
+    $json = (string)json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+    if (strlen($json) > 8000 && !isset($_GET['roh']) && str_contains((string)($_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''), 'gzip')
+        && function_exists('gzencode') && !ini_get('zlib.output_compression')) {
+        header('Content-Encoding: gzip');
+        header('Vary: Accept-Encoding');
+        $json = (string)gzencode($json, 5);
+    }
+    header('Content-Length: ' . strlen($json));
+    echo $json;
 }
 
 /** Ändert eine gespeicherte Firma; legt sie bei Bedarf an. */
@@ -643,7 +660,48 @@ if (isset($_GET['api'])) {
         $vorlauf = max(0, min(300, (int)($_POST['vorlauf'] ?? 0))); // Vorlauf für gleitende Durchschnitte (bis Ø 200 Tage)
         $vergleich = strtoupper(trim((string)($_POST['vergleich'] ?? '')));
         $vergleich = preg_match('/^[A-Z0-9.\-^=]{1,24}$/', $vergleich) ? $vergleich : '';
-        echo json_encode(depotVerlauf(datenLaden(), $von, $bis, 8.0, $vorlauf, $vergleich), JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        $zeitraum = (string)($_POST['zeitraum'] ?? 'frei');
+        $d = datenLaden();
+        // fertige Ergebnisse kommen sofort; „frisch“ rechnet neu und ergänzt dabei ältere Kurse
+        $erg = verlaufBerechnen($d, $zeitraum, $von, $bis, $vorlauf, $vergleich, isset($_POST['frisch']), 8.0, isset($_POST['frisch']) ? 2.0 : 0.5);
+        $zuletzt = ['zeitraum' => $zeitraum, 'vorlauf' => $vorlauf, 'vergleich' => $vergleich];
+        if (in_array($zeitraum, FZ_VERLAUF_ZEITRAEUME, true) && ($d['einstellungen']['verlauf_zuletzt'] ?? null) !== $zuletzt) {
+            // für das Vorwärmen im Hintergrund merken
+            datenAendern(function (array &$d) use ($zuletzt): void {
+                $d['einstellungen']['verlauf_zuletzt'] = $zuletzt;
+            });
+        }
+        jsonAusgeben($erg);
+        exit;
+    }
+    if ($_GET['api'] === 'verlauf_kurz' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {
+        // Depot-Verlauf auf der Übersicht
+        session_write_close();
+        if (function_exists('set_time_limit')) { @set_time_limit(60); }
+        $z = (string)($_POST['zeitraum'] ?? '1j');
+        $z = in_array($z, FZ_VERLAUF_ZEITRAEUME, true) ? $z : '1j';
+        $d = datenLaden();
+        if (($d['einstellungen']['uebersicht_zeitraum'] ?? '1j') !== $z) {
+            datenAendern(function (array &$d) use ($z): void {
+                $d['einstellungen']['uebersicht_zeitraum'] = $z;
+            });
+            $d = datenLaden();
+        }
+        $u = verlaufFuerUebersicht($d);
+        if ($u === null) {
+            jsonAusgeben(['fertig' => true, 'leer' => true]);
+            exit;
+        }
+        if ($u['daten'] === null || ($u['veraltet'] && isset($_POST['frisch']))) {
+            [$von, $bis] = verlaufGrenzen($z, verlaufBeginn($d));
+            $v = verlaufBerechnen($d, $z, $von, $bis, 0, '', true, 8.0, 2.0);
+            if (!$v['fertig']) {
+                jsonAusgeben($v);
+                exit;
+            }
+            $u = verlaufFuerUebersicht($d);
+        }
+        jsonAusgeben(['fertig' => true] + (array)$u);
         exit;
     }
     if ($_GET['api'] === 'zuordnen' && $_SERVER['REQUEST_METHOD'] === 'POST' && csrfOk()) {
@@ -925,5 +983,5 @@ switch ($seite) {
     default:
         $kurse = yahooKurse(array_keys($d['firmen']));
         $depot = !empty($d['broker']) || array_filter($d['firmen'], static fn(array $f): bool => $f['depot'] !== []) ? depotUebersicht($d) : null;
-        seite('Übersicht', seiteUebersicht($d, $kurse, $depot), '', $d);
+        seite('Übersicht', seiteUebersicht($d, $kurse, $depot, verlaufFuerUebersicht($d)), '', $d);
 }
