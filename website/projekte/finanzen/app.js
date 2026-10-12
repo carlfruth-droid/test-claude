@@ -1306,7 +1306,7 @@
     var klasseVon = function (z) { return !hat(z) ? '' : (z > 0.004 ? 'plus' : (z < -0.004 ? 'minus' : '')); };
     var tag = datumKurz;
     var beginn = vb.getAttribute('data-beginn') || iso(new Date(heute.getFullYear() - 1, heute.getMonth(), heute.getDate()));
-    var vonFeld = $('[name=von]', vb.parentNode), bisFeld = $('[name=bis]', vb.parentNode);
+    var vonFeld = $('[data-verlauf-frei] [name=von]'), bisFeld = $('[data-verlauf-frei] [name=bis]');
     var firmaLink = function (symbol) { return '?seite=firma&s=' + encodeURIComponent(symbol); };
 
     var zeitraumGrenzen = function (z) {
@@ -1327,7 +1327,7 @@
     var speichern = function () { speicher.schreiben('fz-verlauf', JSON.stringify(vZustand)); };
 
     var stand = $('[data-verlauf-stand]', vb), diagramm = $('[data-verlauf-chart]', vb), kennz = $('[data-verlauf-kennzahlen]', vb);
-    var liste = $('[data-verlauf-liste]'), sucheFeld = $('[data-verlauf-suche]'), titelEl = $('[data-verlauf-titel]', vb);
+    var liste = $('[data-verlauf-liste]'), sucheFeld = $('[data-verlauf-suche]'), titelEl = $('[data-verlauf-titel]');
 
     var VERLAUF_LINIEN = [
       { k: 's30', name: 'Ø 30 Tage', farbe: '#d97706', tage: 30 },
@@ -1571,7 +1571,7 @@
         $('strong', li).textContent = t.name;
         $('small', li).textContent = t.symbol + ' · ' + t.quellen.map(function (x) { return x === 'etoro' ? 'eToro' : 'Trade Republic'; }).join(' + ') + (t.luecke ? ' · Kurse lückenhaft' : '');
         $('input', li).addEventListener('change', function (ev) { waehlen(t.id, ev.target.checked); speichern(); zeigen(); });
-        $('button', li).addEventListener('click', function () { nurDiesen(t.id); vb.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+        $('button', li).addEventListener('click', function () { nurDiesen(t.id); zumChart(); });
         liste.appendChild(li);
       };
       var letzter = n - 1;
@@ -1610,13 +1610,22 @@
           $('button', li).addEventListener('click', function () {
             var v = new Date((t.erster - 14 * 86400) * 1000), b = new Date(Math.min(Date.now(), (t.aktuell ? Date.now() / 1000 : t.letzter + 14 * 86400) * 1000));
             vZustand.zeitraum = 'frei'; vZustand.von = iso(v) < beginn ? beginn : iso(v); vZustand.bis = iso(b); vZustand.nur = t.id;
-            speichern(); laden(); vb.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            speichern(); laden(); zumChart();
           });
           liste.appendChild(li);
         });
       }
       if (!liste.children.length) { liste.innerHTML = '<li class="leer">Keine Titel gefunden.</li>'; }
+      // Kurzinfo in den zugeklappten Akkordeons
+      var zm = $('[data-verlauf-zeitraum-meta]'), tm = $('[data-verlauf-titel-meta]'), gm = $('#v-geschaefte .akk-titel');
+      if (zm) { zm.textContent = tag(zeiten[s0]) + ' – ' + tag(zeiten[n - 1]); }
+      if (tm) { tm.textContent = auswahl.length + ' von ' + alle.length; }
+      if (gm) { gm.textContent = 'Käufe und Verkäufe' + (geschaefte.length ? ' (' + geschaefte.length + ')' : ''); }
     };
+    // aufgeklappt: Chart in der richtigen Breite neu zeichnen
+    var chartAkk = $('#v-chart');
+    var zumChart = function () { var ziel = chartAkk || vb; if (chartAkk) { chartAkk.open = true; } ziel.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+    if (chartAkk) { chartAkk.addEventListener('toggle', function () { if (chartAkk.open && vDaten) { zeigen(); } }); }
 
     // still: im Hintergrund neu rechnen und die Anzeige danach austauschen (ohne „wird geladen“)
     var laden = function (still) {

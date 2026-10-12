@@ -1814,7 +1814,12 @@ function seiteVerlauf(array $d): string
 <?php if (!$hatDaten): ?>
   <?= leer('Noch keine Buchungen importiert. Lade unter „Depot“ deinen Trade-Republic-Export oder den eToro-Kontoauszug hoch.') ?>
 <?php else: ?>
-<section class="karte">
+<?php
+    $akkKopf = static fn(string $id, string $icon, string $titel, bool $offen, string $meta = ''): string =>
+        '<details class="akk" id="' . $id . '"' . ($offen ? ' open' : '') . '><summary>' . ico($icon, 'akk-ico') . '<span class="akk-titel"' . ($id === 'v-chart' ? ' data-verlauf-titel' : '') . '>' . e($titel) . '</span>'
+        . ($meta !== '' ? '<span class="akk-meta" ' . $meta . '></span>' : '') . ico('pfeil', 'akk-pfeil') . '</summary><div class="akk-inhalt">';
+?>
+<?= $akkKopf('v-zeitraum', 'kalender', 'Zeitraum & Depot', true, 'data-verlauf-zeitraum-meta') ?>
   <div class="chips" role="group" aria-label="Zeitraum">
     <?php foreach (['1t' => '1 T', '1w' => '1 W', '1m' => '1 M', '3m' => '3 M', '6m' => '6 M', 'ytd' => 'Seit 1.1.', '1j' => '1 J', '3j' => '3 J', '5j' => '5 J', 'max' => 'Max'] as $k => $t): ?><button type="button" class="chip" data-zeitraum="<?= e($k) ?>"><?= e($t) ?></button><?php endforeach; ?>
   </div>
@@ -1826,19 +1831,20 @@ function seiteVerlauf(array $d): string
   <div class="chips" role="group" aria-label="Depot">
     <?php foreach (['alle' => 'Alle Depots', 'traderepublic' => 'Trade Republic', 'etoro' => 'eToro'] as $k => $t): ?><button type="button" class="chip" data-quelle="<?= e($k) ?>"><?= e($t) ?></button><?php endforeach; ?>
   </div>
-</section>
-<section class="karte" data-verlauf data-beginn="<?= e(verlaufBeginn($d)) ?>">
-  <span class="karten-titel"><?= ico('kurve') ?> <span data-verlauf-titel>Wert der Auswahl</span></span>
-  <div class="chart verlauf-chart" data-verlauf-chart></div>
-  <div class="chips schnitte" data-linien="verlauf"></div>
-  <div class="vergleich-feld" data-vergleich="verlauf"></div>
-  <div class="raster" data-verlauf-kennzahlen></div>
-  <p class="klein leise" data-verlauf-stand></p>
+</div></details>
+<?= $akkKopf('v-chart', 'kurve', 'Wert der Auswahl', true) ?>
+  <div data-verlauf data-beginn="<?= e(verlaufBeginn($d)) ?>">
+    <div class="chart verlauf-chart" data-verlauf-chart></div>
+    <div class="chips schnitte" data-linien="verlauf"></div>
+    <div class="vergleich-feld" data-vergleich="verlauf"></div>
+    <div class="raster" data-verlauf-kennzahlen></div>
+    <p class="klein leise" data-verlauf-stand></p>
+  </div>
+</div></details>
+<?= $akkKopf('v-geschaefte', 'liste', 'Käufe und Verkäufe', false) ?>
   <div data-verlauf-geschaefte></div>
-  <p class="klein leise">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Die zeitgewichtete Rendite rechnet Käufe und Verkäufe heraus – damit ist der Vergleich mit einem Index fair. „⟷ Messen“: zwei Punkte antippen – eine Hilfsgerade verbindet sie – und Unterschied, Rendite und Dauer ablesen. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
-</section>
-<section class="karte">
-  <span class="karten-titel"><?= ico('liste') ?> Titel auswählen</span>
+</div></details>
+<?= $akkKopf('v-titel', 'depot', 'Titel auswählen', true, 'data-verlauf-titel-meta') ?>
   <input type="search" placeholder="Titel suchen …" data-verlauf-suche aria-label="Titel suchen">
   <div class="werkzeugleiste">
     <select data-verlauf-sort aria-label="Sortierung">
@@ -1848,7 +1854,10 @@ function seiteVerlauf(array $d): string
   </div>
   <div class="knopf-reihe"><button type="button" class="knopf-text" data-verlauf-alle="1">Alle auswählen</button><button type="button" class="knopf-text" data-verlauf-alle="0">Keine</button></div>
   <ul class="positionen verlauf-liste" data-verlauf-liste></ul>
-</section>
+</div></details>
+<?= $akkKopf('v-erklaerung', 'info', 'So wird gerechnet', false) ?>
+  <p class="klein">▲ Kauf, ▼ Verkauf. „Eingesetzt“ = Wert am Anfang plus Käufe minus Verkäufe. Gewinn = Wert am Ende − Wert am Anfang − (Käufe − Verkäufe) + Dividenden; die Prozentzahl bezieht den Gewinn auf das im Zeitraum durchschnittlich eingesetzte Kapital. Die zeitgewichtete Rendite rechnet Käufe und Verkäufe heraus – damit ist der Vergleich mit einem Index fair. „⟷ Messen“: zwei Punkte antippen – eine Hilfsgerade verbindet sie – und Unterschied, Rendite und Dauer ablesen. Ohne Bargeld; Optionsscheine und Zertifikate ohne Börsenkurs fehlen.</p>
+</div></details>
 <?php endif; ?>
 <?php
     return (string)ob_get_clean();
