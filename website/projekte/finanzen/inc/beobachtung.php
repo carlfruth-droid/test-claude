@@ -53,6 +53,25 @@ function beobVorlagen(): array
                     'Lithiumpreis bleibt auf dem Tief oder fällt weiter.'),
             ],
         ],
+        'pct' => [
+            'name' => 'Beispiel: PureCycle – Quartalszahlen-Check',
+            'titel' => 'Squeeze oder Absturz nach den Q3-Zahlen',
+            'these' => 'Entscheidend sind Umsatz, Verlust je Aktie und vor allem die Auslastung in Ironton. Springt der Kurs nachbörslich mit hohem Volumen über den Widerstand, decken Shortseller ein.',
+            'zahlencheck' => ['an' => true, 'us' => 'PCT', 'datum' => '2026-11-05', 'umsatz_min' => 8.28, 'eps_min' => -0.21, 'suchwort' => 'Ironton',
+                'auslastung_min' => 40.0, 'kapazitaet' => 107.0, 'kurs_trigger' => 3.35, 'vol_faktor' => 5.0,
+                'aktion_gruen' => 'Stop-Buy-Order bei 2,98 € für den nächsten Morgen im Broker scharfschalten; die restlichen 70 % investieren.',
+                'aktion_gelb' => 'Keine Aktion. Erste Tranche (30 %) halten und abwarten, ob der Markt am nächsten Tag Kraft sammelt.',
+                'aktion_rot' => 'Nichts tun. Darauf vorbereiten, dass am nächsten Morgen der Stop-Loss bei 2,45 € greift.'],
+            'signale' => [
+                $z('short', 'Short-Quote (USA)', 'short_quote', ['<', 15.0], ['>', 30.0]),
+                $z('dtc', 'Days to Cover', 'days_to_cover', ['<', 3.0], ['>', 8.0]),
+                $e('ironton', 'Ironton läuft stabil (Auslastung über 40–50 %)',
+                    'Stabile Auslastung über 40–50 % gemeldet, keine neuen Ausfälle.',
+                    'Neue Probleme, Stillstände oder Auslastung deutlich darunter.'),
+                $e('finanzierung', 'Finanzierung / Verwässerung', '',
+                    'Neue Aktien oder Wandelanleihen mit hoher Verwässerung.'),
+            ],
+        ],
         'short' => [
             'name' => 'Short-Squeeze-Kandidat',
             'titel' => 'Short-Squeeze möglich?',
@@ -720,6 +739,7 @@ function tagescheckAusfuehren(): array
             // Yahoo hat den Handelstag manchmal erst etwas später – bis 10 Uhr erneut versuchen
             if ($m !== null && ($m['art'] !== 'kein Handel' || $uhr >= 1000)) {
                 $st['morgen'] = $m + ['geprueft' => $heute, 'zeit' => time()];
+                $st['verlauf'] = tagescheckVerlauf($st, 'morgen', $st['morgen']);
                 $txt = 'ASX ' . date('d.m.', strtotime($m['datum'])) . ': Kurs ' . zahl($m['kurs'], 3) . ' ' . $m['w'] . ' (' . ($m['aend'] > 0 ? '+' : '') . zahl($m['aend'], 1) . ' %), Volumen '
                     . zahl($m['volumen'] / 1e6, 2) . ' Mio. = ' . zahl($m['faktor'], 1) . '× Ø (' . zahl($m['schnitt'] / 1e6, 2) . ' Mio.)';
                 $titel = ['squeeze' => '🔥 Squeeze-Verdacht', 'verkauf' => '⚠️ Starker Verkaufsdruck', 'meldung' => '📈 Hohes Volumen wegen Kapitalmaßnahme', 'volumen' => '👀 Ungewöhnlich hohes Volumen'][$m['art']] ?? '';
@@ -734,6 +754,7 @@ function tagescheckAusfuehren(): array
             $n = tagescheckNachmittag($tc);
             if ($n !== null) {
                 $st['nachmittag'] = $n + ['geprueft' => $heute, 'zeit' => time()];
+                $st['verlauf'] = tagescheckVerlauf($st, 'nachmittag', $st['nachmittag']);
                 if ($n['art'] !== 'ruhig') {
                     $meldungen[] = ($n['art'] === 'anstieg' ? '🚀 Europa zieht seit US-Eröffnung an' : '📉 Europa gibt seit US-Eröffnung nach') . ' – ' . $tc['eu'] . ' ' . zahl($n['kurs'], 3) . ' ' . $n['w']
                         . ', seit 15:30 ' . ($n['seit_1530'] > 0 ? '+' : '') . zahl($n['seit_1530'], 1) . ' %, Volumen-Tempo ' . zahl($n['tempo'], 1) . '× gegenüber vormittags'
@@ -770,6 +791,13 @@ function tagescheckAusfuehren(): array
     return ['tagescheck' => $erg];
 }
 
+/** Ergebnis vorne in den Verlauf (neueste zuerst, höchstens 60). */
+function tagescheckVerlauf(array $st, string $art, array $erg): array
+{
+    unset($erg['geprueft']);
+    return array_slice(array_merge([['check' => $art] + $erg], (array)($st['verlauf'] ?? [])), 0, 60);
+}
+
 /** Von Hand: beide Checks sofort rechnen und anzeigen – ohne Meldung, die geplanten Checks laufen trotzdem. */
 function tagescheckJetzt(string $symbol): bool
 {
@@ -794,9 +822,11 @@ function tagescheckJetzt(string $symbol): bool
         // geprueft bleibt, wie es war: der geplante Check meldet sich trotzdem
         if ($m !== null) {
             $st['morgen'] = $m + ['geprueft' => (string)($st['morgen']['geprueft'] ?? ''), 'zeit' => time()];
+            $st['verlauf'] = tagescheckVerlauf($st, 'morgen', $st['morgen'] + ['hand' => true]);
         }
         if ($n !== null) {
             $st['nachmittag'] = $n + ['geprueft' => (string)($st['nachmittag']['geprueft'] ?? ''), 'zeit' => time()];
+            $st['verlauf'] = tagescheckVerlauf($st, 'nachmittag', $st['nachmittag'] + ['hand' => true]);
         }
         $d['beobachtung']['firmen'][$symbol]['tc'] = $st;
     });
@@ -804,47 +834,64 @@ function tagescheckJetzt(string $symbol): bool
 }
 
 /**
- * Vulcan einmalig von selbst in die Beobachtung aufnehmen (mit Vorlage und Tagescheck).
- * Wird sie später entfernt, bleibt sie draußen.
+ * Vulcan und PureCycle einmalig von selbst in die Beobachtung aufnehmen (mit Vorlage und Checks).
+ * Wird eine davon später entfernt, bleibt sie draußen.
  */
 function beobVulcanStart(): void
 {
+    $starts = [
+        'vulcan' => ['such' => 'vulcan energy', 'symbol' => 'VUL.AX', 'name' => 'Vulcan Energy Resources Ltd', 'waehrung' => 'AUD'],
+        'pct' => ['such' => 'purecycle', 'symbol' => 'PCT', 'name' => 'PureCycle Technologies, Inc.', 'waehrung' => 'USD'],
+    ];
+    foreach ($starts as $vk => $x) {
+        beobAutoStart($vk, $x);
+    }
+}
+
+function beobAutoStart(string $vk, array $x): void
+{
     $d = datenLaden();
-    if (!empty($d['beobachtung']['vulcan_start'])) {
+    $merker = $vk === 'vulcan' ? 'vulcan_start' : $vk . '_start';
+    if (!empty($d['beobachtung'][$merker])) {
         return;
     }
     $symbol = '';
     foreach ($d['firmen'] as $s => $f) {
-        if (stripos((string)$f['name'], 'vulcan energy') !== false || strtoupper((string)$s) === 'VUL.AX') {
+        if (stripos((string)$f['name'], $x['such']) !== false || strtoupper((string)$s) === $x['symbol']) {
             $symbol = (string)$s;
-            if (strtoupper($symbol) === 'VUL.AX' || $f['status'] === 'depot') {
+            if (strtoupper($symbol) === $x['symbol'] || $f['status'] === 'depot') {
                 break;
             }
         }
     }
-    $v = beobVorlagen()['vulcan'];
+    $v = beobVorlagen()[$vk];
     $neueFirma = $symbol === '';
-    $symbol = $neueFirma ? 'VUL.AX' : $symbol;
+    $symbol = $neueFirma ? $x['symbol'] : $symbol;
     $neu = beobStrategieNeu($symbol, $v);
-    datenAendern(function (array &$d) use ($symbol, $neueFirma, $v, $neu): void {
-        $d['beobachtung']['vulcan_start'] = time();
+    datenAendern(function (array &$d) use ($symbol, $neueFirma, $v, $neu, $merker, $x): void {
+        $d['beobachtung'][$merker] = time();
         if ($neueFirma && !isset($d['firmen'][$symbol])) {
-            $d['firmen'][$symbol] = firmaNormal(['name' => 'Vulcan Energy Resources Ltd', 'waehrung' => 'AUD'], $symbol);
+            $d['firmen'][$symbol] = firmaNormal(['name' => $x['name'], 'waehrung' => $x['waehrung']], $symbol);
         }
         $f = (array)($d['beobachtung']['firmen'][$symbol] ?? []);
-        $hatVulcan = false;
+        $hat = false;
         foreach ((array)($f['strategien'] ?? []) as $st) {
-            $hatVulcan = $hatVulcan || ($st['asx'] ?? '') === 'VUL';
+            $hat = $hat || ($st['titel'] ?? '') === $neu['titel'];
         }
-        if (!$hatVulcan) {
+        if (!$hat) {
             $f['strategien'][] = $neu;
         }
-        if (empty($f['tagescheck']['an'])) {
+        if (isset($v['tagescheck']) && empty($f['tagescheck']['an'])) {
             $f['tagescheck'] = array_merge(FZ_TAGESCHECK_STANDARD, (array)($f['tagescheck'] ?? []), $v['tagescheck']);
+        }
+        if (isset($v['zahlencheck']) && empty($f['zahlencheck']['an'])) {
+            $f['zahlencheck'] = array_merge(FZ_ZAHLENCHECK_STANDARD, (array)($f['zahlencheck'] ?? []), $v['zahlencheck'], ['seit' => time()]);
         }
         $d['beobachtung']['firmen'][$symbol] = $f;
     });
     // gleich Zahlen und Tagescheck zeigen, nicht erst nach dem nächsten Cron-Lauf
     beobZahlenTag(datenLaden(), $symbol);
-    tagescheckJetzt($symbol);
+    if (isset($v['tagescheck'])) {
+        tagescheckJetzt($symbol);
+    }
 }

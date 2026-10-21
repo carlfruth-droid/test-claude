@@ -1,0 +1,57 @@
+name: Finanzzentrale – Zahlen-Check am Abend
+
+# Quartalszahlen von US-Werten kommen nach US-Börsenschluss (22 Uhr bei uns).
+# Die Schleife fragt die Website in kurzen Abständen, solange sie „aktiv“ meldet:
+# am Zahlentag bis zur Ampel um 22:30 Uhr, an anderen Abenden nur kurz zum Messen
+# des normalen Nachbörsen-Volumens. Sonst endet sie nach wenigen Sekunden.
+# Mehrere Startzeiten, weil GitHub geplante Läufe oft verspätet oder gar nicht startet;
+# deckt Sommer- und Winterzeit ab (16:00 Uhr New York = 20:00 bzw. 21:00 UTC).
+on:
+  schedule:
+    - cron: '45,55 19 * * 1-5'
+    - cron: '5,15,25,35,45,55 20 * * 1-5'
+    - cron: '5,15,25 21 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: finanzen-abend
+  cancel-in-progress: false
+
+jobs:
+  schleife:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - name: Zahlen-Check in der Schleife
+        env:
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          TOKEN=$(printf '%s' "finanzzentrale-cron:$FTP_PASSWORD" | sha256sum | cut -c1-40)
+          echo "::add-mask::$TOKEN"
+          export TOKEN
+          python3 - <<'PY'
+          import json, os, time, urllib.request
+          url = 'https://fruthzeug.de/projekte/finanzen/?nur=zahlencheck&cron=' + os.environ['TOKEN']
+          start = time.time()
+          runde = 0
+          while time.time() - start < 75 * 60:
+              runde += 1
+              try:
+                  d = json.load(urllib.request.urlopen(url, timeout=200))
+              except Exception as e:
+                  print('Runde', runde, 'Fehler:', type(e).__name__)
+                  time.sleep(60)
+                  continue
+              zc = d.get('zahlencheck') or {}
+              # nur Zähler – keine Namen oder Werte
+              print('Runde', runde, '– aktiv', zc.get('aktiv'), '– SEC', zc.get('sec'), '– Nasdaq', zc.get('nasdaq'), '– Meldungen', zc.get('gemeldet'))
+              for p in d.get('ntfy') or []:
+                  try:
+                      req = urllib.request.Request(p['server'].rstrip('/') + '/', data=json.dumps(p['nachricht']).encode(), headers={'Content-Type': 'application/json'})
+                      urllib.request.urlopen(req, timeout=15)
+                  except Exception as e:
+                      print('Push nicht zugestellt:', type(e).__name__)
+              if not zc.get('aktiv'):
+                  break
+              time.sleep(75)
+          PY

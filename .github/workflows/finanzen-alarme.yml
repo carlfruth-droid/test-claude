@@ -27,6 +27,13 @@ jobs:
           print('ok' if d.get('ok') else 'Fehler', '– geprüft:', d.get('geprueft'), '– ausgelöst:', d.get('ausgeloest'))
           # nur Zähler (fehlende Verläufe, vorgerechnete Zeiträume, Dauer) – keine Beträge
           print('Depot-Verlauf vorgewärmt:', d.get('verlauf'))
+          # nur Zähler und ok/Fehler – keine Inhalte
+          print('Tagescheck (Meldungen je Wert):', len((d.get('tagescheck') or {})), 'Werte,', sum((d.get('tagescheck') or {}).values()), 'Meldungen')
+          zc = d.get('zahlencheck') or {}
+          print('Zahlen-Check: SEC', zc.get('sec'), '– Nasdaq', zc.get('nasdaq'), '– Meldungen', zc.get('gemeldet'))
+          if 'meldetest' in d:
+              print('Testmeldung:', d['meldetest'])
+          print('Meldungen:', d.get('meldungen'))
           # Push-Meldungen, die ntfy vom Webhosting nicht angenommen hat (Drosselung), von hier aus schicken
           gesendet = 0
           for p in d.get('ntfy') or []:

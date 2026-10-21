@@ -22,6 +22,7 @@ require FZ_APP . '/inc/verlauf.php';
 require FZ_APP . '/inc/position.php';
 require FZ_APP . '/inc/szenario.php';
 require FZ_APP . '/inc/beobachtung.php';
+require FZ_APP . '/inc/zahlencheck.php';
 require FZ_APP . '/inc/ansichten.php';
 
 header('X-Robots-Tag: noindex, nofollow');
@@ -48,7 +49,16 @@ if (isset($_GET['cron'])) {
         echo json_encode(diagnose(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
+    // Abend-Schleife (GitHub, alle 1–2 Minuten um 22 Uhr): nur der Zahlen-Check
+    // Weckdienst (z. B. cron-job.org alle 5 Minuten): nur die zeitkritischen Checks
+    if (($_GET['nur'] ?? '') === 'zahlencheck' || ($_GET['nur'] ?? '') === 'schnell') {
+        $erg = ($_GET['nur'] === 'schnell' ? meldetestAusfuehren() + tagescheckAusfuehren() : []) + zahlencheckAusfuehren(true);
+        $erg['ntfy'] = ntfyWarteschlangeHolen();
+        echo json_encode(['ok' => true] + $erg, JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     $erg = alarmeAusfuehren('cron');
+    $erg += meldetestAusfuehren();
     $z = brokerZugang();
     $d = datenLaden();
     if ($z['etoro_api'] !== '' && time() - (int)($d['broker']['etoro']['zeit'] ?? 0) > 6 * 3600) {
@@ -64,9 +74,11 @@ if (isset($_GET['cron'])) {
     // Tagescheck: ASX-Mitteilungen bei jedem Lauf, morgens ASX-Volumen, nachmittags der Handel in Europa
     beobVulcanStart();
     $erg += tagescheckAusfuehren();
+    $erg += zahlencheckAusfuehren();
     $erg += beobAusfuehren(max(30.0, 280.0 - (microtime(true) - $cronStart)));
     $erg += verlaufAufwaermen(min(70.0, max(10.0, 290.0 - (microtime(true) - $cronStart))));
     cacheAufraeumen();
+    $erg['meldungen'] = meldungenUebersicht();
     // Push-Meldungen, die ntfy vom Webserver nicht angenommen hat, verschickt der Aufrufer (GitHub)
     $erg['ntfy'] = ntfyWarteschlangeHolen();
     echo json_encode(['ok' => true] + $erg, JSON_UNESCAPED_UNICODE);
@@ -258,10 +270,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                 }
                 $neu = beobStrategieNeu($s, $vorlage);
                 $tcVorlage = (array)($vorlage['tagescheck'] ?? []);
-                datenAendern(function (array &$d) use ($s, $neu, $tcVorlage): void {
+                $zcVorlage = (array)($vorlage['zahlencheck'] ?? []);
+                datenAendern(function (array &$d) use ($s, $neu, $tcVorlage, $zcVorlage): void {
                     $d['beobachtung']['firmen'][$s]['strategien'][] = $neu;
                     if ($tcVorlage !== [] && !isset($d['beobachtung']['firmen'][$s]['tagescheck'])) {
                         $d['beobachtung']['firmen'][$s]['tagescheck'] = array_merge(FZ_TAGESCHECK_STANDARD, $tcVorlage);
+                    }
+                    if ($zcVorlage !== [] && !isset($d['beobachtung']['firmen'][$s]['zahlencheck'])) {
+                        $d['beobachtung']['firmen'][$s]['zahlencheck'] = array_merge(FZ_ZAHLENCHECK_STANDARD, $zcVorlage, ['seit' => time()]);
                     }
                 });
                 meldung('Beobachtung angelegt. Kurs und Short-Quote werden ab jetzt täglich geprüft.');
@@ -323,6 +339,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                     }
                 });
                 meldung($tc['an'] && $tc['asx'] !== '' ? 'Tagescheck gespeichert und eingeschaltet.' : ($tc['an'] ? 'Bitte ein ASX-Kürzel eintragen (z. B. VUL.AX).' : 'Tagescheck ausgeschaltet.'), $tc['an'] && $tc['asx'] === '' ? 'fehler' : 'ok');
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_zahlencheck':
+                $zahlFeld = static fn(string $n, float $std): float => is_numeric(str_replace(',', '.', trim((string)($_POST[$n] ?? ''))))
+                    ? (float)str_replace(',', '.', trim((string)$_POST[$n])) : $std;
+                $alt = zcEinstellung((array)(beobDaten(datenLaden())['firmen'][$s] ?? []));
+                $datum = textFeld('datum', 10);
+                $zc = ['an' => !empty($_POST['an']), 'us' => strtoupper((string)preg_replace('/[^A-Za-z.\-]/', '', textFeld('us', 12))),
+                    'datum' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $datum) ? $datum : '',
+                    'umsatz_min' => $zahlFeld('umsatz_min', 0), 'eps_min' => $zahlFeld('eps_min', 0), 'suchwort' => textFeld('suchwort', 40),
+                    'auslastung_min' => $zahlFeld('auslastung_min', 40), 'kapazitaet' => max(0, $zahlFeld('kapazitaet', 0)),
+                    'kurs_trigger' => $zahlFeld('kurs_trigger', 0), 'vol_faktor' => max(1, $zahlFeld('vol_faktor', 5)),
+                    'aktion_gruen' => textFeld('aktion_gruen', 400), 'aktion_gelb' => textFeld('aktion_gelb', 400), 'aktion_rot' => textFeld('aktion_rot', 400),
+                    // erst Berichte ab dem Einschalten zählen
+                    'seit' => $alt['an'] && $alt['seit'] > 0 ? $alt['seit'] : time()];
+                datenAendern(function (array &$d) use ($s, $zc): void {
+                    if (isset($d['beobachtung']['firmen'][$s])) {
+                        $d['beobachtung']['firmen'][$s]['zahlencheck'] = $zc;
+                    }
+                });
+                meldung($zc['an'] && $zc['us'] !== '' ? 'Zahlen-Check gespeichert und eingeschaltet.' : ($zc['an'] ? 'Bitte das US-Kürzel eintragen (z. B. PCT).' : 'Zahlen-Check ausgeschaltet.'), $zc['an'] && $zc['us'] === '' ? 'fehler' : 'ok');
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_zahlencheck_probe':
+                @set_time_limit(150);
+                $x = zahlencheckProbe($s);
+                meldung($x['ok'] ? 'Probe mit dem letzten Quartalsbericht fertig (ohne Meldung) – Ergebnis unten im Zahlen-Check.' : $x['fehler'], $x['ok'] ? 'ok' : 'fehler');
                 weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
                 break;
             case 'beob_tagescheck_jetzt':
@@ -666,6 +709,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                 datenAendern(function (array &$d) use ($email): void {
                     $d['einstellungen']['email'] = $email;
                     $d['einstellungen']['ntfy_aus'] = empty($_POST['push']) ? '1' : '';
+                    $token = trim((string)($_POST['ntfy_token'] ?? ''));
+                    if ($token === '-') {
+                        $d['einstellungen']['ntfy_token'] = '';
+                    } elseif (preg_match('/^tk_[A-Za-z0-9]{10,64}$/', $token)) {
+                        $d['einstellungen']['ntfy_token'] = $token;
+                    }
                     if (einstellung($d, 'ntfy') === '') {
                         $d['einstellungen']['ntfy'] = 'fz-' . bin2hex(random_bytes(9));
                     }

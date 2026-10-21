@@ -1730,6 +1730,10 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
   <div class="kopierfeld"><code id="ntfy-thema"><?= e($thema) ?></code><button class="knopf klein zweit" type="button" data-kopieren="#ntfy-thema">Kopieren</button></div>
   <p class="klein leise">Das Thema ist zufällig und nur dir bekannt – wer es nicht kennt, sieht deine Meldungen nicht. Wichtig: erst abonnieren, dann den Test senden. Zur Kontrolle kannst du die Meldungen auch im Browser sehen: <a href="https://ntfy.sh/<?= e(rawurlencode($thema)) ?>" target="_blank" rel="noopener noreferrer">ntfy.sh/<?= e($thema) ?></a>.</p>
   <label class="schalter"><input type="checkbox" name="push" value="1"<?= einstellung($d, 'ntfy_aus') !== '1' ? ' checked' : '' ?>><span>Push-Meldungen senden</span></label>
+  <details class="unterbereich"><summary>Push kommt verspätet? ntfy-Zugangstoken (optional)</summary>
+    <p class="klein">ntfy.sh bremst Absender, die sich die Internet-Adresse mit vielen anderen Webseiten teilen (wie dein Webhosting). Dann kommt der Push erst mit dem nächsten automatischen Lauf. Abhilfe: kostenloses Konto auf <a href="https://ntfy.sh/app" target="_blank" rel="noopener noreferrer">ntfy.sh</a> anlegen, dort unter „Account → Access tokens“ ein Token erzeugen (beginnt mit <code>tk_</code>) und hier eintragen. Das Token bleibt auf deinem Server und wird nicht angezeigt.</p>
+    <label class="feld"><span>Zugangstoken <?= einstellung($d, 'ntfy_token') !== '' ? '(ist hinterlegt – zum Entfernen „-“ eintragen)' : '' ?></span><input type="password" name="ntfy_token" autocomplete="off" placeholder="tk_…"></label>
+  </details>
   <p><button class="knopf klein zweit" type="button" data-ntfy-test data-thema="<?= e($thema) ?>" data-link="<?= e(fzBasisUrl()) ?>"><?= ico('glocke') ?> Push sofort testen (vom Handy aus)</button> <span class="klein" data-ntfy-ergebnis></span></p>
   <div class="knopf-reihe">
     <button class="knopf" type="submit"><?= ico('haken') ?> Speichern</button>
@@ -1746,6 +1750,16 @@ function seiteEinstellungen(array $d, bool $kiSchluessel): string
     <?php endforeach; ?>
   </ul>
   <p class="klein leise">„An den Mailserver übergeben“ heißt: Der Server hat die E-Mail angenommen. Kommt sie trotzdem nicht an, liegt sie meist im Spam-Ordner.</p>
+<?php endif; ?>
+<?php if (!empty($d['meldetest']['zeit'])): $mt = (array)$d['meldetest']['wege']; ?>
+  <p class="klein">Test über den automatischen Lauf am <?= e(datumZeit((int)$d['meldetest']['zeit'])) ?>:
+    <?= $mt === [] ? 'kein Weg eingerichtet' : e(implode(' · ', array_map(static fn(string $w, bool $ok): string => ($w === 'email' ? 'E-Mail' : 'Push') . ($ok ? ' ok' : ' Fehler'), array_keys($mt), $mt))) ?></p>
+<?php endif; ?>
+<?php $cronToken = geheimLesen('crontoken'); if ($cronToken !== ''): ?>
+  <details class="unterbereich"><summary>Zuverlässiger Takt (optional)</summary>
+    <p class="klein">Die automatischen Läufe startet GitHub – das klappt nur ungefähr und manchmal mit Stunden Verspätung. Wer es pünktlich will, trägt diese Adresse bei einem kostenlosen Weckdienst ein (z. B. cron-job.org, alle 5 Minuten). Damit laufen Tagescheck und Zahlen-Check pünktlich; der Rest bleibt bei GitHub. Die Adresse ist geheim – nicht weitergeben.</p>
+    <div class="kopierfeld"><code id="cron-url"><?= e(fzBasisUrl() . '?cron=' . $cronToken . '&nur=schnell') ?></code><button class="knopf klein zweit" type="button" data-kopieren="#cron-url">Kopieren</button></div>
+  </details>
 <?php endif; ?>
 <?= akk('Benachrichtigungen', 'glocke', (string)ob_get_clean(), ['offen' => true, 'id' => 'e-benachrichtigung']) ?>
 
@@ -2150,6 +2164,81 @@ function insiderArt(string $text): array
 // Beobachtungsliste
 // ---------------------------------------------------------------------------
 
+/** Zahlen-Check (Quartalszahlen eines US-Werts) einer beobachteten Firma. */
+function beobZahlencheckTeil(string $s, array $f): string
+{
+    $zc = zcEinstellung($f);
+    $st = (array)($f['zc'] ?? []);
+    $an = $zc['an'] && $zc['us'] !== '';
+    $farben = ['gruen' => '🟢 GRÜN – Squeeze-Warnung', 'gelb' => '🟡 GELB – Mischlage', 'rot' => '🔴 ROT – Absturz-Gefahr'];
+    $schnitt = zcVolumenSchnitt($st);
+    ob_start(); ?>
+  <h4>Zahlen-Check <?= $an ? '<span class="abzeichen gruen">an</span>' : '<span class="abzeichen">aus</span>' ?><?= info('Schleife 1: Sobald das 8-K mit den Quartalszahlen bei der US-Börsenaufsicht SEC liegt, liest die KI Umsatz, Ergebnis je Aktie und die Auslastung des Werks aus und vergleicht sie mit deinen Schwellen – sofort kommt eine Meldung. Schleife 2: Ab 16:15 Uhr New York (22:15 Uhr bei uns) Kurs und Volumen der Nachbörse bei Nasdaq. Um 16:30 Uhr New York (22:30 Uhr) kommt die Ampel per Push und E-Mail. Den normalen Nachbörsen-Umsatz nach 30 Minuten misst der Check an den Abenden davor selbst.') ?></h4>
+  <?php if ($an): ?>
+    <p class="klein">US-Kürzel <strong><?= e($zc['us']) ?></strong><?= $zc['datum'] !== '' ? ' · Zahlen erwartet am <strong>' . e(datum((int)strtotime($zc['datum']))) . '</strong> nach US-Börsenschluss (ca. 22:05 Uhr bei uns)' : '' ?>.
+      Normaler Nachbörsen-Umsatz: <?= $schnitt ? e(zahl($schnitt['wert'], 0) . ' Stück (Ø ' . $schnitt['art'] . ', ' . $schnitt['tage'] . ' Abende)') : 'wird an den nächsten Abenden gemessen' ?>.</p>
+    <?php if (!empty($st['ampel'])): ?>
+      <div class="hinweis"><span><strong><?= e($farben[$st['ampel']['farbe']]) ?></strong> · <?= e(datumZeit((int)$st['ampel']['zeit'])) ?></span></div>
+    <?php elseif (!empty($st['zahlen'])): ?>
+      <div class="hinweis"><span><strong>Zahlen sind da</strong> – die Ampel folgt um 22:30 Uhr.</span></div>
+    <?php endif; ?>
+    <?php $meld = (array)($st['meldungen'] ?? []);
+    if ($meld !== []): ?>
+      <pre class="beob-bericht"><?= e($meld[0]['titel'] . "\n" . $meld[0]['text']) ?></pre>
+      <?php if (count($meld) > 1): ?>
+        <details class="unterbereich"><summary>Ältere Meldungen (<?= count($meld) - 1 ?>)</summary>
+          <?php foreach (array_slice($meld, 1) as $x): ?><p class="klein leise"><?= e(datumZeit((int)$x['zeit'])) ?></p><pre class="beob-bericht"><?= e($x['titel'] . "\n" . $x['text']) ?></pre><?php endforeach; ?>
+        </details>
+      <?php endif; ?>
+    <?php endif; ?>
+    <?php if (!empty($st['probe'])): ?>
+      <details class="unterbereich"><summary>Probe mit dem letzten Bericht (<?= e(datumZeit((int)$st['probe']['zeit'])) ?>): <?= e($farben[$st['probe']['farbe']]) ?></summary>
+        <pre class="beob-bericht"><?= e((string)$st['probe']['text']) ?></pre>
+        <p class="klein leise">Nur zum Ausprobieren: alter Bericht, aktueller Nachbörsen-Kurs. Es wurde keine Meldung verschickt.</p>
+      </details>
+    <?php endif; ?>
+    <form method="post" action="./" data-laden="Bericht wird gelesen – bis zu einer Minute …"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_zahlencheck_probe"><input type="hidden" name="s" value="<?= e($s) ?>"><button class="knopf zweit klein" type="submit">Mit dem letzten Quartalsbericht ausprobieren (ohne Meldung)</button></form>
+    <p class="beob-lesezeichen klein"><strong>Lesezeichen:</strong>
+      <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=<?= e(rawurlencode($zc['us'])) ?>&amp;type=8-K&amp;dateb=&amp;owner=include&amp;count=40" target="_blank" rel="noopener noreferrer">SEC 8-K</a> ·
+      <a href="https://www.nasdaq.com/market-activity/stocks/<?= e(strtolower(rawurlencode($zc['us']))) ?>/after-hours" target="_blank" rel="noopener noreferrer">Nasdaq Nachbörse</a></p>
+  <?php else: ?>
+    <p class="klein">Aus. Für US-Werte: Quartalszahlen automatisch prüfen und abends eine Ampel schicken.</p>
+  <?php endif; ?>
+  <details class="unterbereich"><summary>Einstellungen Zahlen-Check</summary>
+    <form method="post" action="./" class="beob-formular"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_zahlencheck"><input type="hidden" name="s" value="<?= e($s) ?>">
+      <label class="schalter"><input type="checkbox" name="an" value="1"<?= $zc['an'] ? ' checked' : '' ?>><span>Zahlen-Check einschalten (Meldung per Push und E-Mail)</span></label>
+      <label class="feld"><span>US-Kürzel</span><input type="text" name="us" maxlength="12" value="<?= e($zc['us']) ?>" placeholder="z. B. PCT"></label>
+      <label class="feld"><span>Zahlen erwartet am (US-Datum)</span><input type="date" name="datum" value="<?= e($zc['datum']) ?>"></label>
+      <label class="feld"><span>Umsatz über … Mio. US-$</span><input type="text" inputmode="decimal" name="umsatz_min" value="<?= e(zahl((float)$zc['umsatz_min'], 2)) ?>"></label>
+      <label class="feld"><span>Ergebnis je Aktie besser als … US-$ (Verlust negativ)</span><input type="text" inputmode="decimal" name="eps_min" value="<?= e(zahl((float)$zc['eps_min'], 2)) ?>"></label>
+      <label class="feld"><span>Suchwort im Bericht (Werk)</span><input type="text" name="suchwort" maxlength="40" value="<?= e($zc['suchwort']) ?>" placeholder="z. B. Ironton"></label>
+      <label class="feld"><span>Auslastung mindestens … %</span><input type="text" inputmode="decimal" name="auslastung_min" value="<?= e(zahl((float)$zc['auslastung_min'], 0)) ?>"></label>
+      <label class="feld"><span>Nennkapazität in Mio. Pfund pro Jahr (zum Umrechnen, wenn keine % genannt sind; 0 = nicht rechnen)</span><input type="text" inputmode="decimal" name="kapazitaet" value="<?= e(zahl((float)$zc['kapazitaet'], 0)) ?>"></label>
+      <label class="feld"><span>Nachbörse über … US-$</span><input type="text" inputmode="decimal" name="kurs_trigger" value="<?= e(zahl((float)$zc['kurs_trigger'], 2)) ?>"></label>
+      <label class="feld"><span>Volumen nach 30 Min. über … × normal</span><input type="text" inputmode="decimal" name="vol_faktor" value="<?= e(zahl((float)$zc['vol_faktor'], 0)) ?>"></label>
+      <label class="feld"><span>🟢 Dein Plan bei Grün</span><textarea name="aktion_gruen" rows="2" maxlength="400"><?= e($zc['aktion_gruen']) ?></textarea></label>
+      <label class="feld"><span>🟡 Dein Plan bei Gelb</span><textarea name="aktion_gelb" rows="2" maxlength="400"><?= e($zc['aktion_gelb']) ?></textarea></label>
+      <label class="feld"><span>🔴 Dein Plan bei Rot</span><textarea name="aktion_rot" rows="2" maxlength="400"><?= e($zc['aktion_rot']) ?></textarea></label>
+      <button class="knopf zweit" type="submit">Speichern</button>
+    </form>
+  </details>
+<?php
+    return (string)ob_get_clean();
+}
+
+/** Kurzzeile eines Tagescheck-Ergebnisses. */
+function tagescheckZeile(array $x): string
+{
+    $vz = static fn($v): string => $v === null ? '–' : (($v > 0 ? '+' : '') . zahl((float)$v, 1) . ' %');
+    if (($x['check'] ?? '') === 'morgen') {
+        return datum((int)strtotime((string)$x['datum'])) . ': ' . zahl((float)$x['kurs'], 3) . ' ' . $x['w'] . ' (' . $vz($x['aend']) . ') · Volumen '
+            . zahl($x['volumen'] / 1e6, 2) . ' Mio. = ' . zahl((float)$x['faktor'], 1) . '× Ø ' . zahl($x['schnitt'] / 1e6, 2) . ' Mio.'
+            . (!empty($x['mitteilungen']) ? ' · Mitteilung: ' . implode(' · ', $x['mitteilungen']) : '');
+    }
+    return zahl((float)$x['kurs'], 3) . ' ' . $x['w'] . ' · seit 15:30 ' . $vz($x['seit_1530']) . ' · Volumen-Tempo '
+        . ($x['tempo'] !== null ? zahl((float)$x['tempo'], 1) . '×' : '–') . ($x['aufschlag'] !== null ? ' · ' . $vz($x['aufschlag']) . ' zum ASX-Schluss' : '');
+}
+
 /** Tagescheck einer beobachteten Firma: Ergebnisse, ASX-Mitteilungen, Meldungen, Lesezeichen, Einstellungen. */
 function beobTagescheckTeil(string $s, array $f): string
 {
@@ -2157,7 +2246,6 @@ function beobTagescheckTeil(string $s, array $f): string
     $st = (array)($f['tc'] ?? []);
     $an = $tc['an'] && $tc['asx'] !== '';
     $kuerzel = strtoupper((string)preg_replace('/\.AX$/', '', $tc['asx'] !== '' ? $tc['asx'] : $s));
-    $vz = static fn($x): string => $x === null ? '–' : (($x > 0 ? '+' : '') . zahl((float)$x, 1) . ' %');
     $artText = ['squeeze' => '🔥 Squeeze-Verdacht', 'verkauf' => '⚠️ starker Verkaufsdruck', 'meldung' => '📈 hohes Volumen wegen Kapitalmaßnahme',
         'volumen' => '👀 ungewöhnlich hohes Volumen', 'ruhig' => '✓ unauffällig', 'kein Handel' => '– kein Handel', 'anstieg' => '🚀 Anstieg mit Volumen', 'abgabe' => '📉 Abgabe mit Volumen'];
     ob_start(); ?>
@@ -2168,16 +2256,25 @@ function beobTagescheckTeil(string $s, array $f): string
       <div class="kachel"><span class="k-titel">Morgen-Check ASX</span>
         <?php if ($m !== []): ?>
           <span class="k-wert"><?= e($artText[$m['art']] ?? $m['art']) ?></span>
-          <span class="k-unter"><?= e(datum((int)strtotime($m['datum'])) . ': ' . zahl((float)$m['kurs'], 3) . ' ' . $m['w'] . ' (' . $vz($m['aend']) . ') · Volumen ' . zahl($m['volumen'] / 1e6, 2) . ' Mio. = ' . zahl((float)$m['faktor'], 1) . '× Ø ' . zahl($m['schnitt'] / 1e6, 2) . ' Mio.') ?></span>
+          <span class="k-unter"><?= e(tagescheckZeile($m + ['check' => 'morgen'])) ?></span>
         <?php else: ?><span class="k-wert">–</span><span class="k-unter">werktags ab 7:15 Uhr</span><?php endif; ?></div>
       <?php $n = (array)($st['nachmittag'] ?? []); ?>
       <div class="kachel"><span class="k-titel">Nachmittag <?= e($tc['eu'] !== '' ? $tc['eu'] : 'Europa') ?></span>
         <?php if ($n !== []): ?>
           <span class="k-wert"><?= e($artText[$n['art']] ?? $n['art']) ?></span>
-          <span class="k-unter"><?= e(zahl((float)$n['kurs'], 3) . ' ' . $n['w'] . ' · seit 15:30 ' . $vz($n['seit_1530']) . ' · Volumen-Tempo ' . ($n['tempo'] !== null ? zahl((float)$n['tempo'], 1) . '×' : '–') . ($n['aufschlag'] !== null ? ' · ' . $vz($n['aufschlag']) . ' zum ASX-Schluss' : '')) ?></span>
+          <span class="k-unter"><?= e(tagescheckZeile($n + ['check' => 'nachmittag'])) ?></span>
         <?php else: ?><span class="k-wert">–</span><span class="k-unter"><?= $tc['eu'] !== '' ? 'werktags ab 16 Uhr' : 'kein deutsches Kürzel eingetragen' ?></span><?php endif; ?></div>
     </div>
     <?php if (!empty($m['zeit']) || !empty($n['zeit'])): ?><p class="klein leise">Zuletzt gerechnet: <?= e(datumZeit(max((int)($m['zeit'] ?? 0), (int)($n['zeit'] ?? 0)))) ?></p><?php endif; ?>
+    <?php // oben stehen die jüngsten Ergebnisse, darunter alle älteren (neueste zuerst)
+    $aelter = array_values(array_filter((array)($st['verlauf'] ?? []), static fn(array $x): bool =>
+        (int)$x['zeit'] !== (int)(($x['check'] === 'morgen' ? $m : $n)['zeit'] ?? 0)));
+    if ($aelter !== []): ?>
+      <details class="unterbereich"><summary>Ältere Checks (<?= count($aelter) ?>)</summary>
+        <ul class="beob-liste"><?php foreach ($aelter as $x): ?><li><small class="leise"><?= e(datumZeit((int)$x['zeit'])) ?> · <?= $x['check'] === 'morgen' ? 'Morgen-Check ASX' : 'Nachmittag ' . e($tc['eu']) ?><?= !empty($x['hand']) ? ' · von Hand' : '' ?></small><br>
+          <strong><?= e($artText[$x['art']] ?? (string)$x['art']) ?></strong> · <?= e(tagescheckZeile($x)) ?></li><?php endforeach; ?></ul>
+      </details>
+    <?php endif; ?>
     <?php if (!empty($st['meldungen'])): ?>
       <details class="unterbereich"><summary>Letzte Meldungen (<?= count($st['meldungen']) ?>)</summary>
         <ul class="beob-liste"><?php foreach (array_slice($st['meldungen'], 0, 10) as $x): ?><li><small class="leise"><?= e(datumZeit((int)$x['zeit'])) ?></small><br><?= nl2br(e((string)$x['text'])) ?></li><?php endforeach; ?></ul>
@@ -2249,6 +2346,10 @@ function seiteBeobachtung(array $d, bool $kiVerfuegbar): string
     $ampel = beobAmpel($alleStati);
     ob_start(); ?>
   <p><a class="firmenlink" href="<?= e(firmaUrl($s)) ?>"><?= e($firma['name']) ?></a> · <?= e($s) ?></p>
+  <?php $tcAn = beobTagescheck($f)['an']; $zcAn = zcEinstellung($f)['an']; ?>
+  <?= $zcAn ? beobZahlencheckTeil($s, $f) : '' ?>
+  <?= $tcAn ? beobTagescheckTeil($s, $f) : '' ?>
+  <?php if ($tcAn || $zcAn): ?><h4>Strategie und Zahlen</h4><?php endif; ?>
   <div class="raster">
     <div class="kachel"><span class="k-titel">Kurs</span><span class="k-wert"><?= e(geld($z['kurs'] ?? null, (string)($z['waehrung'] ?? ''))) ?></span></div>
     <div class="kachel"><span class="k-titel">Short-Quote<?= info('Anteil der Aktien, die Leerverkäufer geliehen und verkauft haben. Bei australischen Werten aus den täglichen Meldungen der Aufsicht ASIC (4 Handelstage Verzug), bei US-Werten das Short Interest. Steigt sie, wetten mehr Profis auf fallende Kurse; sinkt sie deutlich, decken sie sich ein.') ?></span>
@@ -2300,7 +2401,10 @@ function seiteBeobachtung(array $d, bool $kiVerfuegbar): string
     <form method="post" action="./" data-bestaetigen="Strategie „<?= e($st['titel']) ?>“ mit allen Signalen löschen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_strategie_loeschen"><input type="hidden" name="s" value="<?= e($s) ?>"><input type="hidden" name="strategie" value="<?= e($st['id']) ?>"><button class="knopf-text gefahr klein" type="submit">Strategie löschen</button></form>
   <?php endforeach; ?>
 
-  <?= beobTagescheckTeil($s, $f) ?>
+  <?php // ausgeschaltete Checks nur dort anbieten, wo sie passen: Tagescheck für ASX-Werte, Zahlen-Check für US-Werte
+    $istAsx = str_ends_with(strtoupper($s), '.AX') || array_filter(array_column($f['strategien'], 'asx')) !== []; ?>
+  <?= !$tcAn && $istAsx ? beobTagescheckTeil($s, $f) : '' ?>
+  <?= !$zcAn && !str_contains($s, '.') ? beobZahlencheckTeil($s, $f) : '' ?>
 
   <?php if ($kiVerfuegbar): ?>
   <div class="ki-bereich" data-ki="<?= e($s) ?>" data-ki-art="beobachtung">
