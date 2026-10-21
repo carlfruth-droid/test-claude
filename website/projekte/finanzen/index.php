@@ -62,6 +62,7 @@ if (isset($_GET['cron'])) {
     // Beobachtungsliste: täglich Zahlen, samstags 18 Uhr KI-Prüfung und Wochenbericht
     if (function_exists('set_time_limit')) { @set_time_limit(320); }
     // Tagescheck: ASX-Mitteilungen bei jedem Lauf, morgens ASX-Volumen, nachmittags der Handel in Europa
+    beobVulcanStart();
     $erg += tagescheckAusfuehren();
     $erg += beobAusfuehren(max(30.0, 280.0 - (microtime(true) - $cronStart)));
     $erg += verlaufAufwaermen(min(70.0, max(10.0, 290.0 - (microtime(true) - $cronStart))));
@@ -1077,6 +1078,8 @@ switch ($seite) {
         break;
 
     case 'beobachtung':
+        beobVulcanStart();
+        $d = datenLaden();
         seite('Beobachten', seiteBeobachtung($d, kiSchluessel() !== ''), 'beobachtung', $d);
         break;
 

@@ -802,3 +802,49 @@ function tagescheckJetzt(string $symbol): bool
     });
     return $m !== null || $n !== null;
 }
+
+/**
+ * Vulcan einmalig von selbst in die Beobachtung aufnehmen (mit Vorlage und Tagescheck).
+ * Wird sie später entfernt, bleibt sie draußen.
+ */
+function beobVulcanStart(): void
+{
+    $d = datenLaden();
+    if (!empty($d['beobachtung']['vulcan_start'])) {
+        return;
+    }
+    $symbol = '';
+    foreach ($d['firmen'] as $s => $f) {
+        if (stripos((string)$f['name'], 'vulcan energy') !== false || strtoupper((string)$s) === 'VUL.AX') {
+            $symbol = (string)$s;
+            if (strtoupper($symbol) === 'VUL.AX' || $f['status'] === 'depot') {
+                break;
+            }
+        }
+    }
+    $v = beobVorlagen()['vulcan'];
+    $neueFirma = $symbol === '';
+    $symbol = $neueFirma ? 'VUL.AX' : $symbol;
+    $neu = beobStrategieNeu($symbol, $v);
+    datenAendern(function (array &$d) use ($symbol, $neueFirma, $v, $neu): void {
+        $d['beobachtung']['vulcan_start'] = time();
+        if ($neueFirma && !isset($d['firmen'][$symbol])) {
+            $d['firmen'][$symbol] = firmaNormal(['name' => 'Vulcan Energy Resources Ltd', 'waehrung' => 'AUD'], $symbol);
+        }
+        $f = (array)($d['beobachtung']['firmen'][$symbol] ?? []);
+        $hatVulcan = false;
+        foreach ((array)($f['strategien'] ?? []) as $st) {
+            $hatVulcan = $hatVulcan || ($st['asx'] ?? '') === 'VUL';
+        }
+        if (!$hatVulcan) {
+            $f['strategien'][] = $neu;
+        }
+        if (empty($f['tagescheck']['an'])) {
+            $f['tagescheck'] = array_merge(FZ_TAGESCHECK_STANDARD, (array)($f['tagescheck'] ?? []), $v['tagescheck']);
+        }
+        $d['beobachtung']['firmen'][$symbol] = $f;
+    });
+    // gleich Zahlen und Tagescheck zeigen, nicht erst nach dem nächsten Cron-Lauf
+    beobZahlenTag(datenLaden(), $symbol);
+    tagescheckJetzt($symbol);
+}
