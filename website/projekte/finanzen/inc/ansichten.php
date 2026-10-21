@@ -162,6 +162,7 @@ function seite(string $titel, string $inhalt, string $aktiv = '', ?array $d = nu
         ['firmen', 'liste', 'Meine Firmen', $firmenAnzahl > 0 ? (string)$firmenAnzahl : ''],
         ['depot', 'depot', 'Depot', ''],
         ['verlauf', 'kurve', 'Depot-Verlauf', ''],
+        ['beobachtung', 'stern', 'Beobachten', ''],
         ['suche', 'suche', 'Firma prüfen', ''],
         ['alarme', 'glocke', 'Alarme & Termine', $ungelesen > 0 ? (string)$ungelesen : ''],
         ['einstellungen', 'regler', 'Einstellungen', ''],
@@ -2143,4 +2144,140 @@ function insiderArt(string $text): array
         $erg['preis'] = isset($m[2]) && $m[2] !== '' ? $von . '–' . zahl((float)str_replace(',', '', $m[2]), 2) : $von;
     }
     return $erg;
+}
+
+// ---------------------------------------------------------------------------
+// Beobachtungsliste
+// ---------------------------------------------------------------------------
+
+function seiteBeobachtung(array $d, bool $kiVerfuegbar): string
+{
+    $b = beobDaten($d);
+    $mail = einstellung($d, 'email');
+    $vorlagen = beobVorlagen();
+    $firmen = $d['firmen'];
+    uasort($firmen, static fn(array $a, array $c): int => strcasecmp($a['name'], $c['name']));
+    // Vorauswahl: eine Vulcan-Firma ohne Strategie mit der passenden Vorlage
+    $vorSymbol = '';
+    foreach ($firmen as $s => $f) {
+        if (stripos($f['name'], 'vulcan energy') !== false && !isset($b['firmen'][$s])) {
+            $vorSymbol = (string)$s;
+        }
+    }
+    $zeichen = ['gruen' => '🟢', 'rot' => '🔴', 'offen' => '⚪'];
+    ob_start(); ?>
+<h1 class="seitentitel">Beobachten</h1>
+<section class="karte">
+  <p>Jeden <strong>Samstag um 18 Uhr</strong> bekommst du einen Wochenbericht an <strong><?= e($mail !== '' ? $mail : '(keine E-Mail hinterlegt)') ?></strong><?= $mail === '' ? ' – bitte unter <a href="' . e(url(['seite' => 'einstellungen'])) . '">Einstellungen</a> eintragen' : '' ?>.
+    Nächster Bericht: <?= e(datumZeit(beobNaechsterBericht())) ?>. Kurs und Short-Quote werden täglich geprüft – erreicht eine Schwelle, kommt sofort ein Alarm.</p>
+  <?php if ($b['berichte'] !== []): ?><p class="klein leise">Letzter Bericht: <?= e(datumZeit((int)$b['berichte'][0]['zeit'])) ?><?= !empty($b['berichte'][0]['test']) ? ' (vorab verschickt)' : '' ?> · <?= $b['berichte'][0]['gesendet'] ? 'per E-Mail verschickt' : 'E-Mail nicht verschickt' ?></p><?php endif; ?>
+</section>
+
+<?php foreach ($b['firmen'] as $s => $f):
+    $s = (string)$s;
+    $firma = $d['firmen'][$s] ?? ['name' => $s, 'waehrung' => ''];
+    $z = (array)(end($f['zahlen']) ?: []);
+    $alleStati = [];
+    foreach ($f['strategien'] as $st) {
+        foreach ($st['signale'] as $sig) {
+            $alleStati[] = beobSignalStatus($sig, $z, $f['stand']);
+        }
+    }
+    $ampel = beobAmpel($alleStati);
+    ob_start(); ?>
+  <p><a class="firmenlink" href="<?= e(firmaUrl($s)) ?>"><?= e($firma['name']) ?></a> · <?= e($s) ?></p>
+  <div class="raster">
+    <div class="kachel"><span class="k-titel">Kurs</span><span class="k-wert"><?= e(geld($z['kurs'] ?? null, (string)($z['waehrung'] ?? ''))) ?></span></div>
+    <div class="kachel"><span class="k-titel">Short-Quote<?= info('Anteil der Aktien, die Leerverkäufer geliehen und verkauft haben. Bei australischen Werten aus den täglichen Meldungen der Aufsicht ASIC (4 Handelstage Verzug), bei US-Werten das Short Interest. Steigt sie, wetten mehr Profis auf fallende Kurse; sinkt sie deutlich, decken sie sich ein.') ?></span>
+      <span class="k-wert"><?= ($z['short_quote'] ?? null) !== null ? e(zahl($z['short_quote'], 2)) . ' %' : '–' ?></span>
+      <span class="k-unter"><?= e(($z['short_quelle'] ?? '') . (!empty($z['short_stand']) ? ', Stand ' . datum((int)strtotime($z['short_stand'])) : '')) ?></span></div>
+    <div class="kachel"><span class="k-titel">Days to Cover<?= info('So viele Handelstage bräuchten die Leerverkäufer beim üblichen Handelsvolumen, um alle Positionen zurückzukaufen. Hohe Werte (über 10) machen einen Short Squeeze wahrscheinlicher.') ?></span>
+      <span class="k-wert"><?= ($z['days_to_cover'] ?? null) !== null ? e(zahl($z['days_to_cover'], 1)) : '–' ?></span></div>
+  </div>
+  <?php
+    $verlauf = array_values(array_filter($f['zahlen'], static fn($e) => ($e['short_quote'] ?? null) !== null));
+    if (count($verlauf) > 1): ?>
+    <p class="klein leise">Short-Quote zuletzt: <?= e(implode(' · ', array_map(static fn($e) => datum((int)strtotime($e['datum'])) . ' ' . zahl($e['short_quote'], 2) . ' %', array_slice($verlauf, -6)))) ?></p>
+  <?php endif; ?>
+  <?php if (!empty($f['ki']['zeit'])): ?>
+    <div class="hinweis"><span><strong>Lage (KI-Prüfung vom <?= e(datumZeit((int)$f['ki']['zeit'])) ?>):</strong> <?= e((string)$f['ki']['lage']) ?>
+      <?php if (!empty($f['ki']['neu'])): ?><br><strong>Neu:</strong> <?= e(implode(' · ', $f['ki']['neu'])) ?><?php endif; ?></span></div>
+  <?php endif; ?>
+
+  <?php foreach ($f['strategien'] as $st): ?>
+    <h4><?= e($st['titel']) ?></h4>
+    <?php if ($st['these'] !== ''): ?><p class="klein"><?= e($st['these']) ?></p><?php endif; ?>
+    <ul class="beob-signale">
+      <?php foreach ($st['signale'] as $sig): $x = beobSignalStatus($sig, $z, $f['stand']); ?>
+        <li class="beob-<?= e($x['status']) ?>">
+          <span class="beob-zeichen"><?= $zeichen[$x['status']] ?></span>
+          <span class="beob-text"><strong><?= e($sig['titel']) ?></strong><?= !empty($x['neu']) ? ' <span class="abzeichen gelb">neu</span>' : '' ?>
+            <?php if ($sig['art'] === 'zahl'): ?>
+              <small>🟢 <?= $sig['gruen'] ? e($sig['gruen'][0] . ' ' . zahl($sig['gruen'][1], 1)) : '–' ?> · 🔴 <?= $sig['rot'] ? e($sig['rot'][0] . ' ' . zahl($sig['rot'][1], 1)) : '–' ?> <?= e(FZ_BEOB_QUELLEN[$sig['quelle']][1]) ?> · täglich geprüft</small>
+            <?php else: ?>
+              <small><?= $sig['gruen'] !== '' ? '🟢 ' . e($sig['gruen']) . '<br>' : '' ?><?= $sig['rot'] !== '' ? '🔴 ' . e($sig['rot']) : '' ?><?= $sig['frist'] !== '' ? '<br>⏳ erwartet bis ' . e(datum((int)strtotime($sig['frist']))) : '' ?></small>
+            <?php endif; ?>
+            <?php if ($x['text'] !== ''): ?><small class="beob-stand"><?= e($x['text']) ?><?= !empty($x['datum']) ? ' (' . e(datum((int)strtotime($x['datum']))) . ')' : '' ?><?= !empty($x['quelle']) ? ' · <a href="' . e($x['quelle']) . '" target="_blank" rel="noopener noreferrer">Quelle</a>' : '' ?></small><?php endif; ?>
+          </span>
+          <form method="post" action="./" class="beob-weg" data-bestaetigen="Signal „<?= e($sig['titel']) ?>“ entfernen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_signal_loeschen"><input type="hidden" name="s" value="<?= e($s) ?>"><input type="hidden" name="strategie" value="<?= e($st['id']) ?>"><input type="hidden" name="signal" value="<?= e($sig['id']) ?>"><button class="knopf-text klein" type="submit" aria-label="Signal entfernen">✕</button></form>
+        </li>
+      <?php endforeach; ?>
+    </ul>
+    <details class="unterbereich"><summary>Signal hinzufügen</summary>
+      <form method="post" action="./" class="beob-formular"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_signal_neu"><input type="hidden" name="s" value="<?= e($s) ?>"><input type="hidden" name="strategie" value="<?= e($st['id']) ?>">
+        <label class="feld"><span>Was beobachten?</span><input type="text" name="titel" maxlength="140" required placeholder="z. B. Financial Close"></label>
+        <label class="feld"><span>Art</span><select name="art"><option value="ereignis">Ereignis (KI prüft wöchentlich)</option>
+          <?php foreach (FZ_BEOB_QUELLEN as $q => [$t, $einheit]): ?><option value="zahl:<?= e($q) ?>"><?= e($t) ?> (Zahl, täglich)</option><?php endforeach; ?></select></label>
+        <label class="feld"><span>🟢 spricht dafür, wenn … (bei Zahlen: z. B. „&lt; 5“)</span><input type="text" name="gruen" maxlength="400"></label>
+        <label class="feld"><span>🔴 spricht dagegen, wenn … (bei Zahlen: z. B. „&gt; 10“)</span><input type="text" name="rot" maxlength="400"></label>
+        <label class="feld"><span>Erwartet bis (optional; danach gilt es als 🔴)</span><input type="date" name="frist"></label>
+        <button class="knopf zweit" type="submit">Signal speichern</button>
+      </form>
+    </details>
+    <form method="post" action="./" data-bestaetigen="Strategie „<?= e($st['titel']) ?>“ mit allen Signalen löschen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_strategie_loeschen"><input type="hidden" name="s" value="<?= e($s) ?>"><input type="hidden" name="strategie" value="<?= e($st['id']) ?>"><button class="knopf-text gefahr klein" type="submit">Strategie löschen</button></form>
+  <?php endforeach; ?>
+
+  <?php if ($kiVerfuegbar): ?>
+  <div class="ki-bereich" data-ki="<?= e($s) ?>" data-ki-art="beobachtung">
+    <button type="button" class="knopf zweit" data-ki-start><?= ico('blitz') ?> Ereignisse jetzt prüfen (KI)</button>
+    <p class="klein leise">Sonst automatisch vor dem Samstagsbericht. Kostet etwa 5–10 Cent.</p>
+    <div class="ki-status" hidden></div>
+  </div>
+  <?php endif; ?>
+  <form method="post" action="./" data-bestaetigen="<?= e($firma['name']) ?> aus der Beobachtung nehmen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_firma_entfernen"><input type="hidden" name="s" value="<?= e($s) ?>"><button class="knopf-text gefahr klein" type="submit">Nicht mehr beobachten</button></form>
+<?php
+    $inhalt = (string)ob_get_clean();
+    echo akk($firma['name'], 'stern', $inhalt, ['id' => 'b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s), 'offen' => count($b['firmen']) === 1,
+        'meta' => ['gruen' => '🟢', 'rot' => '🔴', 'gelb' => '🟡'][$ampel] . (($z['short_quote'] ?? null) !== null ? ' ' . e(zahl($z['short_quote'], 1)) . ' %' : '')]);
+endforeach; ?>
+
+<?php
+    ob_start(); ?>
+  <form method="post" action="./" class="beob-formular" data-laden="Wird angelegt …"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_neu">
+    <label class="feld"><span>Firma (aus „Meine Firmen“)</span><select name="s" required>
+      <?php foreach ($firmen as $s => $f): ?><option value="<?= e((string)$s) ?>"<?= (string)$s === $vorSymbol ? ' selected' : '' ?>><?= e($f['name']) ?> (<?= e((string)$s) ?>)</option><?php endforeach; ?>
+    </select></label>
+    <label class="feld"><span>Vorlage</span><select name="vorlage">
+      <?php foreach ($vorlagen as $k => $v): ?><option value="<?= e($k) ?>"<?= $k === ($vorSymbol !== '' ? 'vulcan' : 'short') ? ' selected' : '' ?>><?= e($v['name']) ?></option><?php endforeach; ?>
+      <?php if ($kiVerfuegbar): ?><option value="text">Aus meinem Text erzeugen (KI) ↓</option><?php endif; ?>
+    </select></label>
+    <?php if ($kiVerfuegbar): ?><label class="feld"><span>Text mit deiner These (nur für „Aus meinem Text erzeugen“)</span><textarea name="text" rows="5" maxlength="20000" placeholder="z. B. eine Analyse, worauf es in den nächsten Monaten ankommt …"></textarea></label><?php endif; ?>
+    <button class="knopf" type="submit">Beobachtung anlegen</button>
+  </form>
+  <p class="klein leise">Die Firma muss in „Meine Firmen“ sein – dorthin kommt sie, sobald du sie einmal aufrufst.</p>
+<?php
+    echo akk('Beobachtung hinzufügen', 'plus', (string)ob_get_clean(), ['id' => 'b-neu', 'offen' => $b['firmen'] === []]);
+
+    ob_start();
+    if ($b['berichte'] === []) {
+        echo leer('Noch kein Bericht – der erste kommt am Samstag um 18 Uhr.');
+    }
+    foreach ($b['berichte'] as $i => $r): ?>
+      <details class="unterbereich"<?= $i === 0 ? ' open' : '' ?>><summary><?= e(datumZeit((int)$r['zeit'])) ?> – <?= e((string)$r['kurz']) ?><?= !empty($r['test']) ? ' (vorab)' : '' ?></summary><pre class="beob-bericht"><?= e((string)$r['text']) ?></pre></details>
+    <?php endforeach; ?>
+    <?php if ($b['firmen'] !== []): ?>
+      <form method="post" action="./" data-laden="Wird verschickt …"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_bericht_senden"><button class="knopf zweit" type="submit"><?= ico('glocke') ?> Bericht jetzt per E-Mail schicken</button></form>
+    <?php endif;
+    echo akk('Wochenberichte', 'dokument', (string)ob_get_clean(), ['id' => 'b-berichte', 'meta' => $b['berichte'] !== [] ? (string)count($b['berichte']) : '']);
+    return (string)ob_get_clean();
 }

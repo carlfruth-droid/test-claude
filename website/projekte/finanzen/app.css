@@ -634,3 +634,16 @@ a.firmenlink:hover { color: var(--akzent); text-decoration-color: currentColor; 
 .depot-verlauf-kurz .cl-info { min-height: 1.6em; }
 .depot-verlauf-kurz .raster { margin-top: 6px; }
 .depot-verlauf-kurz [data-dvk-stand] { margin: 6px 0 0; }
+
+/* ---------- Beobachten ---------- */
+.beob-signale { list-style: none; margin: 4px 0 8px; padding: 0; }
+.beob-signale li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid #eef1f6; }
+.beob-signale li:last-child { border-bottom: 0; }
+.beob-zeichen { flex: none; font-size: 1.05rem; line-height: 1.4; }
+.beob-text { flex: 1; min-width: 0; }
+.beob-text small { display: block; color: var(--leise); font-size: .82rem; margin-top: 2px; }
+.beob-text small.beob-stand { color: var(--text); background: #f6f8fc; border-radius: 8px; padding: 4px 8px; margin-top: 5px; }
+.beob-weg { flex: none; }
+.beob-formular { display: grid; gap: 8px; margin-top: 8px; }
+.beob-formular .feld { margin: 0; }
+.beob-bericht { white-space: pre-wrap; font: inherit; font-size: .88rem; background: #f8fafd; border-radius: 10px; padding: 10px 12px; margin: 6px 0; }

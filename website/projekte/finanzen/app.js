@@ -445,7 +445,7 @@
           clearInterval(uhr);
           if (j && j.ok) {
             status.textContent = 'Fertig – wird angezeigt …';
-            location.hash = { szenario: 'f-empfehlung', wettbewerber: 'f-portraet' }[bereich.getAttribute('data-ki-art')] || 'f-ki';
+            location.hash = { szenario: 'f-empfehlung', wettbewerber: 'f-portraet', beobachtung: 'b-' + bereich.getAttribute('data-ki').replace(/[^A-Za-z0-9]/g, '-') }[bereich.getAttribute('data-ki-art')] || 'f-ki';
             location.reload();
           } else {
             status.className = 'ki-status fehlerbox';

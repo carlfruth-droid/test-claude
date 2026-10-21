@@ -21,6 +21,7 @@ require FZ_APP . '/inc/depot.php';
 require FZ_APP . '/inc/verlauf.php';
 require FZ_APP . '/inc/position.php';
 require FZ_APP . '/inc/szenario.php';
+require FZ_APP . '/inc/beobachtung.php';
 require FZ_APP . '/inc/ansichten.php';
 
 header('X-Robots-Tag: noindex, nofollow');
@@ -58,7 +59,10 @@ if (isset($_GET['cron'])) {
         $erg['zuordnung_offen'] = depotZuordnen(60.0);
     }
     // Depot-Verlauf vorwärmen: Kurse ergänzen und Übersicht/Verlauf vorrechnen, damit beim Öffnen nichts lädt
-    $erg += verlaufAufwaermen(min(70.0, max(10.0, 150.0 - (microtime(true) - $cronStart))));
+    // Beobachtungsliste: täglich Zahlen, samstags 18 Uhr KI-Prüfung und Wochenbericht
+    if (function_exists('set_time_limit')) { @set_time_limit(320); }
+    $erg += beobAusfuehren(max(30.0, 280.0 - (microtime(true) - $cronStart)));
+    $erg += verlaufAufwaermen(min(70.0, max(10.0, 290.0 - (microtime(true) - $cronStart))));
     cacheAufraeumen();
     // Push-Meldungen, die ntfy vom Webserver nicht angenommen hat, verschickt der Aufrufer (GitHub)
     $erg['ntfy'] = ntfyWarteschlangeHolen();
@@ -233,6 +237,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
     $s = symbolAusAnfrage();
     try {
         switch ($aktion) {
+            case 'beob_neu':
+                if ($s === '' || !isset(datenLaden()['firmen'][$s])) {
+                    meldung('Bitte eine Firma aus „Meine Firmen“ wählen.', 'fehler');
+                    weiter(url(['seite' => 'beobachtung']));
+                }
+                $vk = (string)($_POST['vorlage'] ?? 'leer');
+                if ($vk === 'text') {
+                    $x = beobStrategieAusText(textFeld('text', 20000), (string)datenLaden()['firmen'][$s]['name']);
+                    if (!$x['ok']) {
+                        meldung($x['fehler'], 'fehler');
+                        weiter(url(['seite' => 'beobachtung']));
+                    }
+                    $vorlage = $x['vorlage'];
+                } else {
+                    $vorlage = beobVorlagen()[$vk] ?? beobVorlagen()['leer'];
+                }
+                $neu = beobStrategieNeu($s, $vorlage);
+                datenAendern(function (array &$d) use ($s, $neu): void {
+                    $d['beobachtung']['firmen'][$s]['strategien'][] = $neu;
+                });
+                meldung('Beobachtung angelegt. Kurs und Short-Quote werden ab jetzt täglich geprüft.');
+                $erg = beobZahlenTag(datenLaden(), $s);
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_signal_neu':
+                $sig = ['titel' => textFeld('titel', 140), 'art' => 'ereignis', 'gruen' => textFeld('gruen', 400), 'rot' => textFeld('rot', 400), 'frist' => textFeld('frist', 10)];
+                if (str_starts_with((string)($_POST['art'] ?? ''), 'zahl:')) {
+                    $schwelle = static fn(string $t): ?array => preg_match('/^\s*([<>])\s*(-?[0-9]+(?:[.,][0-9]+)?)\s*%?\s*$/', $t, $m) ? [$m[1], (float)str_replace(',', '.', $m[2])] : null;
+                    $sig = ['titel' => $sig['titel'], 'art' => 'zahl', 'quelle' => substr((string)$_POST['art'], 5), 'gruen' => $schwelle($sig['gruen']), 'rot' => $schwelle($sig['rot'])];
+                }
+                $sig = beobSignalNormal($sig);
+                $st = (string)($_POST['strategie'] ?? '');
+                datenAendern(function (array &$d) use ($s, $st, $sig): void {
+                    foreach ((array)($d['beobachtung']['firmen'][$s]['strategien'] ?? []) as $k => $x) {
+                        if ($x['id'] === $st) {
+                            $d['beobachtung']['firmen'][$s]['strategien'][$k]['signale'][] = $sig;
+                        }
+                    }
+                });
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_signal_loeschen':
+            case 'beob_strategie_loeschen':
+                $st = (string)($_POST['strategie'] ?? '');
+                $sid = (string)($_POST['signal'] ?? '');
+                datenAendern(function (array &$d) use ($s, $st, $sid, $aktion): void {
+                    $liste = (array)($d['beobachtung']['firmen'][$s]['strategien'] ?? []);
+                    foreach ($liste as $k => $x) {
+                        if ($x['id'] !== $st) {
+                            continue;
+                        }
+                        if ($aktion === 'beob_strategie_loeschen') {
+                            unset($liste[$k]);
+                        } else {
+                            $liste[$k]['signale'] = array_values(array_filter($x['signale'], static fn(array $g): bool => $g['id'] !== $sid));
+                        }
+                    }
+                    if (isset($d['beobachtung']['firmen'][$s])) {
+                        $d['beobachtung']['firmen'][$s]['strategien'] = array_values($liste);
+                    }
+                });
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_firma_entfernen':
+                datenAendern(function (array &$d) use ($s): void {
+                    unset($d['beobachtung']['firmen'][$s]);
+                });
+                meldung('Nicht mehr in der Beobachtung.');
+                weiter(url(['seite' => 'beobachtung']));
+                break;
+            case 'beob_bericht_senden':
+                foreach (array_keys(beobDaten(datenLaden())['firmen']) as $bs) {
+                    beobZahlenTag(datenLaden(), (string)$bs);
+                }
+                $ok = beobBerichtSenden(datenLaden(), true);
+                meldung($ok ? 'Bericht verschickt – schau in dein Postfach (auch im Spam-Ordner).' : 'Die E-Mail konnte nicht verschickt werden – ist unter Einstellungen eine Adresse hinterlegt?', $ok ? 'ok' : 'fehler');
+                weiter(url(['seite' => 'beobachtung']) . '#b-berichte');
+                break;
             case 'abmelden':
                 abmelden();
                 weiter('./');
@@ -719,7 +801,12 @@ if (isset($_GET['api'])) {
         session_write_close(); // die Analyse dauert – andere Seiten sollen derweil nicht blockieren
         $d = datenLaden();
         $f = $d['firmen'][$s] ?? firmaNormal(['name' => $p['name']], $s);
-        if ((string)($_POST['art'] ?? '') === 'wettbewerber') {
+        if ((string)($_POST['art'] ?? '') === 'beobachtung') {
+            $erg = beobKiPruefen($d, $s);
+            if ($erg['ok']) {
+                beobKiSpeichern($s, $erg);
+            }
+        } elseif ((string)($_POST['art'] ?? '') === 'wettbewerber') {
             $erg = wettbewerberAnalyse($f, $p, kiModell($d));
             if ($erg['ok']) {
                 firmaAendern($s, function (array &$f) use ($erg): void {
@@ -958,6 +1045,10 @@ switch ($seite) {
             $vorschau = !empty($v['ok']) ? $v : null;
         }
         seite('Depot', seiteDepot($d, depotUebersicht($d), $etoroVerbunden, $vorschau, $etVorschau), 'depot', $d);
+        break;
+
+    case 'beobachtung':
+        seite('Beobachten', seiteBeobachtung($d, kiSchluessel() !== ''), 'beobachtung', $d);
         break;
 
     case 'alarme':

@@ -5,7 +5,8 @@ name: Finanzzentrale – Alarme prüfen
 # GitHub nur auf dem Standard-Branch.
 on:
   schedule:
-    - cron: '7,37 6-21 * * *'   # täglich etwa alle 30 Minuten (8–23 Uhr deutscher Sommerzeit); auch Push-Nachversand
+    - cron: '7,37 6-21 * * *'
+    - cron: '2 16,17 * * 6'      # Samstag kurz nach 18 Uhr deutscher Zeit: Wochenbericht der Beobachtungsliste   # täglich etwa alle 30 Minuten (8–23 Uhr deutscher Sommerzeit); auch Push-Nachversand
   workflow_dispatch:
 
 jobs:
@@ -18,7 +19,7 @@ jobs:
         run: |
           TOKEN=$(printf '%s' "finanzzentrale-cron:$FTP_PASSWORD" | sha256sum | cut -c1-40)
           echo "::add-mask::$TOKEN"
-          curl -fsS -m 170 "https://fruthzeug.de/projekte/finanzen/?cron=$TOKEN" -o antwort.json
+          curl -fsS -m 330 "https://fruthzeug.de/projekte/finanzen/?cron=$TOKEN" -o antwort.json
           python3 - <<'PY'
           import json, urllib.request
           d = json.load(open('antwort.json'))
