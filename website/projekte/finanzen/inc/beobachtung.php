@@ -30,6 +30,7 @@ function beobVorlagen(): array
             'titel' => 'Shortseller-Timing bis Mitte 2027',
             'these' => 'Shortseller setzen auf die umsatzlose Bauphase bis zur Produktion (Lionheart, Ende 2028) und auf Finanzierungsprobleme 2027. Gelingt das Financial Close und läuft der Bau nach Plan, droht ihnen ein Short Squeeze.',
             'asx' => 'VUL',
+            'tagescheck' => ['an' => true, 'asx' => 'VUL.AX', 'eu' => 'VUL.DE'],
             'signale' => [
                 $z('short', 'Short-Quote (ASIC)', 'short_quote', ['<', 5.5], ['>', 10.0]),
                 $z('dtc', 'Days to Cover', 'days_to_cover', ['<', 8.0], ['>', 20.0]),
@@ -546,4 +547,258 @@ function beobBerichtSenden(array $d, bool $test = false): bool
         $d['beobachtung'] = $b;
     });
     return $ok;
+}
+
+// ---------------------------------------------------------------------------
+// Tagescheck (z. B. Vulcan): ASX-Mitteilungen, Morgen- und Nachmittags-Check,
+// Short-Trend – Meldung per Push und E-Mail nur bei einem Signal
+// ---------------------------------------------------------------------------
+
+const FZ_TAGESCHECK_STANDARD = ['an' => false, 'asx' => '', 'eu' => '', 'faktor' => 2.5, 'plus' => 4.0, 'plus_eu' => 3.0,
+    'stichworte' => 'Financial Close, EIB, Kredit, Loan, Debt, Placement, Platzierung, Capital Raising, Kapitalerhöhung, Entitlement, Substantial Holding, Stellantis, LEOP, CLEOP, Trading Halt'];
+
+function beobTagescheck(array $f): array
+{
+    return array_merge(FZ_TAGESCHECK_STANDARD, (array)($f['tagescheck'] ?? []));
+}
+
+/** Yahoo-Chart: Zeitpunkte, Schlusskurse, Volumen. */
+function beobChart(string $symbol, string $spanne, string $intervall): ?array
+{
+    $r = http('https://query1.finance.yahoo.com/v8/finance/chart/' . rawurlencode($symbol) . '?range=' . $spanne . '&interval=' . $intervall . '&includePrePost=false', ['ua' => 'browser', 'zeit' => 15]);
+    $j = httpJson($r);
+    $res = $j['chart']['result'][0] ?? null;
+    if (!is_array($res) || empty($res['timestamp'])) {
+        return null;
+    }
+    $q = $res['indicators']['quote'][0] ?? [];
+    $erg = ['t' => [], 'c' => [], 'v' => [], 'w' => (string)($res['meta']['currency'] ?? ''), 'tz' => (string)($res['meta']['exchangeTimezoneName'] ?? 'UTC')];
+    foreach ($res['timestamp'] as $i => $ts) {
+        if (is_numeric($q['close'][$i] ?? null)) {
+            $erg['t'][] = (int)$ts;
+            $erg['c'][] = (float)$q['close'][$i];
+            $erg['v'][] = (float)($q['volume'][$i] ?? 0);
+        }
+    }
+    return $erg['t'] === [] ? null : $erg;
+}
+
+/** Offizielle Mitteilungen an der ASX (neueste zuerst). */
+function asxMitteilungen(string $kuerzel): array
+{
+    $j = httpJson(http('https://asx.api.markitdigital.com/asx-research/1.0/companies/' . rawurlencode(strtolower($kuerzel)) . '/announcements?count=10&market_sensitive=false', ['ua' => 'browser', 'zeit' => 15]));
+    $liste = [];
+    foreach ((array)($j['data']['items'] ?? []) as $x) {
+        if (!empty($x['headline']) && !empty($x['date'])) {
+            $liste[] = ['schluessel' => (string)($x['documentKey'] ?? md5($x['headline'] . $x['date'])), 'titel' => (string)$x['headline'],
+                'zeit' => (int)strtotime((string)$x['date']), 'kursrelevant' => !empty($x['isPriceSensitive']), 'art' => (string)($x['announcementType'] ?? '')];
+        }
+    }
+    return $liste;
+}
+
+function beobStichwort(string $text, string $liste): string
+{
+    foreach (array_filter(array_map('trim', explode(',', $liste))) as $w) {
+        if (mb_stripos($text, $w) !== false) {
+            return $w;
+        }
+    }
+    return '';
+}
+
+/** Morgen-Check: ASX-Handelstag – Volumen gegenüber Durchschnitt, Kurs, Mitteilungen des Tages. */
+function tagescheckMorgen(array $tc, array $mitteilungen): ?array
+{
+    $c = beobChart($tc['asx'], '1mo', '1d');
+    if ($c === null || count($c['t']) < 3) {
+        return null;
+    }
+    $n = count($c['t']) - 1;
+    $tz = new DateTimeZone($c['tz']);
+    $tag = (new DateTimeImmutable('@' . $c['t'][$n]))->setTimezone($tz)->format('Y-m-d');
+    $heuteDort = (new DateTimeImmutable('now', $tz))->format('Y-m-d');
+    $roh = yahooKennzahlenRoh($tc['asx'], 86400);
+    $schnitt = $roh !== null ? (yRoh($roh, 'summaryDetail', 'averageVolume') ?? 0.0) : 0.0;
+    if ($schnitt <= 0) {
+        $schnitt = array_sum(array_slice($c['v'], 0, $n)) / max(1, $n);
+    }
+    $aend = ($c['c'][$n] / $c['c'][$n - 1] - 1) * 100;
+    $faktor = $schnitt > 0 ? $c['v'][$n] / $schnitt : 0;
+    $heutige = array_values(array_filter($mitteilungen, static fn(array $m): bool => $m['zeit'] > $c['t'][$n] - 20 * 3600));
+    $kapital = array_filter($heutige, static fn(array $m): bool => (bool)preg_match('/placement|capital raising|entitlement|issue of|kapitalerh/i', $m['titel']));
+    $art = 'ruhig';
+    if ($tag !== $heuteDort) {
+        $art = 'kein Handel';
+    } elseif ($faktor >= $tc['faktor'] && $aend >= $tc['plus']) {
+        $art = $kapital !== [] ? 'meldung' : 'squeeze';
+    } elseif ($faktor >= $tc['faktor'] && $aend <= -$tc['plus']) {
+        $art = 'verkauf';
+    } elseif ($faktor >= $tc['faktor']) {
+        $art = 'volumen';
+    }
+    return ['datum' => $tag, 'kurs' => $c['c'][$n], 'w' => $c['w'], 'aend' => round($aend, 1), 'volumen' => $c['v'][$n], 'schnitt' => round($schnitt), 'faktor' => round($faktor, 1),
+        'art' => $art, 'mitteilungen' => array_map(static fn(array $m): string => $m['titel'], $heutige)];
+}
+
+/** Nachmittags-Check: deutscher Handel seit 15:30 und gegenüber dem umgerechneten ASX-Schluss. */
+function tagescheckNachmittag(array $tc): ?array
+{
+    $c = beobChart($tc['eu'], '1d', '5m');
+    if ($c === null || count($c['t']) < 6) {
+        return null;
+    }
+    // 15:30 Uhr am Tag der letzten Kurse (von Hand nachts gerechnet: der Vortag)
+    $tag = (new DateTimeImmutable('@' . end($c['t'])))->setTimezone(new DateTimeZone('Europe/Berlin'))->format('Y-m-d');
+    $grenze = (new DateTimeImmutable($tag . ' 15:30', new DateTimeZone('Europe/Berlin')))->getTimestamp();
+    $vor = $nach = 0.0;
+    $nVor = $nNach = 0;
+    $ref = null;
+    foreach ($c['t'] as $i => $ts) {
+        if ($ts < $grenze) {
+            $vor += $c['v'][$i];
+            $nVor++;
+            $ref = $c['c'][$i];
+        } else {
+            $nach += $c['v'][$i];
+            $nNach++;
+        }
+    }
+    $jetzt = (float)end($c['c']);
+    $seit = $ref ? ($jetzt / $ref - 1) * 100 : null;
+    $tempo = $nVor > 0 && $nNach > 0 && $vor > 0 ? ($nach / $nNach) / ($vor / $nVor) : null;
+    // Aufschlag gegenüber dem ASX-Schluss in Euro
+    $aufschlag = null;
+    $asx = beobChart($tc['asx'], '5d', '1d');
+    $fx = wechselkurse(['AUD'])['AUD'] ?? null;
+    if ($asx !== null && $fx) {
+        $aufschlag = round(($jetzt / ((float)end($asx['c']) / $fx) - 1) * 100, 1);
+    }
+    $signal = $seit !== null && $seit >= $tc['plus_eu'] && ($tempo ?? 0) >= 2;
+    return ['kurs' => $jetzt, 'w' => $c['w'], 'seit_1530' => $seit !== null ? round($seit, 1) : null, 'tempo' => $tempo !== null ? round($tempo, 1) : null,
+        'volumen' => $vor + $nach, 'aufschlag' => $aufschlag, 'art' => $signal ? 'anstieg' : ($seit !== null && $seit <= -$tc['plus_eu'] && ($tempo ?? 0) >= 2 ? 'abgabe' : 'ruhig')];
+}
+
+/** Bei jedem Cron-Lauf: Mitteilungen, und zur passenden Uhrzeit Morgen- bzw. Nachmittags-Check. */
+function tagescheckAusfuehren(): array
+{
+    $d = datenLaden();
+    $jetzt = new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin'));
+    $heute = $jetzt->format('Y-m-d');
+    $werktag = (int)$jetzt->format('N') <= 5;
+    $uhr = (int)$jetzt->format('Hi');
+    $erg = [];
+    foreach (beobDaten($d)['firmen'] as $s => $f) {
+        $tc = beobTagescheck($f);
+        if (!$tc['an'] || $tc['asx'] === '') {
+            continue;
+        }
+        $name = (string)($d['firmen'][$s]['name'] ?? $s);
+        $st = (array)($f['tc'] ?? []);
+        $meldungen = [];
+        $kuerzel = preg_replace('/\.AX$/', '', $tc['asx']);
+        $mitteilungen = asxMitteilungen((string)$kuerzel);
+        // 1. neue ASX-Mitteilungen (kursrelevant oder mit Stichwort)
+        $gesehen = (array)($st['gesehen'] ?? []);
+        $erstmals = $gesehen === [];
+        foreach (array_reverse($mitteilungen) as $m) {
+            if (in_array($m['schluessel'], $gesehen, true)) {
+                continue;
+            }
+            $gesehen[] = $m['schluessel'];
+            $wort = beobStichwort($m['titel'], $tc['stichworte']);
+            if (!$erstmals && ($m['kursrelevant'] || $wort !== '')) {
+                $meldungen[] = '📰 ASX-Mitteilung' . ($m['kursrelevant'] ? ' (kursrelevant)' : '') . ': „' . $m['titel'] . '“' . ($wort !== '' ? ' – Stichwort ' . $wort : '')
+                    . ' · ' . date('d.m. H:i', $m['zeit']) . ' Uhr';
+            }
+        }
+        $st['gesehen'] = array_slice($gesehen, -60);
+        $st['mitteilungen'] = array_slice($mitteilungen, 0, 5);
+        // 2. Morgen-Check nach ASX-Schluss
+        if ($werktag && $uhr >= 715 && $uhr < 1300 && ($st['morgen']['geprueft'] ?? '') !== $heute) {
+            $m = tagescheckMorgen($tc, $mitteilungen);
+            // Yahoo hat den Handelstag manchmal erst etwas später – bis 10 Uhr erneut versuchen
+            if ($m !== null && ($m['art'] !== 'kein Handel' || $uhr >= 1000)) {
+                $st['morgen'] = $m + ['geprueft' => $heute, 'zeit' => time()];
+                $txt = 'ASX ' . date('d.m.', strtotime($m['datum'])) . ': Kurs ' . zahl($m['kurs'], 3) . ' ' . $m['w'] . ' (' . ($m['aend'] > 0 ? '+' : '') . zahl($m['aend'], 1) . ' %), Volumen '
+                    . zahl($m['volumen'] / 1e6, 2) . ' Mio. = ' . zahl($m['faktor'], 1) . '× Ø (' . zahl($m['schnitt'] / 1e6, 2) . ' Mio.)';
+                $titel = ['squeeze' => '🔥 Squeeze-Verdacht', 'verkauf' => '⚠️ Starker Verkaufsdruck', 'meldung' => '📈 Hohes Volumen wegen Kapitalmaßnahme', 'volumen' => '👀 Ungewöhnlich hohes Volumen'][$m['art']] ?? '';
+                if ($titel !== '') {
+                    $meldungen[] = $titel . ' – ' . $txt . ($m['mitteilungen'] !== [] ? "\nMitteilungen: " . implode(' · ', $m['mitteilungen']) : "\nKeine ASX-Mitteilung dazu.")
+                        . ($m['art'] === 'squeeze' ? "\nOb Shortseller wirklich eindecken, zeigt die ASIC-Quote erst in 4 Handelstagen." : '');
+                }
+            }
+        }
+        // 3. Nachmittags-Check nach US-Eröffnung
+        if ($werktag && $tc['eu'] !== '' && $uhr >= 1600 && $uhr < 1830 && ($st['nachmittag']['geprueft'] ?? '') !== $heute) {
+            $n = tagescheckNachmittag($tc);
+            if ($n !== null) {
+                $st['nachmittag'] = $n + ['geprueft' => $heute, 'zeit' => time()];
+                if ($n['art'] !== 'ruhig') {
+                    $meldungen[] = ($n['art'] === 'anstieg' ? '🚀 Europa zieht seit US-Eröffnung an' : '📉 Europa gibt seit US-Eröffnung nach') . ' – ' . $tc['eu'] . ' ' . zahl($n['kurs'], 3) . ' ' . $n['w']
+                        . ', seit 15:30 ' . ($n['seit_1530'] > 0 ? '+' : '') . zahl($n['seit_1530'], 1) . ' %, Volumen-Tempo ' . zahl($n['tempo'], 1) . '× gegenüber vormittags'
+                        . ($n['aufschlag'] !== null ? ', ' . ($n['aufschlag'] >= 0 ? '+' : '') . zahl($n['aufschlag'], 1) . ' % zum ASX-Schluss' : '');
+                }
+            }
+        }
+        // 4. Short-Trend: ±1 Prozentpunkt in zwei Wochen
+        $quoten = array_values(array_filter((array)$f['zahlen'], static fn($e) => ($e['short_quote'] ?? null) !== null));
+        $letzte = end($quoten);
+        if ($letzte && ($st['trend_datum'] ?? '') !== $letzte['short_stand']) {
+            foreach ($quoten as $e) {
+                if ($e['datum'] >= date('Y-m-d', strtotime('-15 days')) && $e['datum'] <= date('Y-m-d', strtotime('-12 days'))) {
+                    $diff = $letzte['short_quote'] - $e['short_quote'];
+                    if (abs($diff) >= 1.0) {
+                        $meldungen[] = ($diff < 0 ? '🟢 Short-Quote fällt deutlich: ' : '🔴 Short-Quote steigt deutlich: ') . zahl($e['short_quote'], 2) . ' % → ' . zahl($letzte['short_quote'], 2) . ' % in zwei Wochen (ASIC)';
+                    }
+                    break;
+                }
+            }
+            $st['trend_datum'] = $letzte['short_stand'];
+        }
+        if ($meldungen !== []) {
+            benachrichtigen($d, $name . ': ' . mb_substr(trim(explode(' – ', explode(':', $meldungen[0])[0])[0]), 0, 60), implode("\n\n", $meldungen), fzBasisUrl() . '?seite=beobachtung');
+            $st['meldungen'] = array_slice(array_merge(array_map(static fn($x) => ['zeit' => time(), 'text' => $x], $meldungen), (array)($st['meldungen'] ?? [])), 0, 20);
+        }
+        datenAendern(function (array &$d) use ($s, $st): void {
+            if (isset($d['beobachtung']['firmen'][$s])) {
+                $d['beobachtung']['firmen'][$s]['tc'] = $st;
+            }
+        });
+        $erg[$s] = count($meldungen);
+    }
+    return ['tagescheck' => $erg];
+}
+
+/** Von Hand: beide Checks sofort rechnen und anzeigen – ohne Meldung, die geplanten Checks laufen trotzdem. */
+function tagescheckJetzt(string $symbol): bool
+{
+    $d = datenLaden();
+    $f = beobDaten($d)['firmen'][$symbol] ?? null;
+    if ($f === null) {
+        return false;
+    }
+    $tc = beobTagescheck($f);
+    if ($tc['asx'] === '') {
+        return false;
+    }
+    $mitteilungen = asxMitteilungen((string)preg_replace('/\.AX$/', '', $tc['asx']));
+    $m = tagescheckMorgen($tc, $mitteilungen);
+    $n = $tc['eu'] !== '' ? tagescheckNachmittag($tc) : null;
+    datenAendern(function (array &$d) use ($symbol, $m, $n, $mitteilungen): void {
+        if (!isset($d['beobachtung']['firmen'][$symbol])) {
+            return;
+        }
+        $st = (array)($d['beobachtung']['firmen'][$symbol]['tc'] ?? []);
+        $st['mitteilungen'] = array_slice($mitteilungen, 0, 5);
+        // geprueft bleibt, wie es war: der geplante Check meldet sich trotzdem
+        if ($m !== null) {
+            $st['morgen'] = $m + ['geprueft' => (string)($st['morgen']['geprueft'] ?? ''), 'zeit' => time()];
+        }
+        if ($n !== null) {
+            $st['nachmittag'] = $n + ['geprueft' => (string)($st['nachmittag']['geprueft'] ?? ''), 'zeit' => time()];
+        }
+        $d['beobachtung']['firmen'][$symbol]['tc'] = $st;
+    });
+    return $m !== null || $n !== null;
 }
