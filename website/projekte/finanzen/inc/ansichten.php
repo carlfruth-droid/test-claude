@@ -2150,6 +2150,69 @@ function insiderArt(string $text): array
 // Beobachtungsliste
 // ---------------------------------------------------------------------------
 
+/** Tagescheck einer beobachteten Firma: Ergebnisse, ASX-Mitteilungen, Meldungen, Lesezeichen, Einstellungen. */
+function beobTagescheckTeil(string $s, array $f): string
+{
+    $tc = beobTagescheck($f);
+    $st = (array)($f['tc'] ?? []);
+    $an = $tc['an'] && $tc['asx'] !== '';
+    $kuerzel = strtoupper((string)preg_replace('/\.AX$/', '', $tc['asx'] !== '' ? $tc['asx'] : $s));
+    $vz = static fn($x): string => $x === null ? '–' : (($x > 0 ? '+' : '') . zahl((float)$x, 1) . ' %');
+    $artText = ['squeeze' => '🔥 Squeeze-Verdacht', 'verkauf' => '⚠️ starker Verkaufsdruck', 'meldung' => '📈 hohes Volumen wegen Kapitalmaßnahme',
+        'volumen' => '👀 ungewöhnlich hohes Volumen', 'ruhig' => '✓ unauffällig', 'kein Handel' => '– kein Handel', 'anstieg' => '🚀 Anstieg mit Volumen', 'abgabe' => '📉 Abgabe mit Volumen'];
+    ob_start(); ?>
+  <h4>Tagescheck <?= $an ? '<span class="abzeichen gruen">an</span>' : '<span class="abzeichen">aus</span>' ?><?= info('Zweimal täglich automatisch, Meldung per Push und E-Mail nur bei einem Signal. Morgens (ab 7:15 Uhr, nach dem ASX-Schluss): Volumen gegenüber dem Durchschnitt und Kursänderung – abgeglichen mit den ASX-Mitteilungen des Tages, denn hohes Volumen bei einer Kapitalerhöhung ist kein Squeeze. Nachmittags (ab 16 Uhr): Handel in Deutschland seit der US-Eröffnung um 15:30 Uhr und Abstand zum ASX-Schluss in Euro. Dazu bei jedem Lauf neue kursrelevante ASX-Mitteilungen und alle zwei Wochen der Trend der Short-Quote (±1 Prozentpunkt).') ?></h4>
+  <?php if ($an): ?>
+    <div class="raster">
+      <?php $m = (array)($st['morgen'] ?? []); ?>
+      <div class="kachel"><span class="k-titel">Morgen-Check ASX</span>
+        <?php if ($m !== []): ?>
+          <span class="k-wert"><?= e($artText[$m['art']] ?? $m['art']) ?></span>
+          <span class="k-unter"><?= e(datum((int)strtotime($m['datum'])) . ': ' . zahl((float)$m['kurs'], 3) . ' ' . $m['w'] . ' (' . $vz($m['aend']) . ') · Volumen ' . zahl($m['volumen'] / 1e6, 2) . ' Mio. = ' . zahl((float)$m['faktor'], 1) . '× Ø ' . zahl($m['schnitt'] / 1e6, 2) . ' Mio.') ?></span>
+        <?php else: ?><span class="k-wert">–</span><span class="k-unter">werktags ab 7:15 Uhr</span><?php endif; ?></div>
+      <?php $n = (array)($st['nachmittag'] ?? []); ?>
+      <div class="kachel"><span class="k-titel">Nachmittag <?= e($tc['eu'] !== '' ? $tc['eu'] : 'Europa') ?></span>
+        <?php if ($n !== []): ?>
+          <span class="k-wert"><?= e($artText[$n['art']] ?? $n['art']) ?></span>
+          <span class="k-unter"><?= e(zahl((float)$n['kurs'], 3) . ' ' . $n['w'] . ' · seit 15:30 ' . $vz($n['seit_1530']) . ' · Volumen-Tempo ' . ($n['tempo'] !== null ? zahl((float)$n['tempo'], 1) . '×' : '–') . ($n['aufschlag'] !== null ? ' · ' . $vz($n['aufschlag']) . ' zum ASX-Schluss' : '')) ?></span>
+        <?php else: ?><span class="k-wert">–</span><span class="k-unter"><?= $tc['eu'] !== '' ? 'werktags ab 16 Uhr' : 'kein deutsches Kürzel eingetragen' ?></span><?php endif; ?></div>
+    </div>
+    <?php if (!empty($m['zeit']) || !empty($n['zeit'])): ?><p class="klein leise">Zuletzt gerechnet: <?= e(datumZeit(max((int)($m['zeit'] ?? 0), (int)($n['zeit'] ?? 0)))) ?></p><?php endif; ?>
+    <?php if (!empty($st['meldungen'])): ?>
+      <details class="unterbereich"><summary>Letzte Meldungen (<?= count($st['meldungen']) ?>)</summary>
+        <ul class="beob-liste"><?php foreach (array_slice($st['meldungen'], 0, 10) as $x): ?><li><small class="leise"><?= e(datumZeit((int)$x['zeit'])) ?></small><br><?= nl2br(e((string)$x['text'])) ?></li><?php endforeach; ?></ul>
+      </details>
+    <?php endif; ?>
+    <?php if (!empty($st['mitteilungen'])): ?>
+      <details class="unterbereich"><summary>Neueste ASX-Mitteilungen</summary>
+        <ul class="beob-liste"><?php foreach ($st['mitteilungen'] as $x): ?><li><?= !empty($x['kursrelevant']) ? '<span class="abzeichen gelb">kursrelevant</span> ' : '' ?><?= e((string)$x['titel']) ?> <small class="leise"><?= e(datumZeit((int)$x['zeit'])) ?></small></li><?php endforeach; ?></ul>
+      </details>
+    <?php endif; ?>
+    <form method="post" action="./" data-laden="Wird gerechnet …"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_tagescheck_jetzt"><input type="hidden" name="s" value="<?= e($s) ?>"><button class="knopf zweit klein" type="submit">Jetzt rechnen (ohne Meldung)</button></form>
+  <?php else: ?>
+    <p class="klein">Aus. Einschalten unter „Einstellungen Tagescheck“ – sinnvoll für Werte an der australischen Börse (ASX).</p>
+  <?php endif; ?>
+  <p class="beob-lesezeichen klein"><strong>Lesezeichen:</strong>
+    <a href="https://www.tradingview.com/chart/?symbol=ASX%3A<?= e(rawurlencode($kuerzel)) ?>" target="_blank" rel="noopener noreferrer">TradingView ASX:<?= e($kuerzel) ?></a> ·
+    <a href="https://www.asx.com.au/markets/trade-our-cash-market/announcements.<?= e(strtolower($kuerzel)) ?>" target="_blank" rel="noopener noreferrer">ASX-Mitteilungen</a> ·
+    <a href="https://asic.gov.au/regulatory-resources/markets/short-selling/short-position-reports-table/" target="_blank" rel="noopener noreferrer">ASIC Short-Liste</a> ·
+    <a href="https://www.eqs-news.com/?s=<?= e(rawurlencode((string)preg_replace('/\s+(Ltd|Limited|AG|SE|Inc\.?)$/i', '', (string)(datenLaden()['firmen'][$s]['name'] ?? $kuerzel)))) ?>" target="_blank" rel="noopener noreferrer">EQS-News</a></p>
+  <details class="unterbereich"><summary>Einstellungen Tagescheck</summary>
+    <form method="post" action="./" class="beob-formular"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_tagescheck"><input type="hidden" name="s" value="<?= e($s) ?>">
+      <label class="schalter"><input type="checkbox" name="an" value="1"<?= $tc['an'] ? ' checked' : '' ?>><span>Tagescheck einschalten (Meldung per Push und E-Mail)</span></label>
+      <label class="feld"><span>Kürzel an der ASX</span><input type="text" name="asx" maxlength="20" value="<?= e($tc['asx']) ?>" placeholder="z. B. VUL.AX"></label>
+      <label class="feld"><span>Kürzel in Deutschland (Xetra, für den Nachmittag)</span><input type="text" name="eu" maxlength="20" value="<?= e($tc['eu']) ?>" placeholder="z. B. VUL.DE"></label>
+      <label class="feld"><span>Volumen-Signal ab … × Durchschnitt</span><input type="text" inputmode="decimal" name="faktor" value="<?= e(zahl((float)$tc['faktor'], 1)) ?>"></label>
+      <label class="feld"><span>Kurs-Signal morgens ab ± … %</span><input type="text" inputmode="decimal" name="plus" value="<?= e(zahl((float)$tc['plus'], 1)) ?>"></label>
+      <label class="feld"><span>Kurs-Signal nachmittags ab ± … % seit 15:30</span><input type="text" inputmode="decimal" name="plus_eu" value="<?= e(zahl((float)$tc['plus_eu'], 1)) ?>"></label>
+      <label class="feld"><span>Stichworte in ASX-Mitteilungen (mit Komma; kursrelevante Mitteilungen melden sich immer)</span><textarea name="stichworte" rows="3" maxlength="600"><?= e($tc['stichworte']) ?></textarea></label>
+      <button class="knopf zweit" type="submit">Speichern</button>
+    </form>
+  </details>
+<?php
+    return (string)ob_get_clean();
+}
+
 function seiteBeobachtung(array $d, bool $kiVerfuegbar): string
 {
     $b = beobDaten($d);
@@ -2236,6 +2299,8 @@ function seiteBeobachtung(array $d, bool $kiVerfuegbar): string
     </details>
     <form method="post" action="./" data-bestaetigen="Strategie „<?= e($st['titel']) ?>“ mit allen Signalen löschen?"><?= csrfFeld() ?><input type="hidden" name="aktion" value="beob_strategie_loeschen"><input type="hidden" name="s" value="<?= e($s) ?>"><input type="hidden" name="strategie" value="<?= e($st['id']) ?>"><button class="knopf-text gefahr klein" type="submit">Strategie löschen</button></form>
   <?php endforeach; ?>
+
+  <?= beobTagescheckTeil($s, $f) ?>
 
   <?php if ($kiVerfuegbar): ?>
   <div class="ki-bereich" data-ki="<?= e($s) ?>" data-ki-art="beobachtung">

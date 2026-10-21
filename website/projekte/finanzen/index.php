@@ -61,6 +61,8 @@ if (isset($_GET['cron'])) {
     // Depot-Verlauf vorwärmen: Kurse ergänzen und Übersicht/Verlauf vorrechnen, damit beim Öffnen nichts lädt
     // Beobachtungsliste: täglich Zahlen, samstags 18 Uhr KI-Prüfung und Wochenbericht
     if (function_exists('set_time_limit')) { @set_time_limit(320); }
+    // Tagescheck: ASX-Mitteilungen bei jedem Lauf, morgens ASX-Volumen, nachmittags der Handel in Europa
+    $erg += tagescheckAusfuehren();
     $erg += beobAusfuehren(max(30.0, 280.0 - (microtime(true) - $cronStart)));
     $erg += verlaufAufwaermen(min(70.0, max(10.0, 290.0 - (microtime(true) - $cronStart))));
     cacheAufraeumen();
@@ -254,8 +256,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                     $vorlage = beobVorlagen()[$vk] ?? beobVorlagen()['leer'];
                 }
                 $neu = beobStrategieNeu($s, $vorlage);
-                datenAendern(function (array &$d) use ($s, $neu): void {
+                $tcVorlage = (array)($vorlage['tagescheck'] ?? []);
+                datenAendern(function (array &$d) use ($s, $neu, $tcVorlage): void {
                     $d['beobachtung']['firmen'][$s]['strategien'][] = $neu;
+                    if ($tcVorlage !== [] && !isset($d['beobachtung']['firmen'][$s]['tagescheck'])) {
+                        $d['beobachtung']['firmen'][$s]['tagescheck'] = array_merge(FZ_TAGESCHECK_STANDARD, $tcVorlage);
+                    }
                 });
                 meldung('Beobachtung angelegt. Kurs und Short-Quote werden ab jetzt täglich geprüft.');
                 $erg = beobZahlenTag(datenLaden(), $s);
@@ -298,6 +304,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                         $d['beobachtung']['firmen'][$s]['strategien'] = array_values($liste);
                     }
                 });
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_tagescheck':
+                $zahlFeld = static fn(string $n, float $min, float $max, float $std): float => is_numeric(str_replace(',', '.', (string)($_POST[$n] ?? '')))
+                    ? max($min, min($max, (float)str_replace(',', '.', (string)$_POST[$n]))) : $std;
+                $sym = static fn(string $n): string => strtoupper((string)preg_replace('/[^A-Za-z0-9.\-]/', '', textFeld($n, 20)));
+                $tc = ['an' => !empty($_POST['an']), 'asx' => $sym('asx'), 'eu' => $sym('eu'),
+                    'faktor' => $zahlFeld('faktor', 1.2, 20, 2.5), 'plus' => $zahlFeld('plus', 0.5, 50, 4.0), 'plus_eu' => $zahlFeld('plus_eu', 0.5, 50, 3.0),
+                    'stichworte' => textFeld('stichworte', 600)];
+                if ($tc['asx'] !== '' && !str_contains($tc['asx'], '.')) {
+                    $tc['asx'] .= '.AX';
+                }
+                datenAendern(function (array &$d) use ($s, $tc): void {
+                    if (isset($d['beobachtung']['firmen'][$s])) {
+                        $d['beobachtung']['firmen'][$s]['tagescheck'] = $tc;
+                    }
+                });
+                meldung($tc['an'] && $tc['asx'] !== '' ? 'Tagescheck gespeichert und eingeschaltet.' : ($tc['an'] ? 'Bitte ein ASX-Kürzel eintragen (z. B. VUL.AX).' : 'Tagescheck ausgeschaltet.'), $tc['an'] && $tc['asx'] === '' ? 'fehler' : 'ok');
+                weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
+                break;
+            case 'beob_tagescheck_jetzt':
+                $ok = tagescheckJetzt($s);
+                meldung($ok ? 'Tagescheck gerechnet (ohne Meldung).' : 'Keine Kursdaten bekommen – später noch einmal versuchen.', $ok ? 'ok' : 'fehler');
                 weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
                 break;
             case 'beob_firma_entfernen':
