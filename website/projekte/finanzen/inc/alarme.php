@@ -187,7 +187,13 @@ function ntfySenden(string $thema, string $titel, string $text, string $link): a
         return [false, 'ungültiges Thema'];
     }
     $nachricht = ['topic' => $name, 'title' => $titel, 'message' => $text, 'click' => $link, 'tags' => ['chart_with_upwards_trend']];
-    $r = http($server . '/', ['post' => (string)json_encode($nachricht), 'kopf' => ['Content-Type: application/json'], 'zeit' => 12]);
+    $kopf = ['Content-Type: application/json'];
+    // Mit Zugangstoken zählt ntfy.sh je Konto statt je Server-Adresse – dann keine Drosselung des geteilten Webhostings
+    $token = einstellung(datenLaden(), 'ntfy_token');
+    if ($token !== '') {
+        $kopf[] = 'Authorization: Bearer ' . $token;
+    }
+    $r = http($server . '/', ['post' => (string)json_encode($nachricht), 'kopf' => $kopf, 'zeit' => 12]);
     if ($r['code'] >= 200 && $r['code'] < 300) {
         return [true, 'von ntfy angenommen'];
     }
@@ -231,4 +237,34 @@ function cronStatus(array $d): array
         return ['ok' => false, 'text' => 'Die automatische Prüfung lief zuletzt ' . vorZeit($zuletzt) . ' – sie scheint zu stocken (z. B. pausiert GitHub zeitgesteuerte Abläufe nach 60 Tagen ohne Änderungen am Repository).'];
     }
     return ['ok' => true, 'text' => 'Automatische Prüfung zuletzt ' . vorZeit($zuletzt) . '.'];
+}
+
+/**
+ * Einmaliger Test über den automatischen Lauf: kommt eine Meldung per Push und E-Mail an?
+ * Ergebnis (nur ok/Fehler je Weg) steht in der Cron-Antwort und unter Einstellungen.
+ */
+function meldetestAusfuehren(): array
+{
+    $d = datenLaden();
+    if (!empty($d['meldetest']['zeit'])) {
+        return [];
+    }
+    $erg = benachrichtigenMitDetails($d, 'Test: Meldungen der Finanzzentrale kommen an',
+        'Diese Testmeldung wurde vom automatischen Lauf verschickt – genau so kommen die Meldungen von Tagescheck und Zahlen-Check. Du musst nichts tun.',
+        fzBasisUrl() . '?seite=beobachtung');
+    $wege = array_map(static fn(array $x): bool => (bool)$x['ok'], $erg);
+    datenAendern(function (array &$d) use ($wege): void {
+        $d['meldetest'] = ['zeit' => time(), 'wege' => $wege];
+    });
+    return ['meldetest' => $wege === [] ? 'kein Weg eingerichtet' : $wege];
+}
+
+/** Für das GitHub-Protokoll: nur Anzahl und ok/Fehler je Weg – keine Inhalte. */
+function meldungenUebersicht(): array
+{
+    $log = (array)(datenLaden()['benachrichtigungen'] ?? []);
+    $tag = array_filter($log, static fn(array $e): bool => (int)$e['zeit'] > time() - 86400);
+    $letzte = $log[0] ?? null;
+    return ['letzte_24h' => count($tag), 'letzte_vor_min' => $letzte ? (int)round((time() - (int)$letzte['zeit']) / 60) : null,
+        'letzte_wege' => $letzte ? array_map(static fn(array $x): bool => (bool)$x['ok'], (array)$letzte['wege']) : null];
 }
