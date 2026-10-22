@@ -1092,7 +1092,7 @@ function seiteFirma(array $d, string $symbol, ?array $p, ?array $depot, bool $ki
 
 <section class="karte chart-karte">
   <div class="chart-tabs" role="tablist">
-    <?php foreach (['1m' => '1 M', '6m' => '6 M', '1j' => '1 J', '2j' => '2 J', '5j' => '5 J'] as $k => $t): ?><button type="button" data-spanne="<?= $k ?>"<?= $k === '1j' ? ' class="aktiv"' : '' ?>><?= $t ?></button><?php endforeach; ?>
+    <?php foreach (['1w' => '1 W', '1m' => '1 M', '6m' => '6 M', '1j' => '1 J', '2j' => '2 J', '5j' => '5 J'] as $k => $t): ?><button type="button" data-spanne="<?= $k ?>"<?= $k === '1j' ? ' class="aktiv"' : '' ?>><?= $t ?></button><?php endforeach; ?>
     <span class="chart-aend"></span>
   </div>
   <div class="chart" data-chart></div>

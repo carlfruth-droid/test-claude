@@ -457,6 +457,17 @@ function yahooBuendel(string $symbol): array
  * Nur der Kursverlauf (2 Jahre täglich, 5 Jahre wöchentlich) – für den Vergleich
  * im Kurs-Chart. Nutzt dieselben Zwischenspeicher wie der Steckbrief.
  */
+/** Letzte fünf Handelstage im 15-Minuten-Takt (für die Wochenansicht). */
+function kursverlaufWoche(string $symbol): ?array
+{
+    $wert = gecacht('woche:' . $symbol, 600, function () use ($symbol): ?array {
+        $j = httpJson(http('https://query1.finance.yahoo.com/v8/finance/chart/' . rawurlencode($symbol) . '?range=5d&interval=15m&includePrePost=false', ['ua' => 'browser', 'zeit' => 15]));
+        $v = $j !== null ? verlaufAuswerten($j) : null;
+        return $v !== null && count($v['punkte']) > 1 ? ['w1' => $v['punkte'], 'w' => (string)($j['chart']['result'][0]['meta']['currency'] ?? '')] : null;
+    });
+    return is_array($wert) ? $wert : null;
+}
+
 function kursverlaufLaden(string $symbol): ?array
 {
     $teile = ['j1' => ['verlauf:' . $symbol . ':2y', 3600, '2y'], 'j5' => ['verlauf:' . $symbol . ':5y', 86400, '5y']];

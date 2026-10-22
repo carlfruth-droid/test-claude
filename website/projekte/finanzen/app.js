@@ -600,8 +600,9 @@
     return { hoch: hoch, tief: tief };
   }
   // Zweite Reihe auf die Zeitpunkte der ersten legen: letzter Kurs am oder vor demselben Tag (höchstens 10 Tage alt)
-  function angleichen(haupt, neben) {
-    var erg = [], j = 0, tag = function (t) { return Math.floor(t / 86400); };
+  // fein: Kurse im Tagesverlauf – nach Uhrzeit statt nach Tag zuordnen
+  function angleichen(haupt, neben, fein) {
+    var erg = [], j = 0, tag = fein ? function (t) { return t / 86400; } : function (t) { return Math.floor(t / 86400); };
     for (var i = 0; i < haupt.length; i++) {
       var d = tag(haupt[i][0]);
       while (j + 1 < neben.length && tag(neben[j + 1][0]) <= d) { j++; }
@@ -1076,8 +1077,22 @@
     try { roh = JSON.parse(datenEl.textContent || '{}'); } catch (e) { roh = {}; }
     var fmtKurs = geldFmt(roh.w || '');
     var aendEl = $('.chart-aend');
-    var GRENZEN = { '1m': 31, '6m': 183, '1j': 366, '2j': 731, '5j': 100000 };
-    var reiheFuer = function (spanne, quelle) { return spanne === '5j' && quelle.j5 && quelle.j5.length > 1 ? quelle.j5 : (quelle.j1 || []); };
+    var GRENZEN = { '1w': 7, '1m': 31, '6m': 183, '1j': 366, '2j': 731, '5j': 100000 };
+    var reiheFuer = function (spanne, quelle) {
+      if (spanne === '1w' && quelle.w1 && quelle.w1.length > 1) { return quelle.w1; }
+      return spanne === '5j' && quelle.j5 && quelle.j5.length > 1 ? quelle.j5 : (quelle.j1 || []);
+    };
+    var zeitKurz = function (t) { var d = new Date(t * 1000); return d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); };
+    // Wochenansicht: Kurse im 15-Minuten-Takt erst beim ersten Bedarf laden
+    var wocheLaden = function (quelle, symbol) {
+      if (quelle.w1 || quelle.w1laedt || quelle.w1fehler) { return; }
+      quelle.w1laedt = true;
+      fetch('?api=kursverlauf_woche&s=' + encodeURIComponent(symbol), { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (j && j.w1 && j.w1.length > 1) { quelle.w1 = j.w1; } else { quelle.w1fehler = true; } })
+        .catch(function () { quelle.w1fehler = true; })
+        .then(function () { quelle.w1laedt = false; zeichnen(); });
+    };
     var KURS_LINIEN = [
       { k: 's30', name: 'Ø 30 Tage', farbe: '#d97706', tage: 30 },
       { k: 's50', name: 'Ø 50 Tage', farbe: '#db2777', tage: 50 },
@@ -1100,13 +1115,16 @@
     if (!GRENZEN[aktiv]) { aktiv = '1j'; }
 
     var zeichnen = function () {
+      if (aktiv === '1w') { wocheLaden(roh, roh.symbol); }
+      var fein = aktiv === '1w' && !!(roh.w1 && roh.w1.length > 1);
       var basis = reiheFuer(aktiv, roh), ab = 0;
       if (basis.length) { var grenze = basis[basis.length - 1][0] - GRENZEN[aktiv] * 86400; while (ab < basis.length - 1 && basis[ab][0] < grenze) { ab++; } }
       var punkte = basis.slice(ab);
       var vz = kursVergleich ? kursVergleich.zustand() : null;
       var vs = vz && vz.s && vz.s !== roh.symbol ? vz.s : '';
       var vd = vs ? vglDaten[vs] : null;
-      var vglRoh = vd && (vd.j1 || vd.j5) && punkte.length ? angleichen(punkte, reiheFuer(aktiv, vd)) : null;
+      if (vd && fein && (vd.j1 || vd.j5)) { wocheLaden(vd, vs); }
+      var vglRoh = vd && (vd.j1 || vd.j5) && punkte.length ? angleichen(punkte, reiheFuer(aktiv, vd), fein && !!vd.w1) : null;
       if (vglRoh && !vglRoh.some(function (p) { return p[1] !== null; })) { vglRoh = null; }
       var normiert = !!(vglRoh && vz.modus !== 'absolut');
       // normiert: beide ab dem ersten Tag, an dem es für beide einen Kurs gibt
@@ -1118,6 +1136,8 @@
       var linien = [];
       KURS_LINIEN.forEach(function (d) {
         if (!linienAn[d.k] || !punkte.length) { return; }
+        // gleitende Durchschnitte und Bänder gelten für Tageskurse – in der Wochenansicht nicht sinnvoll
+        if (fein && (d.tage || d.k === 'bollinger')) { return; }
         if (d.tage) { linien.push({ name: d.name, farbe: d.farbe, punkte: tr(gleitend(basis, d.tage * 7 / 5).slice(ab)) }); }
         if (d.k === 'bollinger') { var bb = bollinger(basis, 20, 2); linien.push({ art: 'band', name: d.name, farbe: d.farbe, oben: tr(bb.oben.slice(ab)), unten: tr(bb.unten.slice(ab)) }); }
         if (d.k === 'hochtief') {
@@ -1149,10 +1169,10 @@
         punkte: normiert ? vglRoh.map(function (p) { return [p[0], p[1] === null ? null : p[1] / bezugV - 1]; }) : vglRoh
       } : null;
       linienChart(chart, {
-        punkte: tr(punkte), fmt: normiert ? prozentFmt : fmtKurs, achseFmt: normiert ? prozentAchse : null, datumFmt: datumKurz,
+        punkte: tr(punkte), fmt: normiert ? prozentFmt : fmtKurs, achseFmt: normiert ? prozentAchse : null, datumFmt: fein ? zeitKurz : datumKurz,
         titel: 'Kursverlauf ' + (roh.name || ''), linien: linien, marker: marken, prognosen: prognosen, vergleich: vergleich,
         nullLinie: normiert, ohneFlaeche: normiert,
-        hauptInfo: normiert ? function (i) { return '<b>' + esc(prozentFmt(tf(punkte[i][1]))) + '</b> <span>' + esc(datumKurz(punkte[i][0]) + ' · ' + fmtKurs(punkte[i][1])) + '</span>'; } : null,
+        hauptInfo: normiert ? function (i) { return '<b>' + esc(prozentFmt(tf(punkte[i][1]))) + '</b> <span>' + esc((fein ? zeitKurz : datumKurz)(punkte[i][0]) + ' · ' + fmtKurs(punkte[i][1])) + '</span>'; } : null,
         messung: function (i0, i1) {
           var p0 = punkte[i0][1], p1 = punkte[i1][1], dt = punkte[i1][0] - punkte[i0][0], r = p1 / p0 - 1, pj = proJahr(r, dt);
           var zeilen = [['Kurs', esc(fmtKurs(p0) + ' → ' + fmtKurs(p1)), ''], ['Δ absolut', esc(mitVorzeichen(fmtKurs, p1 - p0)), klasseZahl(p1 - p0)],
