@@ -801,6 +801,12 @@ if (isset($_GET['api'])) {
         echo json_encode($v ?? ['fehler' => 'Zu „' . $s . '“ gibt es keinen Kursverlauf.'], JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
         exit;
     }
+    if ($_GET['api'] === 'kursverlauf_woche') {
+        $s = symbolAusAnfrage();
+        $v = $s !== '' ? kursverlaufWoche($s) : null;
+        echo json_encode($v ?? ['fehler' => 'Für diese Woche gibt es keine Kurse im Tagesverlauf.'], JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        exit;
+    }
     if ($_GET['api'] === 'suche') {
         $treffer = array_slice(firmenSuchen((string)($_GET['q'] ?? '')), 0, 8);
         echo json_encode(array_map(static fn(array $t): array => ['name' => $t['name'], 'symbol' => $t['symbol'], 'boerse' => $t['boerse'],
