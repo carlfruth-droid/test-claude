@@ -506,6 +506,22 @@ if (!isset($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
 }
 
+/** Persönliche Einladung per E-Mail (Link meldet in App und Tasting an). */
+function einladungSenden(array $tasting, array $person): bool
+{
+    if ((string)($person['email'] ?? '') === '') {
+        return false;
+    }
+    $link = 'https://fruthzeug.de/projekte/champagner/?einladung=' . $person['token'];
+    $betreff = mb_encode_mimeheader('Einladung zum Tasting „' . $tasting['titel'] . '“', 'UTF-8');
+    $text = "Hallo " . $person['name'] . ",\n\n"
+        . "du bist eingeladen zum Tasting \u{201E}" . $tasting['titel'] . "\u{201C} in TasteLog!\n\n"
+        . "Tipp einfach auf diesen Link – damit bist du in der App angemeldet und im Tasting dabei (kein Passwort nötig):\n"
+        . $link . "\n\nBis gleich! 🥂";
+    return @mail($person['email'], $betreff, $text,
+        "From: Tasting fruthzeug.de <tasting@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
+}
+
 /** Teilnehmer zu einem Einladungs-Token finden: [tasting, teilnehmer] oder null. */
 function teilnehmerZuToken(array $daten, string $token): ?array
 {
@@ -3253,28 +3269,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!darfTastingVerwalten(datenLaden(), $tObj)) {
             zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf Teilnehmer hinzufügen.'));
         }
+        // von der Tasting-Seite („Per E-Mail einladen“) oder aus der Verwaltung
+        $ziel = ($_POST['zurueck'] ?? '') === 'tasting' ? '?tasting=' . rawurlencode($tid) : '?tverwaltung=' . rawurlencode($tid);
+        $anker = ($_POST['zurueck'] ?? '') === 'tasting' ? '#teilnehmer' : '';
         $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 40);
         $email = mb_substr(trim((string)($_POST['email'] ?? '')), 0, 80);
+        $mailSenden = !empty($_POST['mail_senden']) && $email !== '';
         $rolle = in_array((string)($_POST['rolle'] ?? 'tester'), ['admin', 'tester', 'viewer'], true) ? (string)$_POST['rolle'] : 'tester';
         if ($name === '') {
-            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Bitte einen Namen angeben.'));
+            zurueck($ziel . '&fehler=' . rawurlencode('Bitte einen Namen angeben.') . $anker);
         }
         if ($tObj !== null && teilnehmerLimitErreicht($tObj)) {
-            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Dieses Tasting ist auf 2 Teilnehmer begrenzt (du + 1 Gast). Für große Runden kann der Administrator den Ersteller freischalten.'));
+            zurueck($ziel . '&fehler=' . rawurlencode('Dieses Tasting ist auf 2 Teilnehmer begrenzt (du + 1 Gast). Für große Runden kann der Administrator den Ersteller freischalten.') . $anker);
         }
-        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            zurueck('?tverwaltung=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Die E-Mail-Adresse sieht nicht gültig aus.'));
+        if (($email !== '' || $mailSenden) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            zurueck($ziel . '&fehler=' . rawurlencode('Die E-Mail-Adresse sieht nicht gültig aus.') . $anker);
         }
-        $token = bin2hex(random_bytes(8));
-        datenAendern(function (array $d) use ($tid, $name, $email, $token, $rolle): array {
-            foreach ($d['tastings'] as &$t) {
-                if ($t['id'] === $tid) {
-                    $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'rolle' => $rolle];
+        // Gleiche E-Mail schon dabei? Dann nur die Einladung erneut schicken.
+        $vorhanden = null;
+        foreach (($tObj['teilnehmer'] ?? []) as $p) {
+            if ($email !== '' && mb_strtolower((string)($p['email'] ?? '')) === mb_strtolower($email)) { $vorhanden = $p; break; }
+        }
+        if ($vorhanden === null) {
+            $token = bin2hex(random_bytes(8));
+            datenAendern(function (array $d) use ($tid, $name, $email, $token, $rolle): array {
+                foreach ($d['tastings'] as &$t) {
+                    if ($t['id'] === $tid) {
+                        $t['teilnehmer'][] = ['token' => $token, 'name' => $name, 'email' => $email, 'rolle' => $rolle];
+                    }
                 }
-            }
-            return $d;
-        });
-        zurueck('?tverwaltung=' . rawurlencode($tid) . '&ok=' . rawurlencode($name . ' ist dabei – Link kopieren oder per Mail senden!'));
+                return $d;
+            });
+            $person = ['token' => $token, 'name' => $name, 'email' => $email];
+        } else {
+            $person = $vorhanden;
+        }
+        if ($mailSenden) {
+            $ok = einladungSenden($tObj, $person);
+            zurueck($ziel . '&' . ($ok ? 'ok' : 'fehler') . '=' . rawurlencode($ok
+                ? ($vorhanden !== null ? $person['name'] . ' war schon dabei – Einladung erneut an ' . $email . ' geschickt.' : 'Einladung an ' . $email . ' verschickt – ' . $name . ' ist dabei.')
+                : $person['name'] . ' ist eingetragen, aber der Mail-Versand hat nicht geklappt – kopiere den Link in der Verwaltung.') . $anker);
+        }
+        zurueck($ziel . '&ok=' . rawurlencode($name . ' ist dabei – Link kopieren oder per Mail senden!') . $anker);
     }
 
     if ($aktion === 'teilnehmer_rolle') {
@@ -3327,19 +3363,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Teilnehmer nicht gefunden.'));
         }
         [$tasting, $person] = $treffer;
+        if (!darfTastingVerwalten(datenLaden(), $tasting)) {
+            zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Nur ein Owner darf Einladungen verschicken.'));
+        }
         if ($person['email'] === '') {
             zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Für ' . $person['name'] . ' ist keine E-Mail hinterlegt – nutze den Kopier-Knopf.'));
         }
-        $link = 'https://fruthzeug.de/projekte/champagner/?einladung=' . $person['token'];
-        $betreff = mb_encode_mimeheader('Einladung zum Tasting „' . $tasting['titel'] . '“', 'UTF-8');
-        $text = "Hallo " . $person['name'] . ",\n\n"
-            . "du bist eingeladen zum Tasting \u{201E}" . $tasting['titel'] . "\u{201C}!\n\n"
-            . "Tipp einfach auf diesen Link – damit bist du angemeldet und kannst sofort mitbewerten (kein Passwort nötig):\n"
-            . $link . "\n\nBis gleich! 🥂";
-        $ok = @mail($person['email'], $betreff, $text,
-            "From: Tasting fruthzeug.de <tasting@fruthzeug.de>\r\nContent-Type: text/plain; charset=UTF-8");
+        $ok = einladungSenden($tasting, $person);
         if ($ok) {
-            zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Einladung an ' . $person['email'] . ' verschickt.'));
+            zurueck('?tasting=' . rawurlencode($tid) . '&ok=' . rawurlencode('Einladung an ' . $person['email'] . ' verschickt.') . '#teilnehmer');
         }
         zurueck('?tasting=' . rawurlencode($tid) . '&fehler=' . rawurlencode('Mail-Versand hat nicht geklappt – nutze den Kopier-Knopf.'));
     }
@@ -6060,6 +6092,95 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
 
         <?php
+          // Aktiv = hat in diesem Tasting schon bewertet (Name kommt in Bewertungen vor)
+          $aktivNamen = [];
+          $aktivAnzeige = [];
+          foreach ($daten['bewertungen'] as $b) {
+              if (($b['tasting_id'] ?? '') === $aktivesTasting['id']) {
+                  $ln = mb_strtolower($b['person']);
+                  $aktivNamen[$ln] = true;
+                  $aktivAnzeige[$ln] = $b['person'];
+              }
+          }
+          $teiln = $aktivesTasting['teilnehmer'] ?? [];
+          $teilnNamen = [];
+          foreach ($teiln as $p) { $teilnNamen[mb_strtolower($p['name'])] = true; }
+          $anzahlAktiv = count($aktivNamen);
+          $passiv = array_filter($teiln, fn($p) => !isset($aktivNamen[mb_strtolower($p['name'])]));
+          // Bewerter, die (noch) nicht in der Teilnehmerliste stehen
+          $externAktiv = array_filter($aktivAnzeige, fn($n, $ln) => !isset($teilnNamen[$ln]), ARRAY_FILTER_USE_BOTH);
+        ?>
+
+        <?php $darfVerwalten = darfTastingVerwalten($daten, $aktivesTasting); ?>
+        <?php $rollenIcon = ['admin' => '🛠️', 'tester' => '🥂', 'viewer' => '👁️']; ?>
+        <div class="card" id="teilnehmer">
+          <h2>👥 Teilnehmer (<?= count($teiln) ?>)</h2>
+          <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($passiv) ?> passiv</p>
+          <?php foreach ($externAktiv as $n): ?>
+            <div class="ergebnis-kategorie" style="align-items:center;">
+              <span>🟢 <b><?= e($n) ?></b> <span class="anzahl">hat bewertet</span></span>
+            </div>
+          <?php endforeach; ?>
+          <?php foreach ($teiln as $p): ?>
+            <?php
+              $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]);
+              $pFoto = profilFoto($daten, (string)$p['name']);
+              $pRolle = in_array((string)($p['rolle'] ?? 'tester'), ['admin', 'tester', 'viewer'], true) ? (string)$p['rolle'] : 'tester';
+            ?>
+            <div class="ergebnis-kategorie" style="align-items:center;">
+              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b> <span class="anzahl"><?= $rollenIcon[$pRolle] ?> <?= $pRolle === 'admin' ? 'Admin' : ($pRolle === 'viewer' ? 'Betrachter' : 'Tester') ?></span></span>
+              <?php if ($darfVerwalten && (string)($p['email'] ?? '') !== ''): ?>
+                <form method="post" style="margin:0 0 0 auto;" title="Einladung erneut per E-Mail an <?= e($p['email']) ?>">
+                  <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                  <input type="hidden" name="aktion" value="teilnehmer_mail">
+                  <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+                  <input type="hidden" name="token" value="<?= e($p['token']) ?>">
+                  <button class="knopf klein zweit" type="submit"><?= empty($p['agb_zeit']) ? '✉️ erneut' : '✉️' ?></button>
+                </form>
+              <?php endif; ?>
+            </div>
+          <?php endforeach; ?>
+          <?php if ($teiln === [] && $externAktiv === []): ?><p class="anzahl" style="font-style:italic;">Noch niemand dabei.</p><?php endif; ?>
+          <?php if ($darfVerwalten): ?>
+            <details class="unterkarte" style="margin-top:0.9rem;"<?= $teiln === [] ? ' open' : '' ?>>
+              <summary>✉️ Per E-Mail einladen</summary>
+              <form method="post" style="margin-top:0.7rem;">
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="aktion" value="teilnehmer_anlegen">
+                <input type="hidden" name="tasting_id" value="<?= e($aktivesTasting['id']) ?>">
+                <input type="hidden" name="mail_senden" value="1">
+                <input type="hidden" name="zurueck" value="tasting">
+                <input type="text" name="name" placeholder="Name" maxlength="40" required>
+                <input type="email" name="email" placeholder="E-Mail" maxlength="80" required>
+                <select name="rolle">
+                  <option value="tester">🥂 Tester (darf bewerten)</option>
+                  <option value="admin">🛠️ Owner (verwaltet das Tasting)</option>
+                  <option value="viewer">👁️ Betrachter (nur zusehen)</option>
+                </select>
+                <button class="knopf" type="submit">Einladung schicken</button>
+                <p class="anzahl" style="margin-top:0.5rem;">Die Person bekommt sofort eine E-Mail mit ihrem persönlichen Link – damit ist sie in der App und in diesem Tasting. Geht auch, wenn das Tasting schon läuft oder vorbei ist.</p>
+              </form>
+            </details>
+            <details class="unterkarte" style="margin-top:0.5rem;">
+              <summary>📱 QR-Code / Link zum Beitreten</summary>
+              <?php $tnBeitritt = 'https://fruthzeug.de/projekte/champagner/?beitritt=' . (string)($aktivesTasting['beitritt'] ?? ''); ?>
+              <div style="text-align:center; margin-top:0.6rem;">
+                <img src="<?= e('https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=' . rawurlencode($tnBeitritt)) ?>" alt="QR-Code zum Beitreten" width="200" height="200" loading="lazy" style="border-radius:14px; border:1px solid var(--border); background:#fff; max-width:80%;">
+              </div>
+              <div class="knopfreihe" style="justify-content:center; margin-top:0.5rem;">
+                <button type="button" class="knopf klein zweit link-kopieren" data-link="<?= e($tnBeitritt) ?>">Beitritts-Link kopieren</button>
+              </div>
+            </details>
+          <?php endif; ?>
+        </div>
+
+        <?php if ($darfVerwalten): ?>
+          <a class="kachel" href="?tverwaltung=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
+            <span class="k-icon">🛠️</span>
+            <span class="k-text"><b>Verwaltung</b><small>Einladen, Rollen vergeben, Titel ändern, löschen</small></span>
+          </a>
+        <?php endif; ?>
+        <?php
           // Direkter Zugriff auf alles, was zu diesem Tasting gehört
           $tastingWeine = array_values(array_filter($daten['champagner'], fn($c) => champagnerInTasting($c, (string)$aktivesTasting['id'])));
           $tastingWeingutIds = array_unique(array_filter(array_map(fn($c) => trim((string)($c['weingut_id'] ?? '')), $tastingWeine)));
@@ -6425,25 +6546,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
         </div>
 
         <?php
-          // Aktiv = hat in diesem Tasting schon bewertet (Name kommt in Bewertungen vor)
-          $aktivNamen = [];
-          $aktivAnzeige = [];
-          foreach ($daten['bewertungen'] as $b) {
-              if (($b['tasting_id'] ?? '') === $aktivesTasting['id']) {
-                  $ln = mb_strtolower($b['person']);
-                  $aktivNamen[$ln] = true;
-                  $aktivAnzeige[$ln] = $b['person'];
-              }
-          }
-          $teiln = $aktivesTasting['teilnehmer'] ?? [];
-          $teilnNamen = [];
-          foreach ($teiln as $p) { $teilnNamen[mb_strtolower($p['name'])] = true; }
-          $anzahlAktiv = count($aktivNamen);
-          $passiv = array_filter($teiln, fn($p) => !isset($aktivNamen[mb_strtolower($p['name'])]));
-          // Bewerter, die (noch) nicht in der Teilnehmerliste stehen
-          $externAktiv = array_filter($aktivAnzeige, fn($n, $ln) => !isset($teilnNamen[$ln]), ARRAY_FILTER_USE_BOTH);
-        ?>
-        <?php
           // 🛒 Meine Bestellungen in diesem Tasting (aus den eigenen Bewertungen)
           $meineNamenB = meineNamen($daten);
           $meineBestellungen = [];
@@ -6473,34 +6575,6 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
           </div>
         <?php endif; ?>
 
-        <?php $darfVerwalten = darfTastingVerwalten($daten, $aktivesTasting); ?>
-        <?php $rollenIcon = ['admin' => '🛠️', 'tester' => '🥂', 'viewer' => '👁️']; ?>
-        <div class="card">
-          <h2>Teilnehmer (<?= count($teiln) ?>)</h2>
-          <p class="anzahl" style="margin-bottom:0.8rem;">🟢 <?= $anzahlAktiv ?> aktiv (haben bewertet) · ⚪ <?= count($passiv) ?> passiv</p>
-          <?php foreach ($externAktiv as $n): ?>
-            <div class="ergebnis-kategorie" style="align-items:center;">
-              <span>🟢 <b><?= e($n) ?></b> <span class="anzahl">hat bewertet</span></span>
-            </div>
-          <?php endforeach; ?>
-          <?php foreach ($teiln as $p): ?>
-            <?php
-              $istAktiv = isset($aktivNamen[mb_strtolower($p['name'])]);
-              $pFoto = profilFoto($daten, (string)$p['name']);
-              $pRolle = in_array((string)($p['rolle'] ?? 'tester'), ['admin', 'tester', 'viewer'], true) ? (string)$p['rolle'] : 'tester';
-            ?>
-            <div class="ergebnis-kategorie" style="align-items:center;">
-              <span><?php if ($pFoto !== ''): ?><img class="avatar" src="<?= e(thumbUrl($pFoto)) ?>" alt="" style="width:28px;height:28px;"> <?php endif; ?><?= $istAktiv ? '🟢' : '⚪' ?> <b><?= e($p['name']) ?></b> <span class="anzahl"><?= $rollenIcon[$pRolle] ?> <?= $pRolle === 'admin' ? 'Admin' : ($pRolle === 'viewer' ? 'Betrachter' : 'Tester') ?></span></span>
-            </div>
-          <?php endforeach; ?>
-        </div>
-
-        <?php if ($darfVerwalten): ?>
-          <a class="kachel" href="?tverwaltung=<?= e(rawurlencode($aktivesTasting['id'])) ?>">
-            <span class="k-icon">🛠️</span>
-            <span class="k-text"><b>Verwaltung</b><small>Einladen, Rollen vergeben, Titel ändern, löschen</small></span>
-          </a>
-        <?php endif; ?>
         <p class="zurueck"><a href="?tasting=1">&larr; Alle Tastings</a></p>
       <?php endif; ?>
 
@@ -6640,6 +6714,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
             <input type="hidden" name="tasting_id" value="<?= e($vt['id']) ?>">
             <input type="text" name="name" placeholder="Name" maxlength="40" required>
             <input type="text" name="email" placeholder="E-Mail (für die Einladung)" maxlength="80" inputmode="email">
+            <label class="anzahl" style="display:flex; gap:0.4rem; align-items:center; margin:0.3rem 0;"><input type="checkbox" name="mail_senden" value="1" checked style="width:auto;"> Einladung gleich per E-Mail schicken</label>
             <select name="rolle">
               <option value="tester">🥂 Tester (darf bewerten)</option>
               <option value="admin">🛠️ Owner (verwaltet das Tasting)</option>
@@ -6774,7 +6849,7 @@ if ($kategorie !== 'alle' && !isset($KATEGORIEN_GETRAENKE[$kategorie])) {
                 <span class="k-icon">👥</span>
               <?php endif; ?>
               <span class="k-text"><b><?= e($t['titel']) ?></b><?= $t['id'] === $aktuellesTid ? ' <span class="bewerter-chip">✓ aktuell</span>' : '' ?>
-                <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · 🥂 gerade: ' . e($gc['name']) : '' ?></small>
+                <small>📅 <?= date('d.m.Y', (int)($t['zeit'] ?? time())) ?> · <?= count($t['teilnehmer'] ?? []) ?> Teilnehmer<?php $tnNamen = array_map(fn($p) => (string)$p['name'], $t['teilnehmer'] ?? []); ?><?= $tnNamen !== [] ? ': ' . e(implode(', ', array_slice($tnNamen, 0, 6)) . (count($tnNamen) > 6 ? ' …' : '')) : '' ?><?= ($t['aktiv_cid'] ?? '') !== '' && ($gc = champagnerHolen($daten, $t['aktiv_cid'])) !== null ? ' · 🥂 gerade: ' . e($gc['name']) : '' ?></small>
               </span>
             </a>
           <?php endforeach; ?>
