@@ -10,12 +10,14 @@ declare(strict_types=1);
  * Um 16:30 Uhr New York (22:30 Uhr) kommt die Ampel per Push und E-Mail.
  * An den Tagen davor wird jeden Abend das Nachbörsen-Volumen nach 30 Minuten
  * gemessen – daraus entsteht der Normalwert.
+ * Optional: Ausblick fürs nächste Geschäftsjahr, Kapitalbedarf, Kurs-Marke nach
+ * unten und Sofortmeldung bei neuen SEC-Meldungen (z. B. Fluence).
  */
 
 const FZ_ZAHLENCHECK_STANDARD = [
     'an' => false, 'us' => '', 'datum' => '', 'seit' => 0,
     'umsatz_min' => 0.0, 'eps_min' => 0.0, 'suchwort' => '', 'auslastung_min' => 40.0, 'kapazitaet' => 0.0,
-    'kurs_trigger' => 0.0, 'vol_faktor' => 5.0,
+    'kurs_trigger' => 0.0, 'kurs_unter' => 0.0, 'vol_faktor' => 5.0, 'ausblick_min' => 0.0, 'sec_meldungen' => false,
     'aktion_gruen' => '', 'aktion_gelb' => '', 'aktion_rot' => '',
 ];
 
@@ -56,6 +58,55 @@ function zcSecFiling(string $ticker, int $seit): ?array
     return [];
 }
 
+/** SEC-Formulare, die sofort gemeldet werden (Kapitalerhöhung, Großaktionäre, Insider, wichtige Ereignisse). */
+const FZ_ZC_FORMULARE = [
+    '8-K' => 'Wichtiges Ereignis (8-K)', '8-K/A' => 'Korrektur eines 8-K', '4' => 'Insider-Geschäft (Form 4)',
+    'SC 13D' => 'Großaktionär über 5 % (aktiv)', 'SC 13D/A' => 'Großaktionär ändert Anteil (13D)', 'SC 13G' => 'Großaktionär über 5 %', 'SC 13G/A' => 'Großaktionär ändert Anteil (13G)',
+    'S-3' => 'Wertpapierprospekt (mögliche Kapitalerhöhung)', 'S-3ASR' => 'Wertpapierprospekt (mögliche Kapitalerhöhung)', 'S-1' => 'Wertpapierprospekt',
+    '424B5' => 'Platzierung von Aktien/Anleihen (424B5)', '424B3' => 'Prospektnachtrag (424B3)', '424B2' => 'Platzierung (424B2)',
+    'NT 10-K' => 'Jahresbericht verspätet', 'NT 10-Q' => 'Quartalsbericht verspätet',
+];
+
+const FZ_ZC_ITEMS = [
+    '1.01' => 'wichtiger Vertrag', '1.02' => 'Vertrag beendet', '1.03' => 'Insolvenz', '2.01' => 'Kauf/Verkauf von Unternehmensteilen',
+    '2.03' => 'neue Schulden/Kredit', '2.04' => 'Kredit vorzeitig fällig', '2.05' => 'Restrukturierung/Stellenabbau', '2.06' => 'Abschreibung',
+    '3.01' => 'Börsennotiz gefährdet', '3.02' => 'Verkauf neuer Aktien', '4.02' => 'frühere Abschlüsse nicht verlässlich',
+    '5.02' => 'Vorstand/Aufsichtsrat', '7.01' => 'Mitteilung', '8.01' => 'sonstiges Ereignis',
+];
+
+/** Neue SEC-Meldungen (neueste zuerst) – ohne die Quartalszahlen selbst (die übernimmt Schleife 1). */
+function zcSecNeu(string $ticker): ?array
+{
+    $cik = secCik($ticker);
+    if ($cik === '') {
+        return null;
+    }
+    $j = httpJson(http('https://data.sec.gov/submissions/CIK' . $cik . '.json', secKopf()));
+    $f = $j['filings']['recent'] ?? null;
+    if (!is_array($f)) {
+        return null;
+    }
+    $liste = [];
+    foreach (array_slice((array)($f['form'] ?? []), 0, 40, true) as $i => $form) {
+        $form = (string)$form;
+        $items = (string)($f['items'][$i] ?? '');
+        if (!isset(FZ_ZC_FORMULARE[$form]) || ($form === '8-K' && str_contains($items, '2.02'))) {
+            continue;
+        }
+        $nummer = str_replace('-', '', (string)$f['accessionNumber'][$i]);
+        $text = [];
+        foreach (array_filter(array_map('trim', explode(',', $items))) as $it) {
+            if (isset(FZ_ZC_ITEMS[$it])) {
+                $text[] = FZ_ZC_ITEMS[$it];
+            }
+        }
+        $liste[] = ['nummer' => $nummer, 'form' => $form, 'zeit' => (int)strtotime((string)($f['acceptanceDateTime'][$i] ?? '')),
+            'art' => FZ_ZC_FORMULARE[$form] . ($text !== [] ? ': ' . implode(', ', $text) : ''),
+            'link' => 'https://www.sec.gov/Archives/edgar/data/' . (int)$cik . '/' . $nummer . '/' . (string)($f['primaryDocument'][$i] ?? '')];
+    }
+    return $liste;
+}
+
 function zcHtmlText(string $html): string
 {
     $t = preg_replace('/<(script|style)\b.*?<\/\1>/is', ' ', $html);
@@ -77,6 +128,21 @@ function zcFilingText(array $filing): array
         }
     }
     ksort($dateien);
+    // Manche Firmen nennen die Pressemitteilung anders (z. B. „…earningspressrel.htm“):
+    // dann die größte weitere HTML-Datei neben dem 8-K selbst nehmen
+    if ($dateien === []) {
+        $groesste = ['', 0];
+        foreach ((array)($idx['directory']['item'] ?? []) as $x) {
+            $n = (string)($x['name'] ?? '');
+            $g = (int)($x['size'] ?? 0);
+            if (preg_match('/\.htm$/i', $n) && $n !== $filing['haupt'] && !preg_match('/^R\d+\.htm$|index/i', $n) && $g > $groesste[1]) {
+                $groesste = [$n, $g];
+            }
+        }
+        if ($groesste[0] !== '') {
+            $dateien[1] = $groesste[0];
+        }
+    }
     if ($dateien === [] && $filing['haupt'] !== '') {
         $dateien[1] = $filing['haupt'];
     }
@@ -117,23 +183,27 @@ function zcFundstellen(string $text, string $wort, int $max = 4): array
 function zcZahlenAuslesen(string $text, array $zc): array
 {
     $erg = ['umsatz' => null, 'eps' => null, 'auslastung' => null, 'auslastung_art' => 'unbekannt', 'auslastung_text' => '',
+        'ausblick' => null, 'ausblick_text' => '', 'kapital' => false, 'kapital_text' => '', 'sonder_text' => '',
         'probleme' => false, 'probleme_text' => '', 'quartal' => '', 'kurz' => '', 'fundstellen' => zcFundstellen($text, $zc['suchwort']), 'ki' => false, 'fehler' => ''];
-    if (preg_match('/revenues?\s+(?:of|was|were)\s+\$\s?([0-9]+(?:\.[0-9]+)?)\s*million/i', $text, $m)) {
-        $erg['umsatz'] = (float)$m[1];
+    if (preg_match('/revenues?\s+(?:of|was|were)\s+(?:approximately\s+|about\s+)?\$\s?([0-9][0-9,]*(?:\.[0-9]+)?)\s*(million|billion)/i', $text, $m)) {
+        $erg['umsatz'] = (float)str_replace(',', '', $m[1]) * (strtolower($m[2]) === 'billion' ? 1000 : 1);
     }
-    $wort = $zc['suchwort'] !== '' ? $zc['suchwort'] : 'dem Hauptwerk';
+    $wort = $zc['suchwort'] !== '' ? $zc['suchwort'] : 'dem Unternehmen (Produktion, Lieferungen, Projekte)';
     $kap = $zc['kapazitaet'] > 0 ? ' Wenn kein Prozentwert genannt ist, berechne die Auslastung aus der gemeldeten Produktion gegenüber der Nennkapazität von '
         . zahl($zc['kapazitaet'], 0) . ' Mio. Pfund pro Jahr (Quartal = ein Viertel, Monat = ein Zwölftel) und setze auslastung_art auf "berechnet".' : '';
     $auftrag = "Hier ist die Pressemitteilung zu Quartalszahlen (aus dem 8-K bei der SEC).\n\n" . mb_substr($text, 0, 60000) . "\n\n"
         . "Lies genau diese Werte aus und antworte NUR mit JSON:\n"
         . '{"quartal":"z. B. Q3 2026","umsatz_mio_usd":Zahl oder null,"eps_usd":Verlust/Gewinn je Aktie (basic, Quartal; Verlust negativ) oder null,'
         . '"auslastung_prozent":Zahl oder null,"auslastung_art":"gemeldet|berechnet|unbekannt","auslastung_text":"kurze Begründung mit Zahlen, Deutsch",'
-        . '"probleme":true/false,"probleme_text":"neue Probleme, Ausfälle oder Verzögerungen bei ' . $wort . ' – Deutsch, leer wenn keine","zusammenfassung":"2 Sätze Deutsch"}' . "\n"
-        . 'Auslastung: gemeint ist die Auslastung bzw. Produktionsrate von ' . $wort . ', möglichst für die jüngsten Monate (z. B. September/Oktober).' . $kap
+        . '"probleme":true/false,"probleme_text":"neue Probleme, Ausfälle oder Verzögerungen bei ' . $wort . ' – Deutsch, leer wenn keine",'
+        . '"ausblick_umsatz_mio_usd":Mitte der Umsatzprognose fürs nächste Geschäftsjahr in Mio. $ oder null,"ausblick_text":"Prognose kurz (Umsatz, EBITDA, Cashflow), Deutsch",'
+        . '"kapitalbedarf":true/false,"kapital_text":"Kapitalerhöhung, Wandelanleihe, ATM-Programm, Zweifel an der Fortführung (going concern) oder Kreditauflagen – Deutsch, leer wenn nichts",'
+        . '"sonderbelastungen":"Abschreibungen, Rückstellungen, Restrukturierung – Deutsch, leer wenn keine","zusammenfassung":"2 Sätze Deutsch"}' . "\n"
+        . ($zc['suchwort'] !== '' ? 'Auslastung: gemeint ist die Auslastung bzw. Produktionsrate von ' . $wort . ', möglichst für die jüngsten Monate (z. B. September/Oktober).' . $kap : 'Auslastung: null, außer der Text nennt ausdrücklich eine Auslastung.')
         . ' Nichts erfinden – was nicht im Text steht, ist null.';
     $fehler = '';
-    $j = kiAnfrage(['model' => FZ_BEOB_MODELL, 'max_tokens' => 1200, 'system' => 'Du liest Finanzberichte exakt aus. Antworte ausschließlich mit einem JSON-Objekt.',
-        'messages' => [['role' => 'user', 'content' => $auftrag]]], 90, $fehler);
+    $j = kiAnfrage(['model' => FZ_BEOB_MODELL, 'max_tokens' => 1800, 'system' => 'Du liest Finanzberichte exakt aus. Antworte ausschließlich mit einem JSON-Objekt.',
+        'messages' => [['role' => 'user', 'content' => $auftrag]]], 120, $fehler);
     $antwort = '';
     foreach ((array)($j['content'] ?? []) as $b) {
         $antwort .= ($b['type'] ?? '') === 'text' ? (string)$b['text'] : '';
@@ -153,6 +223,11 @@ function zcZahlenAuslesen(string $text, array $zc): array
     $erg['probleme'] = !empty($k['probleme']);
     $erg['probleme_text'] = mb_substr(trim((string)($k['probleme_text'] ?? '')), 0, 400);
     $erg['quartal'] = mb_substr(trim((string)($k['quartal'] ?? '')), 0, 20);
+    $erg['ausblick'] = $zahlOderNull($k['ausblick_umsatz_mio_usd'] ?? null);
+    $erg['ausblick_text'] = mb_substr(trim((string)($k['ausblick_text'] ?? '')), 0, 400);
+    $erg['kapital'] = !empty($k['kapitalbedarf']);
+    $erg['kapital_text'] = mb_substr(trim((string)($k['kapital_text'] ?? '')), 0, 400);
+    $erg['sonder_text'] = mb_substr(trim((string)($k['sonderbelastungen'] ?? '')), 0, 400);
     $erg['kurz'] = mb_substr(trim((string)($k['zusammenfassung'] ?? '')), 0, 500);
     return $erg;
 }
@@ -195,21 +270,29 @@ function zcVolumenSchnitt(array $st): ?array
     return null;
 }
 
-/** Ampel aus beiden Schleifen. */
+/** Ampel aus beiden Schleifen. Kriterien ohne Schwelle zählen nicht mit. */
 function zcAmpel(array $zc, array $z, ?array $n): array
 {
+    $z += ['ausblick' => null, 'kapital' => false];
     $umsatzOk = $z['umsatz'] !== null ? $z['umsatz'] > $zc['umsatz_min'] : null;
     $epsOk = $z['eps'] !== null ? $z['eps'] > $zc['eps_min'] : null;
-    $werkOk = $z['probleme'] ? false : ($z['auslastung'] !== null ? $z['auslastung'] >= $zc['auslastung_min'] : null);
-    $kursOk = $n !== null ? $n['kurs'] > $zc['kurs_trigger'] : null;
+    $mitWerk = $zc['suchwort'] !== '';
+    $werkOk = $z['probleme'] ? false : ($mitWerk && $z['auslastung'] !== null ? $z['auslastung'] >= $zc['auslastung_min'] : null);
+    $mitAusblick = $zc['ausblick_min'] > 0;
+    $ausblickOk = $mitAusblick && $z['ausblick'] !== null ? $z['ausblick'] >= $zc['ausblick_min'] : null;
+    $kursOk = $n !== null && $zc['kurs_trigger'] > 0 ? $n['kurs'] > $zc['kurs_trigger'] : null;
+    $kursTief = $n !== null && $zc['kurs_unter'] > 0 ? $n['kurs'] < $zc['kurs_unter'] : null;
     $volOk = $n !== null && ($n['faktor'] ?? null) !== null ? $n['faktor'] >= $zc['vol_faktor'] : null;
     $farbe = 'gelb';
-    if ($umsatzOk === true && $werkOk === true && $kursOk === true) {
-        $farbe = 'gruen';
-    } elseif ($z['probleme'] || ($umsatzOk === false && ($epsOk === false || $werkOk === false))) {
+    if ($z['probleme'] || $z['kapital'] || $kursTief === true
+        || ($umsatzOk === false && ($epsOk === false || $werkOk === false || $ausblickOk === false))) {
         $farbe = 'rot';
+    } elseif ($umsatzOk === true && (!$mitWerk || $werkOk === true) && (!$mitAusblick || $ausblickOk === true)
+        && ($zc['kurs_trigger'] <= 0 || $kursOk === true)) {
+        $farbe = 'gruen';
     }
-    return ['farbe' => $farbe, 'umsatz' => $umsatzOk, 'eps' => $epsOk, 'werk' => $werkOk, 'kurs' => $kursOk, 'volumen' => $volOk];
+    return ['farbe' => $farbe, 'umsatz' => $umsatzOk, 'eps' => $epsOk, 'werk' => $werkOk, 'ausblick' => $ausblickOk, 'kurs' => $kursOk,
+        'kurs_tief' => $kursTief, 'volumen' => $volOk];
 }
 
 function zcHaken(?bool $x): string
@@ -231,13 +314,31 @@ function zcText(array $zc, array $st, ?float $usdJeEur): string
         . ' – Schwelle ' . zahl($zc['umsatz_min'], 2) . ' Mio. $';
     $zeilen[] = zcHaken($a['eps']) . ' Ergebnis je Aktie ' . ($z['eps'] !== null ? zahl($z['eps'], 2) . ' $' . $eur($z['eps']) : 'nicht gefunden')
         . ' – Schwelle ' . zahl($zc['eps_min'], 2) . ' $';
+    $z += ['ausblick' => null, 'ausblick_text' => '', 'kapital' => false, 'kapital_text' => '', 'sonder_text' => ''];
+    if ($zc['ausblick_min'] > 0 || $z['ausblick_text'] !== '') {
+        $zeilen[] = zcHaken($a['ausblick']) . ' Ausblick nächstes Geschäftsjahr: ' . ($z['ausblick'] !== null ? 'Umsatz ' . zahl($z['ausblick'], 0) . ' Mio. $' : 'keine Umsatzprognose')
+            . ($zc['ausblick_min'] > 0 ? ' – Schwelle ' . zahl($zc['ausblick_min'], 0) . ' Mio. $' : '') . ($z['ausblick_text'] !== '' ? "\n   " . $z['ausblick_text'] : '');
+    }
+    if ($z['kapital']) {
+        $zeilen[] = '❌ Kapitalbedarf: ' . $z['kapital_text'];
+    }
+    if ($z['sonder_text'] !== '') {
+        $zeilen[] = 'ℹ️ Sonderbelastungen: ' . $z['sonder_text'];
+    }
+    if ($zc['suchwort'] === '') {
+        if ($z['probleme']) {
+            $zeilen[] = '⚠️ Probleme: ' . $z['probleme_text'];
+        }
+    } else {
     $zeilen[] = zcHaken($a['werk']) . ' ' . $wort . ': ' . ($z['auslastung'] !== null ? 'Auslastung ' . zahl($z['auslastung'], 0) . ' %' . ($z['auslastung_art'] === 'berechnet' ? ' (aus der Produktion berechnet)' : '') : 'Auslastung nicht genannt')
         . ' – Schwelle ' . zahl($zc['auslastung_min'], 0) . ' %' . ($z['auslastung_text'] !== '' ? "\n   " . $z['auslastung_text'] : '')
         . ($z['probleme'] ? "\n   ⚠️ Probleme: " . $z['probleme_text'] : '');
+    }
     if ($n !== null) {
         $zeilen[] = '';
         $zeilen[] = zcHaken($a['kurs']) . ' Nachbörse ' . zahl($n['kurs'], 2) . ' $' . $eur($n['kurs']) . ($n['hoch'] !== null ? ', Hoch ' . zahl($n['hoch'], 2) . ' $' : '')
-            . ' – Marke ' . zahl($zc['kurs_trigger'], 2) . ' $' . $eur($zc['kurs_trigger']);
+            . ($zc['kurs_trigger'] > 0 ? ' – Marke oben ' . zahl($zc['kurs_trigger'], 2) . ' $' . $eur($zc['kurs_trigger']) : '')
+            . ($zc['kurs_unter'] > 0 ? ' · Marke unten ' . zahl($zc['kurs_unter'], 2) . ' $' . ($a['kurs_tief'] ? ' ❌ unterschritten' : ' (gehalten)') : '');
         $zeilen[] = zcHaken($a['volumen']) . ' Volumen ' . zahl((float)$n['volumen'], 0) . ' Stück' . (($n['faktor'] ?? null) !== null
             ? ' = ' . zahl($n['faktor'], 1) . '× normal (Ø ' . zahl($n['schnitt'], 0) . ', ' . $n['schnitt_art'] . ', ' . $n['schnitt_tage'] . ($n['schnitt_tage'] === 1 ? ' Abend)' : ' Abende)') : ' – noch kein Normalwert gemessen')
             . ' – Schwelle ' . zahl($zc['vol_faktor'], 0) . '×';
@@ -275,6 +376,29 @@ function zahlencheckAusfuehren(bool $abend = false): array
         $name = (string)($d['firmen'][$s]['name'] ?? $s);
         $meldungen = [];
         $fx = null;
+        // Neue SEC-Meldungen sofort (beim ersten Lauf nur merken)
+        if ($zc['sec_meldungen']) {
+            $neu = zcSecNeu($zc['us']);
+            if ($neu !== null) {
+                $gesehen = (array)($st['sec_gesehen'] ?? []);
+                $erstmals = !isset($st['sec_gesehen']);
+                $texte = [];
+                foreach (array_reverse($neu) as $m) {
+                    if (in_array($m['nummer'], $gesehen, true)) {
+                        continue;
+                    }
+                    $gesehen[] = $m['nummer'];
+                    if (!$erstmals) {
+                        $texte[] = '📄 ' . $m['art'] . ' · ' . date('d.m. H:i', $m['zeit']) . " Uhr\n" . $m['link'];
+                    }
+                }
+                $st['sec_gesehen'] = array_slice($gesehen, -80);
+                $st['sec_letzte'] = array_slice($neu, 0, 6);
+                if ($texte !== []) {
+                    $meldungen[] = ['📄 ' . $name . ': neue SEC-Meldung' . (count($texte) > 1 ? 'en (' . count($texte) . ')' : ''), implode("\n\n", $texte)];
+                }
+            }
+        }
         // Schleife 1: neue Zahlen bei der SEC? (an jedem Lauf; am Zahlentag ab 15:55 Uhr New York in der Abend-Schleife)
         // nur Berichte nach dem Einschalten – ein alter Bericht soll keinen Alarm auslösen
         $seit = max((int)$zc['seit'], (int)($st['erledigt'] ?? 0));

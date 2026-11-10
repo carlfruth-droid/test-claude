@@ -2176,7 +2176,7 @@ function beobZahlencheckTeil(string $s, array $f): string
   <h4>Zahlen-Check <?= $an ? '<span class="abzeichen gruen">an</span>' : '<span class="abzeichen">aus</span>' ?><?= info('Schleife 1: Sobald das 8-K mit den Quartalszahlen bei der US-Börsenaufsicht SEC liegt, liest die KI Umsatz, Ergebnis je Aktie und die Auslastung des Werks aus und vergleicht sie mit deinen Schwellen – sofort kommt eine Meldung. Schleife 2: Ab 16:15 Uhr New York (22:15 Uhr bei uns) Kurs und Volumen der Nachbörse bei Nasdaq. Um 16:30 Uhr New York (22:30 Uhr) kommt die Ampel per Push und E-Mail. Den normalen Nachbörsen-Umsatz nach 30 Minuten misst der Check an den Abenden davor selbst.') ?></h4>
   <?php if ($an): ?>
     <p class="klein">US-Kürzel <strong><?= e($zc['us']) ?></strong><?= $zc['datum'] !== '' ? ' · Zahlen erwartet am <strong>' . e(datum((int)strtotime($zc['datum']))) . '</strong> nach US-Börsenschluss (ca. 22:05 Uhr bei uns)' : '' ?>.
-      Normaler Nachbörsen-Umsatz: <?= $schnitt ? e(zahl($schnitt['wert'], 0) . ' Stück (Ø ' . $schnitt['art'] . ', ' . $schnitt['tage'] . ' Abende)') : 'wird an den nächsten Abenden gemessen' ?>.</p>
+      Normaler Nachbörsen-Umsatz: <?= $schnitt ? e(zahl($schnitt['wert'], 0) . ' Stück (Ø ' . $schnitt['art'] . ', ' . $schnitt['tage'] . ($schnitt['tage'] === 1 ? ' Abend)' : ' Abende)')) : 'wird an den nächsten Abenden gemessen' ?>.</p>
     <?php if (!empty($st['ampel'])): ?>
       <div class="hinweis"><span><strong><?= e($farben[$st['ampel']['farbe']]) ?></strong> · <?= e(datumZeit((int)$st['ampel']['zeit'])) ?></span></div>
     <?php elseif (!empty($st['zahlen'])): ?>
@@ -2190,6 +2190,11 @@ function beobZahlencheckTeil(string $s, array $f): string
           <?php foreach (array_slice($meld, 1) as $x): ?><p class="klein leise"><?= e(datumZeit((int)$x['zeit'])) ?></p><pre class="beob-bericht"><?= e($x['titel'] . "\n" . $x['text']) ?></pre><?php endforeach; ?>
         </details>
       <?php endif; ?>
+    <?php endif; ?>
+    <?php if (!empty($st['sec_letzte'])): ?>
+      <details class="unterbereich"><summary>Neueste SEC-Meldungen</summary>
+        <ul class="beob-liste"><?php foreach ($st['sec_letzte'] as $x): ?><li><a href="<?= e((string)$x['link']) ?>" target="_blank" rel="noopener noreferrer"><?= e((string)$x['art']) ?></a> <small class="leise"><?= e(datumZeit((int)$x['zeit'])) ?></small></li><?php endforeach; ?></ul>
+      </details>
     <?php endif; ?>
     <?php if (!empty($st['probe'])): ?>
       <details class="unterbereich"><summary>Probe mit dem letzten Bericht (<?= e(datumZeit((int)$st['probe']['zeit'])) ?>): <?= e($farben[$st['probe']['farbe']]) ?></summary>
@@ -2209,13 +2214,16 @@ function beobZahlencheckTeil(string $s, array $f): string
       <label class="schalter"><input type="checkbox" name="an" value="1"<?= $zc['an'] ? ' checked' : '' ?>><span>Zahlen-Check einschalten (Meldung per Push und E-Mail)</span></label>
       <label class="feld"><span>US-Kürzel</span><input type="text" name="us" maxlength="12" value="<?= e($zc['us']) ?>" placeholder="z. B. PCT"></label>
       <label class="feld"><span>Zahlen erwartet am (US-Datum)</span><input type="date" name="datum" value="<?= e($zc['datum']) ?>"></label>
-      <label class="feld"><span>Umsatz über … Mio. US-$</span><input type="text" inputmode="decimal" name="umsatz_min" value="<?= e(zahl((float)$zc['umsatz_min'], 2)) ?>"></label>
-      <label class="feld"><span>Ergebnis je Aktie besser als … US-$ (Verlust negativ)</span><input type="text" inputmode="decimal" name="eps_min" value="<?= e(zahl((float)$zc['eps_min'], 2)) ?>"></label>
-      <label class="feld"><span>Suchwort im Bericht (Werk)</span><input type="text" name="suchwort" maxlength="40" value="<?= e($zc['suchwort']) ?>" placeholder="z. B. Ironton"></label>
-      <label class="feld"><span>Auslastung mindestens … %</span><input type="text" inputmode="decimal" name="auslastung_min" value="<?= e(zahl((float)$zc['auslastung_min'], 0)) ?>"></label>
-      <label class="feld"><span>Nennkapazität in Mio. Pfund pro Jahr (zum Umrechnen, wenn keine % genannt sind; 0 = nicht rechnen)</span><input type="text" inputmode="decimal" name="kapazitaet" value="<?= e(zahl((float)$zc['kapazitaet'], 0)) ?>"></label>
-      <label class="feld"><span>Nachbörse über … US-$</span><input type="text" inputmode="decimal" name="kurs_trigger" value="<?= e(zahl((float)$zc['kurs_trigger'], 2)) ?>"></label>
-      <label class="feld"><span>Volumen nach 30 Min. über … × normal</span><input type="text" inputmode="decimal" name="vol_faktor" value="<?= e(zahl((float)$zc['vol_faktor'], 0)) ?>"></label>
+      <label class="feld"><span>Umsatz über … Mio. US-$</span><input type="text" inputmode="decimal" name="umsatz_min" value="<?= e(number_format((float)$zc['umsatz_min'], 2, ',', '')) ?>"></label>
+      <label class="feld"><span>Ergebnis je Aktie besser als … US-$ (Verlust negativ)</span><input type="text" inputmode="decimal" name="eps_min" value="<?= e(number_format((float)$zc['eps_min'], 2, ',', '')) ?>"></label>
+      <label class="feld"><span>Suchwort im Bericht (Werk; leer = keine Auslastung prüfen)</span><input type="text" name="suchwort" maxlength="40" value="<?= e($zc['suchwort']) ?>" placeholder="z. B. Ironton"></label>
+      <label class="feld"><span>Auslastung mindestens … %</span><input type="text" inputmode="decimal" name="auslastung_min" value="<?= e(number_format((float)$zc['auslastung_min'], 0, ',', '')) ?>"></label>
+      <label class="feld"><span>Nennkapazität in Mio. Pfund pro Jahr (zum Umrechnen, wenn keine % genannt sind; 0 = nicht rechnen)</span><input type="text" inputmode="decimal" name="kapazitaet" value="<?= e(number_format((float)$zc['kapazitaet'], 0, ',', '')) ?>"></label>
+      <label class="feld"><span>Ausblick: Umsatzprognose nächstes Geschäftsjahr mindestens … Mio. US-$ (0 = nicht prüfen)</span><input type="text" inputmode="decimal" name="ausblick_min" value="<?= e(number_format((float)$zc['ausblick_min'], 0, ',', '')) ?>"></label>
+      <label class="feld"><span>Nachbörse über … US-$ (Squeeze-Marke; 0 = keine)</span><input type="text" inputmode="decimal" name="kurs_trigger" value="<?= e(number_format((float)$zc['kurs_trigger'], 2, ',', '')) ?>"></label>
+      <label class="feld"><span>Nachbörse unter … US-$ (Absturz-Marke; 0 = keine)</span><input type="text" inputmode="decimal" name="kurs_unter" value="<?= e(number_format((float)$zc['kurs_unter'], 2, ',', '')) ?>"></label>
+      <label class="schalter"><input type="checkbox" name="sec_meldungen" value="1"<?= $zc['sec_meldungen'] ? ' checked' : '' ?>><span>Neue SEC-Meldungen sofort melden (Kapitalerhöhung, Großaktionäre, Insider, Vorstand)</span></label>
+      <label class="feld"><span>Volumen nach 30 Min. über … × normal</span><input type="text" inputmode="decimal" name="vol_faktor" value="<?= e(number_format((float)$zc['vol_faktor'], 0, ',', '')) ?>"></label>
       <label class="feld"><span>🟢 Dein Plan bei Grün</span><textarea name="aktion_gruen" rows="2" maxlength="400"><?= e($zc['aktion_gruen']) ?></textarea></label>
       <label class="feld"><span>🟡 Dein Plan bei Gelb</span><textarea name="aktion_gelb" rows="2" maxlength="400"><?= e($zc['aktion_gelb']) ?></textarea></label>
       <label class="feld"><span>🔴 Dein Plan bei Rot</span><textarea name="aktion_rot" rows="2" maxlength="400"><?= e($zc['aktion_rot']) ?></textarea></label>

@@ -72,6 +72,28 @@ function beobVorlagen(): array
                     'Neue Aktien oder Wandelanleihen mit hoher Verwässerung.'),
             ],
         ],
+        'flnc' => [
+            'name' => 'Beispiel: Fluence Energy – Zahlen des neuen Managements',
+            'titel' => 'Geht es nach den Zahlen am 23.11. noch einmal runter?',
+            'these' => 'Die Jahreszahlen am 23.11. sind die ersten unter dem Interims-Management (CEO Axel Meier, CFO Ricardo Roizen). Neue Chefs räumen oft auf: schwache Prognose für 2027, Abschreibungen – der Kurs fällt noch einmal. Gegenrisiko: Fast die Hälfte der frei handelbaren Aktien ist leerverkauft – fällt der Bericht besser aus als befürchtet, droht ein heftiger Short Squeeze.',
+            'zahlencheck' => ['an' => true, 'us' => 'FLNC', 'datum' => '2026-11-23', 'umsatz_min' => 812.0, 'eps_min' => -0.61, 'suchwort' => '',
+                'ausblick_min' => 3000.0, 'kurs_trigger' => 6.50, 'kurs_unter' => 4.90, 'vol_faktor' => 5.0, 'sec_meldungen' => true],
+            'signale' => [
+                $z('short', 'Short-Quote (USA)', 'short_quote', ['>', 45.0], ['<', 35.0]),
+                $e('ausblick', 'Ausblick Geschäftsjahr 2027 (Zahlen am 23.11.)',
+                    'Prognose unter dem Konsens (rund 3,0 Mrd. $ Umsatz), hohe Verluste oder Abschreibungen – das neue Management räumt auf.',
+                    'Solide Prognose (Umsatz ab 3 Mrd. $, operativer Cashflow neutral bis positiv) – dann droht ein Short Squeeze.', '2026-11-24'),
+                $e('kapital', 'Kapitalbedarf / Verwässerung',
+                    'Kapitalerhöhung, Wandelanleihe, ATM-Programm oder Zweifel an der Fortführung.',
+                    'Finanzierung ohne neue Aktien gesichert, z. B. Kreditlinie oder Hilfe von Siemens/AES.'),
+                $e('grossaktionaere', 'Siemens und AES als Großaktionäre',
+                    'Siemens oder AES verkaufen Anteile oder ziehen sich zurück.',
+                    'Siemens/AES stützen das Unternehmen (Kapital, Garantien, Übernahmeangebot).'),
+                $e('houston', 'Produktion beim Auftragsfertiger in Houston',
+                    'Weitere Verzögerungen, Vertragsstrafen oder verlorene Kunden.',
+                    'Produktion läuft hoch, Auslieferungen wieder nach Plan.'),
+            ],
+        ],
         'short' => [
             'name' => 'Short-Squeeze-Kandidat',
             'titel' => 'Short-Squeeze möglich?',
@@ -834,7 +856,7 @@ function tagescheckJetzt(string $symbol): bool
 }
 
 /**
- * Vulcan und PureCycle einmalig von selbst in die Beobachtung aufnehmen (mit Vorlage und Checks).
+ * Vulcan, PureCycle und Fluence einmalig von selbst in die Beobachtung aufnehmen (mit Vorlage und Checks).
  * Wird eine davon später entfernt, bleibt sie draußen.
  */
 function beobVulcanStart(): void
@@ -842,6 +864,7 @@ function beobVulcanStart(): void
     $starts = [
         'vulcan' => ['such' => 'vulcan energy', 'symbol' => 'VUL.AX', 'name' => 'Vulcan Energy Resources Ltd', 'waehrung' => 'AUD'],
         'pct' => ['such' => 'purecycle', 'symbol' => 'PCT', 'name' => 'PureCycle Technologies, Inc.', 'waehrung' => 'USD'],
+        'flnc' => ['such' => 'fluence energy', 'symbol' => 'FLNC', 'name' => 'Fluence Energy, Inc.', 'waehrung' => 'USD'],
     ];
     foreach ($starts as $vk => $x) {
         beobAutoStart($vk, $x);

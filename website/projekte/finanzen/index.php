@@ -342,15 +342,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $aktion !== '') {
                 weiter(url(['seite' => 'beobachtung']) . '#b-' . preg_replace('/[^A-Za-z0-9]/', '-', $s));
                 break;
             case 'beob_zahlencheck':
-                $zahlFeld = static fn(string $n, float $std): float => is_numeric(str_replace(',', '.', trim((string)($_POST[$n] ?? ''))))
-                    ? (float)str_replace(',', '.', trim((string)$_POST[$n])) : $std;
+                $zahlFeld = static function (string $n, float $std): float {
+                    $t = trim((string)($_POST[$n] ?? ''));
+                    // deutsche Schreibweise: Tausenderpunkte weg, Komma als Dezimalzeichen
+                    if (preg_match('/^-?\d{1,3}(\.\d{3})+(,\d+)?$/', $t)) {
+                        $t = str_replace('.', '', $t);
+                    }
+                    $t = str_replace(',', '.', $t);
+                    return is_numeric($t) ? (float)$t : $std;
+                };
                 $alt = zcEinstellung((array)(beobDaten(datenLaden())['firmen'][$s] ?? []));
                 $datum = textFeld('datum', 10);
                 $zc = ['an' => !empty($_POST['an']), 'us' => strtoupper((string)preg_replace('/[^A-Za-z.\-]/', '', textFeld('us', 12))),
                     'datum' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $datum) ? $datum : '',
                     'umsatz_min' => $zahlFeld('umsatz_min', 0), 'eps_min' => $zahlFeld('eps_min', 0), 'suchwort' => textFeld('suchwort', 40),
                     'auslastung_min' => $zahlFeld('auslastung_min', 40), 'kapazitaet' => max(0, $zahlFeld('kapazitaet', 0)),
-                    'kurs_trigger' => $zahlFeld('kurs_trigger', 0), 'vol_faktor' => max(1, $zahlFeld('vol_faktor', 5)),
+                    'kurs_trigger' => $zahlFeld('kurs_trigger', 0), 'kurs_unter' => max(0, $zahlFeld('kurs_unter', 0)), 'vol_faktor' => max(1, $zahlFeld('vol_faktor', 5)),
+                    'ausblick_min' => max(0, $zahlFeld('ausblick_min', 0)), 'sec_meldungen' => !empty($_POST['sec_meldungen']),
                     'aktion_gruen' => textFeld('aktion_gruen', 400), 'aktion_gelb' => textFeld('aktion_gelb', 400), 'aktion_rot' => textFeld('aktion_rot', 400),
                     // erst Berichte ab dem Einschalten zählen
                     'seit' => $alt['an'] && $alt['seit'] > 0 ? $alt['seit'] : time()];
